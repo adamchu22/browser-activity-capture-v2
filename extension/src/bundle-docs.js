@@ -23,13 +23,13 @@ export const PURPOSES = {
   ui: { label: "Propose UI changes", read: "Find friction (as for UX feedback), then prescribe concrete UI changes grounded in the captured element (selector + accessible name) and the frame.", make: "`ui-changes.md` — proposed changes ranked by impact" },
   improve: { label: "Find a better / faster way", read: "Focus on inefficiency — redundant or manual steps, repeated navigation, things doable in fewer clicks or via an API instead of the UI, rekeying that could be batched.", make: "`improvements.md` — concrete suggestions ranked by time saved" },
   research: { label: "Competitive / product research", read: "This is another product worth learning from. Extract how it works — UX patterns from the frames, the flow from the timeline, and the architecture / data model from the network (HAR). Learn patterns and principles, never copy proprietary assets.", make: "`research.md` — a competitive teardown with takeaways for your own version" },
-  general: { label: "General capture", read: "No single lens — capture the full picture.", make: "the standard set (`SOP.md`, a `SKILL.md`, `automation-suggestions.md`, `notes.md`)" },
+  general: { label: "General capture", read: "No single lens — capture the full picture.", make: "`notes.md` only by default — do NOT auto-generate SOP/skill/suggestions; then ask the user which other outputs they want" },
 };
 
 export function renderPurpose(purposes) {
   const keys = (purposes || []).filter((p) => PURPOSES[p]);
   if (!keys.length) {
-    return "No purpose was selected at capture time. Produce the full set under **What to produce** below.\n";
+    return "No purpose was selected at capture time. Default to `notes.md` only and ask the user which other outputs they want — see **What to produce** below.\n";
   }
   let out = "The user recorded this specifically to do the following — read the capture through these lenses and produce these outputs (always add `notes.md`):\n\n";
   for (const k of keys) {
@@ -93,8 +93,10 @@ A stub looks like \`NOTE No narration captured\`. The words are **not lost** —
 narration was recorded they live as an **Opus audio track inside video.webm**, aligned to t0.
 Recover them yourself, no external help needed:
 1. Extract audio: \`ffmpeg -i video.webm -ac 1 -ar 16000 audio.wav\`
-2. Transcribe locally with any speech-to-text model, e.g.
-   \`whisper audio.wav --model small.en\` (or faster-whisper; on Apple Silicon, a Parakeet/MLX model).
+2. Transcribe locally. **Default to Parakeet** (Parakeet-TDT via mlx-audio on Apple Silicon) —
+   it was the most accurate engine for this audio, so prefer it:
+   \`python -m mlx_audio.stt.generate --model mlx-community/parakeet-tdt-0.6b-v3 --audio audio.wav --format vtt\`
+   Only fall back to Whisper if Parakeet isn't available: \`whisper audio.wav --model small.en\`.
 3. The audio starts within ~1s of t0 — treat the cue times as t0-aligned.
 Then use the transcript as the user's account of intent.
 
@@ -108,13 +110,15 @@ Then use the transcript as the user's account of intent.
 ## Purpose of this recording
 ${renderPurpose(m.purposes)}
 ## What to produce
-Governed by the purpose above (plus always \`notes.md\`). If no purpose was set, produce the full set:
+- If a **specific purpose** is named above (skill / docs / ux / ui / improve / research), produce that purpose's deliverable, plus \`notes.md\`.
+- If the purpose is **General capture** (or none was set), **produce only \`notes.md\` by default — do NOT auto-generate SOP, a skill, or suggestions.** Then **ask the user which other outputs they want** before generating anything else.
+
+The outputs you can offer (write them into this bundle's folder):
+- **notes.md** — a one-paragraph summary, then an \`Open questions\` list (ambiguities, gaps, off-screen steps). Always produce this.
 - **SOP.md** — a numbered procedure a new teammate could follow. Narration for *intent* ("why"), events/network for *mechanics* ("what"). Mark inferences \`(inferred)\`.
 - **SKILL.md** — a reusable skill: YAML front-matter (\`name\`, one-line \`description\`), trigger, ordered steps, the real selectors/URLs/API endpoints, required inputs, and the success signal.
 - **automation-suggestions.md** — what's safe to fully automate, what must stay human-in-the-loop (and why), and the single highest-leverage automation. Reference observed API endpoints.
 - **feedback.md** / **ui-changes.md** / **improvements.md** / **research.md** — per the purpose lens above.
-- **notes.md** — a one-paragraph summary, then an \`Open questions\` list (ambiguities, gaps, off-screen steps).
-Write outputs into this bundle's folder.
 
 ## Ground rules
 - One clock: every \`t\` is ms since t0.

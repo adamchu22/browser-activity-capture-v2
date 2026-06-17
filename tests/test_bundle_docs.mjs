@@ -68,10 +68,32 @@ test("renderPurpose renders the chosen lens for each known purpose", () => {
   }
 });
 
-test("renderPurpose ignores unknown keys and falls back to the full set", () => {
-  assert.match(renderPurpose(["bogus"]), /full set/i);
-  assert.match(renderPurpose([]), /full set/i);
-  assert.match(renderPurpose(undefined), /full set/i);
+test("no/unknown purpose defaults to notes.md only and asks the user", () => {
+  for (const p of [["bogus"], [], undefined]) {
+    const out = renderPurpose(p);
+    assert.match(out, /notes\.md/);
+    assert.match(out, /ask the user/i);
+  }
+});
+
+test("general capture defaults to notes only + ask (no auto SOP/skill/suggestions)", () => {
+  const out = renderPurpose(["general"]);
+  assert.match(out, /notes\.md/);
+  assert.match(out, /ask the user/i);
+  assert.match(out, /do NOT auto-generate/i);
+  // The body's What-to-produce section spells out the same rule.
+  const doc = agentGuideBody({ ...baseManifest, purposes: ["general"] });
+  assert.match(doc, /produce only `notes\.md` by default/i);
+  assert.match(doc, /ask the user which other outputs they want/i);
+});
+
+test("AUDIO FALLBACK defaults to Parakeet, with Whisper only as a fallback", () => {
+  const doc = agentGuideBody(baseManifest);
+  assert.match(doc, /Default to Parakeet/);
+  assert.match(doc, /parakeet-tdt/i, "gives a runnable Parakeet command");
+  assert.match(doc, /fall back to Whisper/i, "Whisper is framed as the fallback, not the default");
+  // Parakeet must be recommended before Whisper in the text.
+  assert.ok(doc.indexOf("Parakeet") < doc.indexOf("whisper"), "Parakeet should come first");
 });
 
 test("the stated task is surfaced in the guide", () => {
