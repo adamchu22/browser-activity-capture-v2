@@ -184,13 +184,28 @@ A clean run showed v2 captured all 16 open tabs (incl. a 1Password signin + Tele
 - [ ] **Live re-verify (Adam, AFTER P2):** record a 3-tab task with sensitive tabs open →
       bundle `manifest.tabs` + `urls_visited` list only the tabs actually used.
 
-**P2 — Annotation tools on the overlay** (the headline ask; Selector and Draw are SEPARATE):
-- [ ] **Draw** — freeform canvas highlight of an area/region (not element-bound). Emit a
-      timestamped, tab-tagged `annotation:draw` event so `pack.py` can show "user
-      highlighted here" next to the narration.
-- [ ] **Selector** — element pick that **snaps to DOM elements** (reuse `selectorFor()` +
-      `describe()`). Emit `annotation:select` with the selector + semantic label so the
-      agent and user are "aligned on the same element."
+**P2 — Annotation tools on the overlay (CODE DONE + unit-tested; needs live-Chrome verify)**
+(the headline ask; Selector and Draw are SEPARATE). Both on the overlay pill (`Select`/`Draw`
+buttons), usable mid-recording; toggle off via the button, switching tools, or Esc. Both render
+on-screen (so the mark shows in `video.webm`) AND emit a structured timeline event; the worker
+grabs a frame at emit time so the annotated screen is in `frames/`. See `learnings.md` 2026-06-17.
+- [x] ~~**Draw** — freeform canvas highlight of an area/region (not element-bound)~~. Emits a
+      timestamped, tab-tagged `annotation:draw` event (`{points, bbox, viewport}` as %-coords
+      via `drawGeom`) so `pack.py` can show "user highlighted here" next to the narration.
+- [x] ~~**Selector** — element pick that **snaps to DOM elements** (reuses `selectorFor()` +
+      `describe()`)~~. Emits `annotation:select` with the selector + semantic label + element
+      rect so the agent and user are "aligned on the same element."
+- [x] ~~Pure geometry (`drawGeom`) extracted + tested~~ — `extension/src/annotate-geom.js` +
+      `tests/test_annotate.mjs` (7 tests); mirrored verbatim in `content.js` (classic script,
+      can't import — same as the `redact.js` helpers).
+- [x] ~~Don't double-log annotation pointer events as page clicks/hovers~~ — `onClick` +
+      `emitDwell` now bail while a tool is active.
+- [ ] **Live-Chrome verify** (no unit test — shadow-DOM + chrome.* dependent): load unpacked,
+      record, click **Select** → hover shows the element outline → click marks it; click
+      **Draw** → drag draws a stroke. Stop & export, then confirm `timeline.json` has
+      `annotation:select` (with selector + `ctx`) and `annotation:draw` (with `points`/`bbox`),
+      and `frames/` contains a shot showing the mark. Esc / toggle exits cleanly; tools are
+      disabled while paused.
 
 **P3 — Popup → compact dropdown + Settings** (current popup is "too big / a bit ugly"):
 - [ ] Shrink the popup to a compact dropdown; KEEP the purpose/"why are you recording"

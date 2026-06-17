@@ -4,6 +4,38 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (P2 — Selector + Draw annotation tools; three non-obvious gotchas)
+
+Built the two on-overlay annotation tools (`annotate` IIFE in `content.js`), both usable
+mid-recording, both emitting structured timeline events AND drawing on-screen so the mark
+also lands in `video.webm` and the frame grabbed at emit time:
+- **Selector** — element pick; reuses `selectorFor()` + `describe()`; emits `annotation:select`
+  (selector + semantic label + element rect) so user and agent align on the same element.
+- **Draw** — freeform stroke (not element-bound); emits `annotation:draw` (a %-coord path +
+  bbox via `drawGeom`) so the analyst gets "user circled here", not just pixels.
+
+Things that aren't obvious and would bite a re-implementation:
+- **Annotation pointer events bubble to `document` and get logged as fake workflow
+  clicks/hovers.** The catcher is a shadow-DOM element with `pointer-events:auto`; a click on
+  it still propagates to the page's `document`, where our capture-phase `onClick`/dwell
+  listeners fire — retargeted to the annotation host — and would record a spurious
+  `click #__bac_annotate__`. Fix: guard `onClick` and `emitDwell` with `if (annotate.mode())
+  return;`. (Capture-phase order means our page `onClick` fires *before* the catcher's own
+  handler, so you can't rely on `stopPropagation` from the tool to suppress it.)
+- **To hit-test the page element *under* a full-viewport catcher**, momentarily set the
+  catcher's `pointer-events:none`, call `document.elementFromPoint(x,y)`, then restore — else
+  elementFromPoint just returns the catcher. (`pageElAt` in `content.js`.)
+- **Annotations are visible-AND-structured by design.** They render on a `<canvas>` (strokes)
+  + an outline div (the picked element box) that fade after ~3s — long enough to show in the
+  video and in the frame the worker grabs (`annotation:*` added to the click/nav frame
+  trigger), short enough not to obscure the page. The structured event is the deliverable for
+  the agent; the on-screen mark is for the human watching the video.
+- **`drawGeom` is duplicated.** The %-coord/bbox math lives in `extension/src/annotate-geom.js`
+  (tested, `tests/test_annotate.mjs`) and is copied verbatim into `content.js` (a classic
+  content script can't `import`) — same keep-in-sync arrangement as the `redact.js` helpers.
+- pack.py already tolerates unknown event kinds (its `else` branch JSON-dumps them), so the new
+  `annotation:*` events render raw today; making them pretty is P4 (analyze side).
+
 ## 2026-06-17 (SCOPE CHANGE — capture only tabs the user enters, not every open tab)
 
 A clean live run revealed v2's "all-tabs instrumentation" captured **every open tab**, not

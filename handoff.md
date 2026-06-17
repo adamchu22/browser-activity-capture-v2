@@ -1,8 +1,22 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-17 (P1 + P1b live-verified; tab-scope change done & unit-tested, live re-verify deferred to AFTER P2; NEXT: build P2 annotations)_
+_Last updated: 2026-06-17 (P2 annotations built + unit-tested; NEXT: live-verify P2, then build P3 popup/Settings; Adam live-re-verifies the tab-scope change too)_
 
-## ▶ NEXT — build P2 (Selector + Draw annotations). Then Adam live-re-verifies the tab-scope change.
+## ▶ NEXT — live-Chrome verify P2 (Selector + Draw), then build P3 (popup → dropdown + Settings). Adam still live-re-verifies the tab-scope change.
+
+## ✅ P2 (Selector + Draw annotations) — CODE DONE + unit-tested (2026-06-17)
+
+Two separate tools on the overlay pill (`Select` / `Draw` buttons), usable mid-recording, in
+the `annotate` IIFE in `content.js`. Both render on-screen (canvas stroke + element outline,
+fade after ~3s, so the mark shows in `video.webm`) AND emit a structured timeline event:
+- **Selector** snaps to the DOM (`selectorFor()` + `describe()`) → `annotation:select`
+  (selector + semantic label + element rect) so user & agent align on the same element.
+- **Draw** is freeform → `annotation:draw` (`{points, bbox, viewport}` as %-coords via
+  `drawGeom`) so the analyst gets "user circled here".
+The worker grabs a frame at emit time (`annotation:*` added to the click/nav frame trigger) so
+`frames/` holds the annotated screen. Pure geometry is `extension/src/annotate-geom.js`
+(tested, `tests/test_annotate.mjs`, 7 tests) mirrored into `content.js`. Three gotchas captured
+in `learnings.md`. **Live-Chrome verify is the sign-off** (see P2 in `to-do-current.md`).
 
 ## ✅ P1 + P1b live-verified (2026-06-17, `outputs/capture-…18-23-37-835Z.zip`)
 
@@ -43,18 +57,15 @@ pushes `{recording, paused, t0}`). Worker-side semantics in `background.js`
 (no re-prompt) and re-inits rrweb per tab so the new take keeps a base snapshot. Restart/Cancel
 take a 2-click confirm. Adam confirmed it on screen and liked it.
 
-## ▶ NEXT — build P2 (Selector + Draw annotations)
+## ▶ NEXT — live-verify P2, then build P3
 
-The two annotation tools, both usable mid-recording, both on the overlay (SEPARATE tools):
-- **Selector** — element pick that snaps to DOM via the existing `selectorFor()` + `describe()`
-  in `content.js`; emit `annotation:select` (selector + semantic label) so user & agent align
-  on the same element.
-- **Draw** — freeform region highlight (not element-bound); emit `annotation:draw` (timestamped,
-  tab-tagged) so pack.py can show "user highlighted here" by the narration.
-
-See the P2 block in `to-do-current.md`. Then P3 popup→dropdown + Settings, P4 analyze-side
-rendering of the annotation events. **After P2, Adam live-re-verifies the tab-scope change**
-(see the SCOPE CHANGE section above).
+P2 (Selector + Draw) is built + unit-tested (see the P2 section above). Next: the live-Chrome
+sign-off for P2 (load unpacked, record, exercise both tools, confirm `annotation:select` /
+`annotation:draw` land in `timeline.json` and the mark shows in a frame — full steps in the P2
+block of `to-do-current.md`). Then build **P3** (popup → compact dropdown + Settings panel for
+the host blocklist + preset download folder + countdown), then **P4** analyze-side rendering of
+the annotation events. **Adam also live-re-verifies the tab-scope change** (see the SCOPE
+CHANGE section above) — it can ride along with the P2 verification run.
 
 **P0 (self-driving zip + audio fix) remains DONE + live-verified.** Every export embeds
 `CLAUDE.md` + `AGENTS.md` (from `extension/src/bundle-docs.js`) with the read order, analysis
@@ -162,23 +173,29 @@ Analyze side: 70 python tests + 6 node redact tests, all green.
 
 ## Tests
 
-`python3 -m unittest discover -s tests` — 70 tests (glossary, network-noise collapse,
-multi-tab rendering, semantic labels + step segmentation + frame annotation, purpose
-steer, bundled skills incl. competitive-research). Stdlib only.
-`node --test tests/test_redact.mjs` — 6 tests for the extension's URL/value redaction
-(the 2026-06-17 leak fix). The content.js unique-selector AND semantic-context
-(`describe()`) logic is verified in real Chromium via
-`tests/browser/selector-harness.html` (browser, not unittest) — `allUnique`,
-`allIdentify`, and `allCtxPass` all true.
+`python3 -m unittest discover -s tests` — 80 tests (glossary, network-noise collapse,
+multi-tab rendering, semantic labels + step segmentation + frame annotation, purpose steer,
+bundled skills incl. competitive-research, coverage diagnostic). Stdlib only, all green.
+`node --test tests/test_*.mjs` — 37 tests: redact (URL/value), nav-policy, bundle-docs, and
+the new `test_annotate.mjs` (7, the Draw `drawGeom` %-coord/bbox math). The content.js
+unique-selector AND semantic-context (`describe()`) logic is verified in real Chromium via
+`tests/browser/selector-harness.html` (browser, not unittest) — `allUnique`, `allIdentify`,
+and `allCtxPass` all true. The overlay + annotation tools are shadow-DOM + chrome.* dependent,
+so their live behavior has no unit test (needs a load-unpacked run — see P2 verify steps).
 
-## Exact next step — build P2 (annotations); Adam re-verifies tab-scope after
+## Exact next step — live-verify P2 (annotations); then P3. Adam re-verifies tab-scope too.
 
-P1 + P1b are live-verified (see top). The tab-scope change is implemented + unit-tested;
-**Adam will live-re-verify it after P2** (record a 3-tab task with sensitive tabs open →
-`manifest.tabs` should list only the tabs used). Files touched this session:
+P1 + P1b are live-verified (see top). P2 (Selector + Draw) is built + unit-tested — its
+live-Chrome sign-off is the next step (P2 block in `to-do-current.md`). The tab-scope change is
+implemented + unit-tested and can be re-verified on the same run. Files touched this session
+(P2):
+- **P2 (annotations):** `content.js` (`annotate` IIFE + mirrored `drawGeom`; two overlay
+  buttons + `syncTools`; `onClick`/`emitDwell` guards), `extension/src/annotate-geom.js` (new,
+  pure), `background.js` (annotation kinds added to the frame trigger), `tests/test_annotate.mjs` (new).
+
+Prior sessions:
 - **Tab-scope change:** `background.js` (`start()` active-tab-only, `onActivated` lazy
-  instrument, per-tab `is-recording`), `nav-policy.js` (reattach tracked / instrument active
-  untracked), `tests/test_nav_policy.mjs`.
+  instrument, per-tab `is-recording`), `nav-policy.js`, `tests/test_nav_policy.mjs`.
 - **P1b (capture-on-nav fix):** `background.js` (`reattachTab`, `onUpdated` listener, 3s
   `startFrameTimer`/`stopFrameTimer`), `nav-policy.js`, `content.js` (retrying `selfAttach`),
   `analyze/check_coverage.py` (diagnostic, wired into `validate_bundle.py`).
@@ -186,8 +203,7 @@ P1 + P1b are live-verified (see top). The tab-scope change is implemented + unit
   `background.js` (`broadcastOverlay` + `pause/resume/restart/cancel` + `overlay-command`),
   `offscreen.js` (MediaRecorder pause/resume/restart/cancel, retained `activeTracks`).
 
-Build **P2** (Selector + Draw annotations on the overlay), then P3 popup→dropdown + Settings,
-then P4 analyze-side rendering.
+After the P2 verify: build **P3** (popup → dropdown + Settings), then **P4** analyze-side rendering.
 
 ## Known caveats
 
