@@ -16,7 +16,7 @@
 //   - video is recorded in an offscreen document via MediaRecorder
 //   - full request/response bodies come from the CDP Network domain (chrome.debugger)
 
-import { redactHeaders, redactBody } from "./redact.js";
+import { redactHeaders, redactBody, redactUrl, scrubTokens } from "./redact.js";
 import { makeZip } from "./zip.js";
 import * as db from "./db.js";
 
@@ -105,8 +105,9 @@ async function instrumentTab(tabId) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!isEligible(tab)) return;
   state.tabIds.add(tabId);
-  state.tabs.set(tabId, { id: tabId, url: tab.url, title: tab.title || "" });
-  state.urls.add(tab.url);
+  const tabUrl = redactUrl(tab.url);
+  state.tabs.set(tabId, { id: tabId, url: tabUrl, title: tab.title || "" });
+  state.urls.add(tabUrl);
 
   // CDP network capture (shows the per-tab "is being debugged" banner — by design).
   try {
@@ -246,7 +247,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   if (method === "Network.requestWillBeSent") {
     const { request, requestId, timestamp } = params;
     if (hostBlocked(request.url)) return;
-    state.urls.add(request.url);
+    const reqUrl = redactUrl(request.url); // host/path intact; only secrets in the query masked
+    state.urls.add(reqUrl);
     state.har.set(requestId, {
       _tab: source.tabId,
       _t: now(),
@@ -254,7 +256,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       _start: timestamp,
       request: {
         method: request.method,
-        url: request.url,
+        url: reqUrl,
         headers: redactHeaders(toHeaderArray(request.headers)),
         postData: request.postData
           ? { mimeType: "application/json", text: redactBody(request.postData) }
@@ -291,10 +293,25 @@ function toHeaderArray(headers = {}) {
   return Object.entries(headers).map(([name, value]) => ({ name, value: String(value) }));
 }
 
+// Token-scrub a serialized rrweb node (DOM snapshot or mutation). Stringify →
+// scrubTokens → parse catches a JWT/bearer anywhere in the tree (img src, href,
+// inline text), where a per-field rule wouldn't reach. Falls back to the raw node
+// only if (de)serialization fails — which it shouldn't for rrweb's plain JSON.
+function scrubNode(node) {
+  try {
+    return JSON.parse(scrubTokens(JSON.stringify(node)));
+  } catch {
+    return node;
+  }
+}
+
 // ---- timeline + rrweb from content script --------------------------------
 
 async function appendTimeline(event) {
   if (!state.recording || state.paused) return;
+  // Single chokepoint: any event carrying a URL gets it scrubbed before disk, so a
+  // token in a query string can't ride into the timeline (nav + network events).
+  if (event.url) event = { ...event, url: redactUrl(event.url) };
   await db.append("timeline", { t: now(), ...event });
 }
 
@@ -311,9 +328,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const e = { ...msg.event, tab: tabId };
     appendTimeline(e);
     if (e.kind === "nav" && tabId != null) {
-      state.urls.add(e.url);
+      const navUrl = redactUrl(e.url);
+      state.urls.add(navUrl);
       const info = state.tabs.get(tabId);
-      if (info) info.url = e.url; // keep the tab legend current as the user navigates
+      if (info) info.url = navUrl; // keep the tab legend current as the user navigates
     }
     // Grab a frame on clicks, navigations, and pointer dwells — the moments
     // worth seeing. captureVisibleTab is rate-limited by Chrome (~1/s) and
@@ -323,7 +341,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
   }
   if (msg.type === "rrweb-event") {
-    if (state.recording && !state.paused) db.append("rrweb", { t: now(), node: msg.node, tab: sender.tab?.id });
+    // rrweb serializes the live DOM — including attribute values like <img src> and
+    // <a href> that can carry a token in their query string (?jwt=…). That stream
+    // (events.jsonl) bypasses the URL/body scrubbers, so scrub the whole serialized
+    // node for token shapes here. Same net as redactBody; lockstep with the
+    // validator's TOKEN_RE. See learnings.md 2026-06-17.
+    if (state.recording && !state.paused) db.append("rrweb", { t: now(), node: scrubNode(msg.node), tab: sender.tab?.id });
   }
   if (msg.type === "capture-error") {
     logError(msg.where || "unknown", { message: msg.message, stack: msg.stack });

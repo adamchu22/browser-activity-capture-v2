@@ -34,6 +34,26 @@ export function scrubTokens(text) {
   return text.replace(TOKEN_VALUE_RE, REDACTED_SECRET);
 }
 
+// Query-string parameter keys whose VALUE is a secret regardless of shape
+// (?jwt=…, ?api_key=…, ?sig=…). Caught a real leak: GitHub serves private images
+// as …png?jwt=eyJ… , so a token rode in the URL where the header/body scrubbers
+// never look.
+const SECRET_PARAM_RE = /^([^=&]*(?:pass|secret|token|api[-_]?key|auth|jwt|sig|signature|access[-_]?token)[^=&]*)$/i;
+
+// Redact secrets embedded in a URL. URLs are recorded raw into the timeline, the
+// HAR, the tab legend, and urls_visited — none of which went through the value
+// scrubbers, so a token in a query string leaked in the clear. Mask secret-keyed
+// params by name, then scrub any bare JWT/bearer shape anywhere in the URL. The
+// host/path are left intact (the redacted record isn't a working URL, just a log).
+export function redactUrl(url) {
+  if (typeof url !== "string" || !url) return url;
+  const masked = url.replace(
+    /([?&])([^=&]+)=([^&#]*)/g,
+    (m, sep, key, val) => (SECRET_PARAM_RE.test(key) ? `${sep}${key}=${REDACTED_SECRET}` : m)
+  );
+  return scrubTokens(masked);
+}
+
 // Decide the masked form for a single value given the field it came from.
 export function maskValue(fieldName, value) {
   if (value == null || value === "") return value;
