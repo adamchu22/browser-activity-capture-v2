@@ -152,5 +152,39 @@ class TestBuildContextIntent(unittest.TestCase):
         self.assertNotIn("Task (stated", pack.build_context(d))
 
 
+class TestFrames(unittest.TestCase):
+    FRAMES = [{"t": 100, "file": "frames/0000000100.png"}, {"t": 5000, "file": "frames/0000005000.png"}]
+
+    def test_nearest_frame(self):
+        self.assertEqual(pack.nearest_frame(120, self.FRAMES), "frames/0000000100.png")
+        self.assertEqual(pack.nearest_frame(4800, self.FRAMES), "frames/0000005000.png")
+
+    def test_nearest_frame_out_of_window(self):
+        self.assertIsNone(pack.nearest_frame(3000, self.FRAMES, window_ms=500))
+
+    def test_nearest_frame_empty(self):
+        self.assertIsNone(pack.nearest_frame(100, []))
+
+    def test_steps_link_click_to_frame(self):
+        events = [ev(110, "click", ctx={"name": "Save"}, xpct=58, ypct=22)]
+        out = pack.render_steps(events, frames=self.FRAMES)
+        self.assertIn("→ frames/0000000100.png @(58%,22%)", out)
+
+    def test_annotated_html_draws_marker(self):
+        events = [ev(100, "click", ctx={"name": "Issue refund", "role": "button"},
+                     xpct=58, ypct=22, rect={"x": 100, "y": 50, "w": 80, "h": 30},
+                     viewport={"w": 1000, "h": 800})]
+        html = pack.build_annotated_frames_html(events, self.FRAMES)
+        self.assertIn('src="frames/0000000100.png"', html)
+        self.assertIn('class="dot" style="left:58%;top:22%"', html)
+        self.assertIn('class="box"', html)        # element bounding box drawn
+        self.assertIn("Issue refund", html)
+        self.assertIn("(button)", html)
+
+    def test_annotated_html_empty_when_nothing_to_mark(self):
+        # No coords → nothing to annotate.
+        self.assertEqual(pack.build_annotated_frames_html([ev(0, "nav", url="x")], self.FRAMES), "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -101,6 +101,18 @@ def parse_vtt_cues(text: str) -> list[dict]:
     return cues
 
 
+def nearest_frame(t: int, frames: list[dict], window_ms: int = 2000) -> str | None:
+    """The screenshot captured closest in time to an event (frames are grabbed at
+    click/nav/hover moments, so this binds an action to what was on screen then).
+    Returns the frame file, or None if none is within window_ms."""
+    best, best_dt = None, window_ms + 1
+    for f in frames:
+        dt = abs(f.get("t", 0) - t)
+        if dt < best_dt:
+            best, best_dt = f, dt
+    return (best.get("file") if best else None) if best_dt <= window_ms else None
+
+
 def short_url(url: str) -> str:
     """Host + path, query stripped — readable in a procedure line."""
     base = url.split("?", 1)[0]
@@ -245,14 +257,26 @@ def segment_steps(events: list[dict], gap_ms: int = 2500) -> list[dict]:
     return steps
 
 
+def _frame_ref(e: dict, frames: list[dict]) -> str:
+    """A ` → frames/x.png @(x%,y%)` suffix pointing a vision agent at the exact
+    screenshot and on-screen spot for this action. Empty if no frame matches."""
+    f = nearest_frame(e.get("t", 0), frames) if frames else None
+    if not f:
+        return ""
+    coord = pos(e).strip()  # '@(x%,y%)' or ''
+    return f"  → {f}" + (f" {coord}" if coord else "")
+
+
 def render_steps(events: list[dict], blocklist: list[str] | None = None,
-                 tab_labels: dict | None = None, tab_urls: dict | None = None) -> str:
+                 tab_labels: dict | None = None, tab_urls: dict | None = None,
+                 frames: list[dict] | None = None) -> str:
     """A draft narrated procedure: each step's narration (the intent) above the
     actions that carried it out. Hovers and low-signal network are dropped here to
     keep it SOP-shaped — the full detail stays in the raw timeline below."""
     blocklist = blocklist or []
     tab_labels = tab_labels or {}
     tab_urls = tab_urls or {}
+    frames = frames or []
     multi_tab = len(tab_labels) > 1
     steps = segment_steps(events)
     out: list[str] = []
@@ -282,7 +306,7 @@ def render_steps(events: list[dict], blocklist: list[str] | None = None,
             if k == "nav":
                 out.append(f"- → navigate {short_url(e.get('url', ''))}")
             elif k == "click":
-                out.append(f"- click {action_label(e)}")
+                out.append(f"- click {action_label(e)}{_frame_ref(e, frames)}")
             elif k == "input":
                 out.append(f"- type into {input_label(e)} = {e.get('value', '')}")
             elif k == "key":
@@ -299,6 +323,67 @@ def render_steps(events: list[dict], blocklist: list[str] | None = None,
             out.append(f"- _({net_collapsed} low-signal request(s))_")
         out.append("")
     return "\n".join(out).strip()
+
+
+def _esc(s: str) -> str:
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def build_annotated_frames_html(events: list[dict], frames: list[dict]) -> str:
+    """The 'draw on screen' view: each click/hover frame with a marker drawn on the
+    targeted element — a ring at the click %coords and (when known) the element's
+    bounding box. Pure HTML/CSS layered over the copied frames/ PNGs; open it in a
+    browser. Returns '' if there's nothing to annotate."""
+    cards = []
+    for e in events:
+        if e.get("kind") not in ("click", "hover"):
+            continue
+        if e.get("xpct") is None or e.get("ypct") is None:
+            continue
+        f = nearest_frame(e.get("t", 0), frames)
+        if not f:
+            continue
+        ctx = e.get("ctx") or {}
+        label = ctx.get("name") or e.get("label") or e.get("selector", "")
+        role = ctx.get("role", "")
+        x, y = e["xpct"], e["ypct"]
+        # Optional element box, as % of the viewport/screenshot.
+        box = ""
+        rect, vp = e.get("rect"), e.get("viewport")
+        if rect and vp and vp.get("w") and vp.get("h"):
+            bx, by = rect["x"] / vp["w"] * 100, rect["y"] / vp["h"] * 100
+            bw, bh = rect["w"] / vp["w"] * 100, rect["h"] / vp["h"] * 100
+            box = f'<div class="box" style="left:{bx:.1f}%;top:{by:.1f}%;width:{bw:.1f}%;height:{bh:.1f}%"></div>'
+        cards.append(
+            f'<figure>\n'
+            f'  <figcaption><code>{ms(e.get("t",0))}</code> · {_esc(e.get("kind"))} '
+            f'<b>{_esc(label)}</b>{(" (" + _esc(role) + ")") if role else ""}</figcaption>\n'
+            f'  <div class="shot">\n'
+            f'    <img src="{_esc(f)}" loading="lazy" alt="{_esc(label)}">\n'
+            f'    {box}\n'
+            f'    <div class="dot" style="left:{x}%;top:{y}%"></div>\n'
+            f'  </div>\n'
+            f'</figure>'
+        )
+    if not cards:
+        return ""
+    return (
+        "<!doctype html>\n<html><head><meta charset='utf-8'><title>Annotated frames</title>\n"
+        "<style>\n"
+        "body{font:14px system-ui,sans-serif;margin:0;padding:16px;background:#f4f4f5}\n"
+        "h1{font-size:16px}\n"
+        ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px}\n"
+        "figure{margin:0;background:#fff;border:1px solid #ddd;border-radius:6px;overflow:hidden}\n"
+        "figcaption{padding:6px 8px;font-size:12px;color:#333;border-bottom:1px solid #eee}\n"
+        ".shot{position:relative;line-height:0}\n"
+        ".shot img{width:100%;height:auto}\n"
+        ".dot{position:absolute;width:18px;height:18px;margin:-9px 0 0 -9px;border:3px solid #e11;"
+        "border-radius:50%;box-shadow:0 0 0 2px #fff,0 0 6px rgba(0,0,0,.5)}\n"
+        ".box{position:absolute;border:2px solid rgba(225,17,17,.7);background:rgba(225,17,17,.08)}\n"
+        "</style></head><body>\n"
+        "<h1>Annotated frames — where each action landed</h1>\n"
+        f"<div class='grid'>\n{chr(10).join(cards)}\n</div>\n</body></html>\n"
+    )
 
 
 def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
@@ -387,7 +472,7 @@ sync mode `{manifest.get('sync_mode','?')}`. Secrets redacted as `‹redacted›
 _Auto-segmented from the recording; the user's narration is the intent, the bullets
 are what they did. See the raw timeline below for full detail (hovers, every request)._
 
-{render_steps(timeline, blocklist, tab_labels, tab_urls)}
+{render_steps(timeline, blocklist, tab_labels, tab_urls, frames)}
 
 ## Timeline (one clock, ms since t0)
 {render_timeline(timeline, blocklist, tab_labels)}
@@ -401,7 +486,9 @@ are what they did. See the raw timeline below for full detail (hovers, every req
 {network_summary or '- (none)'}
 
 ## Frames
-Screenshots at key moments — open these from the pack's `frames/` directory:
+Screenshots at key moments — open these from the pack's `frames/` directory.
+Open **`frames-annotated.html`** to see each click/hover drawn on the page (a ring at
+the click point + the element's box).
 {frame_index or '- (none)'}
 
 ---
@@ -421,6 +508,14 @@ def build_pack(bundle: Path, out: Path, blocklist: list[str] | None = None) -> N
     frames_src = bundle / "frames"
     if frames_src.is_dir():
         shutil.copytree(frames_src, out / "frames", dirs_exist_ok=True)
+
+    # The "draw on screen" view — markers on the clicked elements. Only written when
+    # there's something to annotate.
+    manifest = json.loads((bundle / "manifest.json").read_text()) if (bundle / "manifest.json").exists() else {}
+    timeline = json.loads((bundle / "timeline.json").read_text()) if (bundle / "timeline.json").exists() else []
+    annotated = build_annotated_frames_html(timeline, manifest.get("frames", []))
+    if annotated:
+        (out / "frames-annotated.html").write_text(annotated, encoding="utf-8")
 
     # Raw structured files, for agents that prefer machine-readable input.
     raw = out / "bundle"
