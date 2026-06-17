@@ -1,6 +1,8 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-17 (P1 overlay + P1b capture-on-nav bug fix CODE DONE, tests green; next: one live run to verify both, then P2)_
+_Last updated: 2026-06-17 (P1 + P1b live-verified; tab-scope change done & unit-tested, live re-verify deferred to AFTER P2; NEXT: build P2 annotations)_
+
+## ▶ NEXT — build P2 (Selector + Draw annotations). Then Adam live-re-verifies the tab-scope change.
 
 ## ✅ P1 + P1b live-verified (2026-06-17, `outputs/capture-…18-23-37-835Z.zip`)
 
@@ -9,14 +11,15 @@ Clean run: `validate_bundle.py` **PASS, 0 warnings, "capture coverage OK"**. 18 
 to the end (1.74min) — the nav bug is fixed. Frames regular (~2.5–3.6s, the 3s timer). Adam
 confirmed the on-screen overlay (4-button pill) looked good. narration_in_video true.
 
-## ⚙ SCOPE CHANGE done (capture only tabs the user enters) — needs a live re-verify
+## ⚙ SCOPE CHANGE done (capture only tabs the user enters) — RE-VERIFY AFTER P2
 
 That same run exposed that v2 captured **all 16 open tabs**, not just the 3 used (incl. a
 1Password signin + Telegram). Adam's call: capture only tabs the user **enters**. Implemented
 (see `learnings.md`): `start()` instruments just the active tab; `tabs.onActivated` lazily
 instruments tabs as you switch in; `is-recording` is now per-tab so untouched tabs stay inert.
-**Live re-verify:** record a 3-tab task with other sensitive tabs open → the bundle's
-`manifest.tabs` + `urls_visited` should list only the tabs you actually used.
+Unit-tested (nav-policy), but **live re-verify is still pending — Adam will do it AFTER P2**:
+record a 3-tab task with other sensitive tabs open → the bundle's `manifest.tabs` +
+`urls_visited` should list only the tabs actually used (no 1Password/Telegram/etc.).
 
 ## ⚠ P1b — capture died on navigation (FIXED + live-verified above)
 
@@ -30,38 +33,35 @@ from DOM events). **Diagnostic:** `analyze/check_coverage.py` detects the signat
 bundle (FAILs the original bad one). **Sign-off:** re-record the distru-freemium flow and run
 `python3 analyze/check_coverage.py <bundle>` → must PASS. This shares the same live run as P1.
 
-## ▶ NEXT — one live run verifies P1 + P1b, then start P2 (Selector + Draw annotations)
+## ✅ P1 (overlay) — DONE + live-verified
 
-**P1 (on-screen recording overlay) is CODE-COMPLETE and unit-tests pass; it has NOT been
-live-verified in Chrome yet.** A shadow-DOM pill (the `overlay` IIFE in `content.js`) shows
-Finish / Pause / Restart / Cancel during recording, in every instrumented tab, kept in sync
-by the worker (`broadcastOverlay()` pushes `{recording, paused, t0}`). Worker-side semantics
-live in `background.js` (`pause/resume/restart/cancel`) and are mirrored onto the offscreen
-MediaRecorder (`offscreen-pause/-resume/-restart/-cancel`). Restart reuses the live
-getDisplayMedia tracks (no re-prompt) and re-inits rrweb per tab so the new take keeps a base
-snapshot — see `learnings.md` for the two gotchas. Restart/Cancel take a 2-click confirm.
+Shadow-DOM pill (the `overlay` IIFE in `content.js`) shows Finish / Pause / Restart / Cancel
+during recording, in every instrumented tab, kept in sync by the worker (`broadcastOverlay()`
+pushes `{recording, paused, t0}`). Worker-side semantics in `background.js`
+(`pause/resume/restart/cancel`), mirrored onto the offscreen MediaRecorder
+(`offscreen-pause/-resume/-restart/-cancel`). Restart reuses the live getDisplayMedia tracks
+(no re-prompt) and re-inits rrweb per tab so the new take keeps a base snapshot. Restart/Cancel
+take a 2-click confirm. Adam confirmed it on screen and liked it.
 
-**▶ NEXT ACTION (do this first): one live run verifies BOTH P1 and P1b.** Load unpacked.
-*For P1b (the important one):* record on the **server-rendered** distru-freemium app
-(127.0.0.1:8765), click through several full-page navigations (the `/fixes?filter=…` views),
-Stop, then `python3 analyze/check_coverage.py <bundle>` → must **PASS** (clicks + frames
-present after the first navigation, content capture tracks network). *For P1 (the overlay):*
-also record across ≥2 tabs and check the pill appears on each tab; Pause freezes the timer +
-amber dot + stops the recorder; Restart resets to 00:00 and the bundle still validates +
-replays (rrweb snapshot present); Cancel exports nothing; Finish exports a PASS bundle.
-See the live-verify checkboxes in `to-do-current.md` (P1 + P1b blocks).
+## ▶ NEXT — build P2 (Selector + Draw annotations)
 
-**Then P2** — the two annotation tools (Selector: snaps to DOM via the existing
-`selectorFor()`+`describe()`, emits `annotation:select`; Draw: freeform region, emits
-`annotation:draw`). Both mid-recording, both on the overlay. Then P3 popup→dropdown +
-Settings, then P4 analyze-side rendering of the annotation events.
+The two annotation tools, both usable mid-recording, both on the overlay (SEPARATE tools):
+- **Selector** — element pick that snaps to DOM via the existing `selectorFor()` + `describe()`
+  in `content.js`; emit `annotation:select` (selector + semantic label) so user & agent align
+  on the same element.
+- **Draw** — freeform region highlight (not element-bound); emit `annotation:draw` (timestamped,
+  tab-tagged) so pack.py can show "user highlighted here" by the narration.
+
+See the P2 block in `to-do-current.md`. Then P3 popup→dropdown + Settings, P4 analyze-side
+rendering of the annotation events. **After P2, Adam live-re-verifies the tab-scope change**
+(see the SCOPE CHANGE section above).
 
 **P0 (self-driving zip + audio fix) remains DONE + live-verified.** Every export embeds
 `CLAUDE.md` + `AGENTS.md` (from `extension/src/bundle-docs.js`) with the read order, analysis
 procedure, and the audio-recovery fallback (stub transcript → Opus track in `video.webm`,
 recover with ffmpeg + local ASR; the docs now also include the `uv pip install mlx-audio`
-setup step). Tests (whole repo): node 29 (redact + bundle-docs + nav-policy) + python 78
-(incl. the new `test_check_coverage.py`) all green.
+setup step). Tests (whole repo): node 30 (redact + bundle-docs + nav-policy) + python 80
+(incl. `test_check_coverage.py` + `test_validate_coverage.py`) all green.
 
 Why P0 was needed (verified): the raw zip's README pointed at `../analyze/pack.py` (a path a
 recipient won't have); the self-driving layer only existed in the *pack*, not the zip; and
@@ -171,19 +171,23 @@ steer, bundled skills incl. competitive-research). Stdlib only.
 `tests/browser/selector-harness.html` (browser, not unittest) — `allUnique`,
 `allIdentify`, and `allCtxPass` all true.
 
-## Exact next step — one live run verifies P1 + P1b, then build P2
+## Exact next step — build P2 (annotations); Adam re-verifies tab-scope after
 
-Both are code-complete with unit tests; a single live Chrome run signs off both.
-Files touched this session:
-- **P1b (capture-on-nav fix):** `background.js` (`reattachTab`, rewritten `onUpdated`
-  listener, 3s `startFrameTimer`/`stopFrameTimer`), `nav-policy.js` (new, pure gating),
-  `content.js` (retrying `selfAttach`), `analyze/check_coverage.py` (new diagnostic).
+P1 + P1b are live-verified (see top). The tab-scope change is implemented + unit-tested;
+**Adam will live-re-verify it after P2** (record a 3-tab task with sensitive tabs open →
+`manifest.tabs` should list only the tabs used). Files touched this session:
+- **Tab-scope change:** `background.js` (`start()` active-tab-only, `onActivated` lazy
+  instrument, per-tab `is-recording`), `nav-policy.js` (reattach tracked / instrument active
+  untracked), `tests/test_nav_policy.mjs`.
+- **P1b (capture-on-nav fix):** `background.js` (`reattachTab`, `onUpdated` listener, 3s
+  `startFrameTimer`/`stopFrameTimer`), `nav-policy.js`, `content.js` (retrying `selfAttach`),
+  `analyze/check_coverage.py` (diagnostic, wired into `validate_bundle.py`).
 - **P1 (overlay):** `content.js` (`overlay` IIFE + `restartCapture`/`startRrweb`),
   `background.js` (`broadcastOverlay` + `pause/resume/restart/cancel` + `overlay-command`),
   `offscreen.js` (MediaRecorder pause/resume/restart/cancel, retained `activeTracks`).
 
-After the live run, build **P2** (Selector + Draw annotations on the overlay), then P3
-popup→dropdown + Settings, then P4 analyze-side rendering.
+Build **P2** (Selector + Draw annotations on the overlay), then P3 popup→dropdown + Settings,
+then P4 analyze-side rendering.
 
 ## Known caveats
 

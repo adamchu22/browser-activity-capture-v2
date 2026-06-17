@@ -174,6 +174,16 @@ has no response bodies (no `Network.getResponseBody` call), so rendered HTML / e
 be recovered from the HAR — only from `video.webm`. Adding bodies needs response-body redaction
 (we don't scrub those yet). Scope separately.
 
+**P1c — Capture only tabs the user enters (CODE DONE + unit-tested; RE-VERIFY AFTER P2)** 🔒
+A clean run showed v2 captured all 16 open tabs (incl. a 1Password signin + Telegram) in a
+3-tab task. Adam's call: capture only tabs the user **enters**. See `learnings.md`.
+- [x] ~~`start()` instruments only the active tab~~ (was `chrome.tabs.query({})` over all).
+- [x] ~~`tabs.onActivated` lazily instruments each tab the user switches into~~ (idempotent).
+- [x] ~~`is-recording` answers per-tab~~ — an unentered tab's content script stays inert (no
+      DOM snapshot of a password-manager/chat tab). `nav-policy.js` + tests updated.
+- [ ] **Live re-verify (Adam, AFTER P2):** record a 3-tab task with sensitive tabs open →
+      bundle `manifest.tabs` + `urls_visited` list only the tabs actually used.
+
 **P2 — Annotation tools on the overlay** (the headline ask; Selector and Draw are SEPARATE):
 - [ ] **Draw** — freeform canvas highlight of an area/region (not element-bound). Emit a
       timestamped, tab-tagged `annotation:draw` event so `pack.py` can show "user
