@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Browser Activity Capture v2",
   "version": "0.2.0",
-  "description": "Record a browser task across ALL tabs — narration, full-screen video, timestamped clicks/keystrokes/navigation, and network — aligned on one clock and exported as a portable Capture Bundle.",
+  "description": "Record a browser task across ALL tabs \u2014 narration, full-screen video, timestamped clicks/keystrokes/navigation, and network \u2014 aligned on one clock and exported as a portable Capture Bundle.",
   "permissions": [
     "tabs",
     "activeTab",
@@ -10,10 +10,11 @@
     "debugger",
     "downloads",
     "storage",
-    "offscreen",
-    "desktopCapture"
+    "offscreen"
   ],
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "src/background.js",
     "type": "module"
@@ -24,16 +25,25 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/lib/rrweb.min.js", "src/content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/lib/rrweb.min.js",
+        "src/content.js"
+      ],
       "run_at": "document_start",
       "all_frames": false
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/offscreen.html"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "src/offscreen.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

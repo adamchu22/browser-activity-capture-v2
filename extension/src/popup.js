@@ -1,5 +1,7 @@
 // Popup: start/pause/stop, blocklist, and live status. All real work happens in
-// the worker; the popup just sends commands.
+// the worker; the popup just sends commands. The screen picker is Chrome's own
+// getDisplayMedia dialog, shown from the offscreen document after Start — so it's
+// fine if this popup closes when the dialog appears.
 
 const $ = (id) => document.getElementById(id);
 let paused = false;
@@ -38,13 +40,11 @@ function selectedPurposes() {
 $("rec").addEventListener("click", async () => {
   const blocklist = $("blocklist").value.split("\n").map((s) => s.trim()).filter(Boolean);
   const micEnabled = $("mic").checked;
-  // Force a purpose — it's what tells the analysis whether to make a skill, a doc,
-  // UX feedback, or an efficiency teardown.
+  // Purpose tells the analysis whether to make a skill, a doc, UX feedback, or an
+  // efficiency teardown. If none is picked, default to "general" so Start is never
+  // blocked — a recording shouldn't be lost over an unticked box.
   const purposes = selectedPurposes();
-  if (!purposes.length) {
-    $("status").textContent = "Pick why you're recording (at least one) so the analysis knows what to make.";
-    return;
-  }
+  if (!purposes.length) purposes.push("general");
   await chrome.storage.local.set({ blocklist, micEnabled, purposes });
   // Don't silently record without narration — if the mic is wanted but the
   // extension origin isn't granted yet, route through the grant page first. The
@@ -54,18 +54,14 @@ $("rec").addEventListener("click", async () => {
     $("status").textContent = "Allow the mic in the tab that opened, then press Start again.";
     return;
   }
-  // Starting opens Chrome's screen picker, which may steal focus and close this
-  // popup — that's fine, the worker runs start() independently. `res` is only seen
-  // if the popup survives. Pick a screen/window in the picker to record video.
-  $("status").textContent = "Pick a screen/window in the picker to record…";
+  // The worker spins up the offscreen doc, which calls getDisplayMedia — Chrome's
+  // "Choose what to share" dialog appears. Picking (or cancelling) happens there.
+  $("status").textContent = "Choose a screen/window to share in the dialog…";
   const task = $("task").value.trim();
   const res = await send("start", { tabId: await activeTabId(), task, purposes });
   if (res && !res.ok) {
     $("status").textContent = res.error || "Couldn't start.";
     return;
-  }
-  if (res && res.video === false) {
-    $("status").textContent = `Recording ${res.tabs} tab(s) without video (picker cancelled).`;
   }
   setTimeout(refresh, 200);
 });

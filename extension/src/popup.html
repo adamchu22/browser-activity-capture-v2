@@ -22,7 +22,7 @@
     <h1>Browser Activity Capture v2</h1>
     <label for="task">What are you doing in this recording? (one line)</label>
     <textarea id="task" rows="2" placeholder="e.g. Issue a refund for a damaged order in Distru"></textarea>
-    <label>Why are you recording? (pick at least one — it steers the analysis)</label>
+    <label>Why are you recording? (optional — steers the analysis; defaults to general)</label>
     <div id="purposes">
       <label class="check"><input type="checkbox" name="purpose" value="skill" /> Build a skill / automation</label>
       <label class="check"><input type="checkbox" name="purpose" value="docs" /> Documentation / SOP</label>
@@ -43,7 +43,7 @@
     <label for="blocklist">Never record on (one host per line)</label>
     <textarea id="blocklist" rows="3" placeholder="mail.google.com&#10;bank.example.com"></textarea>
     <div id="status"></div>
-    <div class="hint">A "this tab is being debugged" banner is expected — that's the network capture. Secrets are redacted before export.</div>
+    <div class="hint">When you Start, Chrome asks which screen/window to share, and a "this tab is being debugged" banner appears on every tab (that's the network capture). Secrets are redacted before export.</div>
     <script src="popup.js"></script>
   </body>
 </html>

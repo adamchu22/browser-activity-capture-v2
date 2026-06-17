@@ -2,10 +2,14 @@
 // MICROPHONE to a single webm via MediaRecorder, then hands the result back to
 // the worker as a data URL. The worker drops it into the bundle as video.webm.
 //
-// v2: the video source is a desktopCapture stream (chromeMediaSource:"desktop"),
-// so the recording follows the user across every tab and window — not pinned to
-// one tab like v1's tabCapture. The worker picks the source via the screen picker
-// and hands us its streamId.
+// v2: the video source is the whole screen/window via getDisplayMedia(), called
+// HERE in the offscreen document (created with the DISPLAY_MEDIA reason, which
+// waives the user-gesture requirement). The recording follows the user across
+// every tab and window — not pinned to one tab like v1's tabCapture. This is
+// Chrome's recommended MV3 screen-capture path: a desktopCapture streamId minted
+// elsewhere is NOT consumable here (throws "Invalid state") — see learnings.md
+// 2026-06-17. getDisplayMedia shows its own picker; if the user cancels we report
+// no video and the worker records data-only.
 //
 // Why the mic lives here: narration is one of the capture modalities, but the
 // desktop video stream carries no microphone. So we open a second
@@ -39,27 +43,27 @@ self.addEventListener("unhandledrejection", (e) => reportError(e.reason?.message
 
 chrome.runtime.onMessage.addListener(async (msg) => {
   if (msg.type === "offscreen-start") {
-    await startRecording(msg.streamId, msg.withMic !== false, msg.source || "desktop");
+    await startRecording(msg.withMic !== false);
   }
   if (msg.type === "offscreen-stop") {
     stopRecording();
   }
 });
 
-async function startRecording(streamId, withMic, source) {
+async function startRecording(withMic) {
   chunks = [];
   streams = [];
   micRecorded = false;
   micError = withMic ? null : "mic not requested";
   const tracks = [];
 
-  // Screen/window video (v1 "tab" still supported for compatibility). Fatal if it
-  // fails — there's no recording without it.
-  const chromeMediaSource = source === "tab" ? "tab" : "desktop";
+  // Whole-screen/window video via getDisplayMedia (shows Chrome's "Choose what to
+  // share" picker). Fatal if it fails — there's no recording without it. A user
+  // cancel throws NotAllowedError; we report no video and the worker keeps the
+  // data-only capture. Audio is NOT requested here — narration comes from the
+  // separate mic stream below, kept on the same clock.
   try {
-    const videoStream = await navigator.mediaDevices.getUserMedia({
-      video: { mandatory: { chromeMediaSource, chromeMediaSourceId: streamId } },
-    });
+    const videoStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
     streams.push(videoStream);
     tracks.push(...videoStream.getVideoTracks());
   } catch (e) {

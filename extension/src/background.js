@@ -5,11 +5,11 @@
 // construction — no post-hoc syncing. On stop it assembles the Capture Bundle
 // (the exact shape ../analyze/pack.py consumes) and downloads it as a zip.
 //
-// v2: capture is GLOBAL, not pinned to one tab. The screen video comes from a
-// desktopCapture stream (follows the user across tabs and windows), and the CDP
-// debugger + content script are attached to EVERY eligible tab — including tabs
-// opened mid-recording. Every event is tagged with its source tab so the merged
-// one-clock timeline stays disambiguable.
+// v2: capture is GLOBAL, not pinned to one tab. The screen video comes from
+// getDisplayMedia() in the offscreen document (follows the user across tabs and
+// windows), and the CDP debugger + content script are attached to EVERY eligible
+// tab — including tabs opened mid-recording. Every event is tagged with its source
+// tab so the merged one-clock timeline stays disambiguable.
 //
 // Heavy third-party pieces are integration points, not reimplemented:
 //   - rrweb runs in the content script (raw DOM stream)
@@ -376,42 +376,27 @@ async function ensureOffscreen() {
   if (has) return;
   await chrome.offscreen.createDocument({
     url: "src/offscreen.html",
-    reasons: ["USER_MEDIA"],
+    // DISPLAY_MEDIA lets the offscreen doc call getDisplayMedia() (screen) without a
+    // user gesture; USER_MEDIA covers the separate microphone getUserMedia() stream.
+    reasons: ["DISPLAY_MEDIA", "USER_MEDIA"],
     justification: "Record the chosen screen/window and the user's microphone narration via MediaRecorder.",
   });
 }
 
-// Show Chrome's screen/window/tab picker and resolve with a single-use streamId
-// the offscreen doc consumes via getUserMedia(chromeMediaSource:"desktop"). Called
-// with no targetTab (2-arg form) so the streamId is consumable by our own offscreen
-// document — the pattern from Chrome's offscreen screen-recording sample.
-function chooseDesktopStream() {
-  return new Promise((resolve) => {
-    try {
-      chrome.desktopCapture.chooseDesktopMedia(["screen", "window", "tab"], (streamId) =>
-        resolve(streamId || null)
-      );
-    } catch (e) {
-      logError("desktopCapture", { message: e?.message || String(e), stack: e?.stack });
-      resolve(null);
-    }
-  });
-}
-
-// Returns true if a video recording started. If the user cancels the picker we
-// continue data-only (clicks/network/DOM still record) rather than abort.
+// Kicks off whole-screen video. The offscreen document does the actual work: it
+// calls getDisplayMedia() itself (Chrome's recommended MV3 path — a desktopCapture
+// streamId minted in the worker is NOT consumable in offscreen; see learnings.md
+// 2026-06-17). The screen picker therefore appears asynchronously inside offscreen,
+// so we can't know here whether the user picked or cancelled — the real outcome
+// (a video.webm, or none) is reported back at stop time and recorded in the
+// manifest. Returns true to mean "video was attempted".
 async function startVideo(withMic) {
   try {
     await ensureOffscreen();
-    const streamId = await chooseDesktopStream();
-    if (!streamId) {
-      logError("desktopCapture", { message: "screen picker cancelled — recording without video" });
-      return false;
-    }
-    chrome.runtime.sendMessage({ type: "offscreen-start", streamId, withMic, source: "desktop" });
+    chrome.runtime.sendMessage({ type: "offscreen-start", withMic });
     return true;
   } catch (e) {
-    logError("desktopCapture", { message: "video capture unavailable: " + (e?.message || e), stack: e?.stack });
+    logError("video", { message: "video capture unavailable: " + (e?.message || e), stack: e?.stack });
     return false;
   }
 }
