@@ -157,8 +157,12 @@ CDP debugger survived. Most of the session's DOM + visual capture was lost. See 
 - [x] ~~Content-script self-attach retries on transient failure~~ (was fire-and-forget).
 - [x] ~~Periodic 3s frame timer~~ — frames no longer coupled to DOM events
       (`startFrameTimer`/`stopFrameTimer`, wired to all lifecycle verbs). Dropped per-hover frame.
+      Also capture a frame on tab activation (`tabs.onActivated`) so a tab switch always
+      yields a fresh screenshot of the newly-focused tab.
 - [x] ~~Coverage diagnostic~~ — `analyze/check_coverage.py` detects the signature on any bundle;
       FAILs the original bad bundle, unit-tested (`tests/test_check_coverage.py`, 8 tests).
+      **Wired into `validate_bundle.py`** — every validation now flags a CAPTURE GAP as a loud
+      warning (still PASSes structurally), so this can't silently recur. (`tests/test_validate_coverage.py`).
 - [ ] **Live verify (the sign-off):** re-record the same distru-freemium flow (several
       `/fixes?filter=…` full-page navigations), Stop, then run
       `python3 analyze/check_coverage.py <bundle>` → must PASS (content capture tracks network
