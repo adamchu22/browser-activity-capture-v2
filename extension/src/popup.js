@@ -31,10 +31,21 @@ async function micGranted() {
   }
 }
 
+function selectedPurposes() {
+  return [...document.querySelectorAll('input[name="purpose"]:checked')].map((el) => el.value);
+}
+
 $("rec").addEventListener("click", async () => {
   const blocklist = $("blocklist").value.split("\n").map((s) => s.trim()).filter(Boolean);
   const micEnabled = $("mic").checked;
-  await chrome.storage.local.set({ blocklist, micEnabled });
+  // Force a purpose — it's what tells the analysis whether to make a skill, a doc,
+  // UX feedback, or an efficiency teardown.
+  const purposes = selectedPurposes();
+  if (!purposes.length) {
+    $("status").textContent = "Pick why you're recording (at least one) so the analysis knows what to make.";
+    return;
+  }
+  await chrome.storage.local.set({ blocklist, micEnabled, purposes });
   // Don't silently record without narration — if the mic is wanted but the
   // extension origin isn't granted yet, route through the grant page first. The
   // offscreen doc can't prompt, so starting now would just yield a silent video.
@@ -48,7 +59,7 @@ $("rec").addEventListener("click", async () => {
   // if the popup survives. Pick a screen/window in the picker to record video.
   $("status").textContent = "Pick a screen/window in the picker to record…";
   const task = $("task").value.trim();
-  const res = await send("start", { tabId: await activeTabId(), task });
+  const res = await send("start", { tabId: await activeTabId(), task, purposes });
   if (res && !res.ok) {
     $("status").textContent = res.error || "Couldn't start.";
     return;
@@ -96,10 +107,15 @@ $("enableMic").addEventListener("click", () => {
 });
 $("mic").addEventListener("change", refreshMicState);
 
-chrome.storage.local.get(["blocklist", "micEnabled"]).then(({ blocklist = [], micEnabled = true }) => {
-  $("blocklist").value = blocklist.join("\n");
-  $("mic").checked = micEnabled;
-  refreshMicState();
-});
+chrome.storage.local.get(["blocklist", "micEnabled", "purposes"]).then(
+  ({ blocklist = [], micEnabled = true, purposes = [] }) => {
+    $("blocklist").value = blocklist.join("\n");
+    $("mic").checked = micEnabled;
+    for (const el of document.querySelectorAll('input[name="purpose"]')) {
+      el.checked = purposes.includes(el.value);
+    }
+    refreshMicState();
+  }
+);
 
 refresh();

@@ -22,6 +22,14 @@
     <h1>Browser Activity Capture v2</h1>
     <label for="task">What are you doing in this recording? (one line)</label>
     <textarea id="task" rows="2" placeholder="e.g. Issue a refund for a damaged order in Distru"></textarea>
+    <label>Why are you recording? (pick at least one — it steers the analysis)</label>
+    <div id="purposes">
+      <label class="check"><input type="checkbox" name="purpose" value="skill" /> Build a skill / automation</label>
+      <label class="check"><input type="checkbox" name="purpose" value="docs" /> Documentation / SOP</label>
+      <label class="check"><input type="checkbox" name="purpose" value="ux" /> UX / product feedback</label>
+      <label class="check"><input type="checkbox" name="purpose" value="improve" /> Find a better / faster way</label>
+      <label class="check"><input type="checkbox" name="purpose" value="general" /> General capture</label>
+    </div>
     <button id="rec">● Start recording (all tabs)</button>
     <label class="check"><input type="checkbox" id="mic" checked /> Record microphone (narration)</label>
     <div id="micState" class="hint"></div>

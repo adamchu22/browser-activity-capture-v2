@@ -32,6 +32,11 @@ underlying secret, and never suggest bypassing redaction.
 
 ## What to produce
 
+**If `context.md` opens with a "Purpose of this recording" block, that governs.** Read
+the capture through the lenses it names and produce the outputs it lists (always add
+`notes.md`). The descriptions below define those outputs. If there's no purpose block
+(older bundles), produce the full set.
+
 Write these files into the pack directory:
 
 1. **`SOP.md`** — a numbered standard operating procedure a new teammate could
@@ -56,6 +61,16 @@ Write these files into the pack directory:
 4. **`notes.md`** — a one-paragraph summary, then an `Open questions` list: things
    a human should confirm before relying on these assets (ambiguities, gaps,
    steps that happened off-screen).
+
+5. **`feedback.md`** (UX purpose) — observed friction as a ranked list: each item with a
+   severity, what happened (hesitation, backtrack, dead-end, confusing label, error/empty
+   state, slow step), and the `timestamp` + frame where it occurred. Ground every item in
+   the recording; don't invent problems.
+
+6. **`improvements.md`** (better/faster purpose) — concrete ways to do the task in less
+   time or fewer steps, ranked by estimated time saved: redundant/manual steps, repeated
+   navigation, things doable via an observed API instead of the UI, batchable rekeying.
+   Cite the steps/endpoints each suggestion is based on.
 
 ## Ground rules
 

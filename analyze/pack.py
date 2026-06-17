@@ -33,6 +33,62 @@ BRIEF = Path(__file__).parent / "BRIEF.md"
 NETFILTER = Path(__file__).parent / "netfilter.json"
 RAW_FILES = ["manifest.json", "timeline.json", "transcript.vtt", "network.har", "events.jsonl", "errors.json"]
 
+# Why the user recorded — picked at capture time. Each purpose is a reading LENS and a
+# deliverable, so the same recording yields a skill, a doc, UX feedback, or an
+# efficiency teardown depending on intent. Surfaced at the top of context.md to steer
+# the analyzing agent; the keys match the extension popup.
+PURPOSES = {
+    "skill": {
+        "label": "Build a skill / automation",
+        "read": "Focus on replayable mechanics — exact selectors, URLs, API endpoints, "
+                "required inputs, and the success signal (confirming response or redirect). "
+                "Flag what's safe to automate vs. must stay human-in-the-loop.",
+        "make": "`skills/<name>/SKILL.md` + `automation.suggestions.md`",
+    },
+    "docs": {
+        "label": "Documentation / SOP",
+        "read": "Focus on a clear human-followable procedure — preconditions, the happy "
+                "path, decision points and eligibility checks the narrator mentioned, and "
+                "the why behind each step.",
+        "make": "`SOP.md`",
+    },
+    "ux": {
+        "label": "UX / product feedback",
+        "read": "Focus on friction — hesitation and long pauses, backtracking, dead-ends, "
+                "repeated attempts, confusing labels, error/empty states, slow steps. Cite "
+                "the frame and timestamp for each.",
+        "make": "`feedback.md` — issues with severity and where they occurred",
+    },
+    "improve": {
+        "label": "Find a better / faster way",
+        "read": "Focus on inefficiency — redundant or manual steps, repeated navigation, "
+                "things doable in fewer clicks or via an API instead of the UI, rekeying "
+                "that could be batched.",
+        "make": "`improvements.md` — concrete suggestions ranked by time saved",
+    },
+    "general": {
+        "label": "General capture",
+        "read": "No single lens — capture the full picture.",
+        "make": "the standard pack (`SOP.md`, `skills/<name>/SKILL.md`, "
+                "`automation.suggestions.md`, `notes.md`)",
+    },
+}
+
+
+def render_purpose(purposes: list[str]) -> str:
+    """A steer block from the user's chosen purpose(s). Empty when none were given
+    (v1 bundles) — the agent falls back to the full BRIEF.md menu."""
+    keys = [p for p in (purposes or []) if p in PURPOSES]
+    if not keys:
+        return ""
+    lines = ["## Purpose of this recording",
+             "The user recorded this specifically to do the following — read the capture "
+             "through these lenses and produce these outputs (plus `notes.md`):", ""]
+    for k in keys:
+        p = PURPOSES[k]
+        lines.append(f"- **{p['label']}** — {p['read']} → produce {p['make']}.")
+    return "\n".join(lines) + "\n"
+
 # Fallback if netfilter.json is missing, so pack.py stays zero-config.
 _DEFAULT_BLOCKLIST = ["google-analytics", "googletagmanager", "doubleclick.net",
                       "chartbeat", "imrworldwide", "scorecardresearch", "taboola.com"]
@@ -456,12 +512,14 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
         issue_lines.insert(0, f"- **narration**: {manifest['narration_error']} (no voice in video.webm)")
     issues_block = ("\n## ⚠ Capture issues\n" + "\n".join(issue_lines) + "\n") if issue_lines else ""
 
-    # The user's stated goal, up top — the single best anchor for what follows.
+    # The user's stated goal + why they recorded — up top, the anchors for everything.
     task = (manifest.get("task") or "").strip()
     task_block = f"\n> **Task (stated by the user):** {task}\n" if task else ""
+    purpose_block = render_purpose(manifest.get("purposes", []))
+    purpose_block = ("\n" + purpose_block) if purpose_block else ""
 
     return f"""# Analysis context — {manifest.get('capture_id', bundle.name)}
-{task_block}
+{task_block}{purpose_block}
 Captured {manifest.get('t0_wall','?')} · duration {manifest.get('duration_ms','?')} ms ·
 sync mode `{manifest.get('sync_mode','?')}`. Secrets redacted as `‹redacted›`.
 {issues_block}{tabs_block}

@@ -152,6 +152,31 @@ class TestBuildContextIntent(unittest.TestCase):
         self.assertNotIn("Task (stated", pack.build_context(d))
 
 
+class TestPurpose(unittest.TestCase):
+    def test_render_purpose_lists_lens_and_output(self):
+        out = pack.render_purpose(["skill", "ux"])
+        self.assertIn("## Purpose of this recording", out)
+        self.assertIn("Build a skill / automation", out)
+        self.assertIn("SKILL.md", out)
+        self.assertIn("UX / product feedback", out)
+        self.assertIn("feedback.md", out)
+
+    def test_render_purpose_empty_for_none(self):
+        self.assertEqual(pack.render_purpose([]), "")
+        self.assertEqual(pack.render_purpose(["bogus"]), "")  # unknown keys ignored
+
+    def test_build_context_includes_purpose_above_steps(self):
+        d = Path(tempfile.mkdtemp())
+        manifest = {"capture_id": "c", "t0_wall": "now", "duration_ms": 10, "sync_mode": "self_record",
+                    "task": "Refund a damaged order", "purposes": ["improve"]}
+        (d / "manifest.json").write_text(json.dumps(manifest))
+        (d / "timeline.json").write_text(json.dumps([ev(0, "click", selector="#x")]))
+        ctx = pack.build_context(d)
+        self.assertIn("Find a better / faster way", ctx)
+        self.assertIn("improvements.md", ctx)
+        self.assertLess(ctx.index("Purpose of this recording"), ctx.index("## Steps"))
+
+
 class TestFrames(unittest.TestCase):
     FRAMES = [{"t": 100, "file": "frames/0000000100.png"}, {"t": 5000, "file": "frames/0000005000.png"}]
 
