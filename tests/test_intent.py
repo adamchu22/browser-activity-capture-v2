@@ -177,6 +177,36 @@ class TestPurpose(unittest.TestCase):
         self.assertLess(ctx.index("Purpose of this recording"), ctx.index("## Steps"))
 
 
+class TestBundledSkills(unittest.TestCase):
+    def test_analyze_capture_always_bundled(self):
+        self.assertEqual(pack.skills_for([]), ["analyze-capture"])
+        self.assertEqual(pack.skills_for(["skill", "docs"]), ["analyze-capture"])
+
+    def test_ui_purposes_add_ui_improvement(self):
+        self.assertEqual(pack.skills_for(["ux"]), ["analyze-capture", "ui-improvement"])
+        self.assertEqual(pack.skills_for(["ui"]), ["analyze-capture", "ui-improvement"])
+        # deduped when both UI purposes are picked
+        self.assertEqual(pack.skills_for(["ux", "ui"]), ["analyze-capture", "ui-improvement"])
+
+    def test_skill_files_have_frontmatter(self):
+        for name in ("analyze-capture", "ui-improvement"):
+            text = (pack.SKILLS_DIR / name / "SKILL.md").read_text()
+            self.assertTrue(text.startswith("---"), f"{name} missing frontmatter")
+            self.assertIn(f"name: {name}", text)
+            self.assertIn("description:", text)
+
+    def test_build_pack_copies_skills(self):
+        src = Path(tempfile.mkdtemp())
+        manifest = {"capture_id": "c", "t0_wall": "now", "duration_ms": 10, "sync_mode": "self_record",
+                    "purposes": ["ui"]}
+        (src / "manifest.json").write_text(json.dumps(manifest))
+        (src / "timeline.json").write_text(json.dumps([ev(0, "click", selector="#x")]))
+        out = Path(tempfile.mkdtemp()) / "pack"
+        pack.build_pack(src, out)
+        self.assertTrue((out / "agent-skills" / "analyze-capture" / "SKILL.md").exists())
+        self.assertTrue((out / "agent-skills" / "ui-improvement" / "SKILL.md").exists())
+
+
 class TestFrames(unittest.TestCase):
     FRAMES = [{"t": 100, "file": "frames/0000000100.png"}, {"t": 5000, "file": "frames/0000005000.png"}]
 

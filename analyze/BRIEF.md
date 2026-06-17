@@ -67,6 +67,11 @@ Write these files into the pack directory:
    state, slow step), and the `timestamp` + frame where it occurred. Ground every item in
    the recording; don't invent problems.
 
+6b. **`ui-changes.md`** (propose-UI-changes purpose) — concrete UI changes grounded in
+   the captured element (selector + accessible name) and the frame, ranked by impact;
+   when the app's source is available, the applied changes too. Follow the bundled
+   `agent-skills/ui-improvement` skill for the format and method.
+
 6. **`improvements.md`** (better/faster purpose) — concrete ways to do the task in less
    time or fewer steps, ranked by estimated time saved: redundant/manual steps, repeated
    navigation, things doable via an observed API instead of the UI, batchable rekeying.

@@ -31,7 +31,27 @@ _VTT_TIME = re.compile(r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->")
 
 BRIEF = Path(__file__).parent / "BRIEF.md"
 NETFILTER = Path(__file__).parent / "netfilter.json"
+SKILLS_DIR = Path(__file__).parent / "skills"  # preloaded, bundled into each pack
 RAW_FILES = ["manifest.json", "timeline.json", "transcript.vtt", "network.har", "events.jsonl", "errors.json"]
+
+# Which activity skills to bundle for a given purpose. `analyze-capture` (the
+# consumption procedure) is always included; this maps the rest. Add a purpose→skill
+# entry here when you drop a new skill into analyze/skills/.
+SKILLS_FOR_PURPOSE = {
+    "ux": ["ui-improvement"],
+    "ui": ["ui-improvement"],
+}
+
+
+def skills_for(purposes: list[str]) -> list[str]:
+    """The skill names to bundle: analyze-capture always, plus any mapped to the chosen
+    purposes (deduped, stable order)."""
+    names = ["analyze-capture"]
+    for p in purposes or []:
+        for s in SKILLS_FOR_PURPOSE.get(p, []):
+            if s not in names:
+                names.append(s)
+    return [n for n in names if (SKILLS_DIR / n / "SKILL.md").exists()]
 
 # Why the user recorded — picked at capture time. Each purpose is a reading LENS and a
 # deliverable, so the same recording yields a skill, a doc, UX feedback, or an
@@ -58,6 +78,14 @@ PURPOSES = {
                 "repeated attempts, confusing labels, error/empty states, slow steps. Cite "
                 "the frame and timestamp for each.",
         "make": "`feedback.md` — issues with severity and where they occurred",
+    },
+    "ui": {
+        "label": "Propose UI changes",
+        "read": "Find friction (as for UX feedback), then prescribe concrete UI changes "
+                "grounded in the captured element (selector + accessible name) and the "
+                "frame. If the app's source is available, implement the change. Follow the "
+                "bundled `ui-improvement` skill.",
+        "make": "`ui-changes.md` — proposed (and, with source, applied) changes ranked by impact",
     },
     "improve": {
         "label": "Find a better / faster way",
@@ -575,6 +603,13 @@ def build_pack(bundle: Path, out: Path, blocklist: list[str] | None = None) -> N
     if annotated:
         (out / "frames-annotated.html").write_text(annotated, encoding="utf-8")
 
+    # The post-transfer step: bundle the skills the receiving agent uses — the
+    # analyze-capture procedure always, plus activity skills (e.g. ui-improvement)
+    # mapped to the recording's purpose. They travel WITH the pack so it's self-driving.
+    bundled_skills = skills_for(manifest.get("purposes", []))
+    for name in bundled_skills:
+        shutil.copytree(SKILLS_DIR / name, out / "agent-skills" / name, dirs_exist_ok=True)
+
     # Raw structured files, for agents that prefer machine-readable input.
     raw = out / "bundle"
     raw.mkdir(exist_ok=True)
@@ -585,18 +620,22 @@ def build_pack(bundle: Path, out: Path, blocklist: list[str] | None = None) -> N
     (out / "README.md").write_text(
         f"""# Analysis pack — {bundle.name}
 
-Hand this whole folder to any agent or LLM. There is no provider lock-in here.
+Hand this whole folder to any agent or LLM. There is no provider lock-in here, and
+the pack carries its own instructions — it's self-driving.
 
 - **Coding agent (Claude Code, etc.):** point it at this directory and tell it to
-  follow `BRIEF.md`. It will read `context.md` + `frames/` and write `SOP.md`,
-  `skills/<name>/SKILL.md`, `automation.suggestions.md`, and `notes.md` here.
+  **read `agent-skills/analyze-capture/SKILL.md` first** — that skill is the procedure
+  (read the purpose → narration → identify → analyze under the lens → produce the
+  outputs). It then reads `context.md` + `frames/`, follows any other skill in
+  `agent-skills/` (e.g. `ui-improvement`), and writes its outputs here.
 - **Any chat LLM:** paste `BRIEF.md` then `context.md`. Attach the `frames/`
   images if the model supports vision.
 - **Your own harness:** see `../adapters/` for optional reference runners.
 
-Everything the agent needs is self-contained: `BRIEF.md` (the task),
-`context.md` (the flattened recording), `frames/` (screenshots), `bundle/` (raw
-structured files).
+Self-contained: `agent-skills/` (how to use this pack + activity skills),
+`context.md` (the flattened recording, with the purpose steer up top), `frames/` +
+`frames-annotated.html` (screenshots), `bundle/` (raw structured files), `BRIEF.md`
+(the neutral output spec).
 """,
         encoding="utf-8",
     )
