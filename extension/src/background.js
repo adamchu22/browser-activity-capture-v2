@@ -348,6 +348,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (state.recording) uninstrumentTab(tabId);
 });
+// Grab a frame the moment the user switches tabs — captureVisibleTab always
+// shoots the active tab, so this guarantees a screenshot of the tab they just
+// moved to (the periodic timer would otherwise miss the switch instant).
+chrome.tabs.onActivated.addListener(() => {
+  if (state.recording) captureFrame("tab-activated");
+});
 
 // ---- frames --------------------------------------------------------------
 
