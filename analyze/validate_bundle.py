@@ -25,6 +25,11 @@ import sys
 import zipfile
 from pathlib import Path
 
+# Sibling module — works whether run as `python3 analyze/validate_bundle.py` or
+# imported in tests (its own dir is on the path either way once we add it).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_coverage import analyze_coverage  # noqa: E402
+
 KNOWN_KINDS = {"nav", "speech", "click", "hover", "input", "key", "network"}
 REQUIRED = ["manifest.json", "timeline.json"]
 EXPECTED = ["events.jsonl", "network.har", "transcript.vtt"]
@@ -149,6 +154,25 @@ def check_frames(manifest_frames, referenced, b: Bundle, r: Report):
         r.ok(f"frames OK: {len(on_disk)} present, all references resolve")
 
 
+def check_coverage_gap(timeline, manifest, r: Report):
+    """Catch the capture-on-navigation bug: a tab whose content-script capture
+    (clicks/rrweb/frames) stopped while network kept recording. The bundle is
+    still well-formed and usable — so this is a loud WARNING, not a hard failure —
+    but it means part of the session was captured network-only. See
+    analyze/check_coverage.py and learnings.md 2026-06-17."""
+    res = analyze_coverage(timeline, manifest.get("frames", []), manifest.get("duration_ms"))
+    for f in res["failures"]:
+        r.warn(f"CAPTURE GAP — {f}")
+    if res["failures"]:
+        r.warn("→ DOM/visual capture stopped while network continued; the recording is "
+               "usable but incomplete (run analyze/check_coverage.py for detail).")
+    else:
+        for w in res["warnings"]:
+            r.warn(f"frame coverage: {w}")
+        if not res["warnings"]:
+            r.ok("capture coverage OK — content-script capture tracked network on every active tab")
+
+
 def check_redaction(b: Bundle, r: Report):
     """The non-negotiable: scan everything textual for leaked secrets."""
     leaks = 0
@@ -186,6 +210,8 @@ def validate(path: Path) -> int:
     manifest_frames = check_manifest(manifest, b, r) if manifest else []
     _, referenced = check_timeline(timeline, r) if timeline else ([], [])
     check_frames(manifest_frames, referenced, b, r)
+    if manifest and isinstance(timeline, list):
+        check_coverage_gap(timeline, manifest, r)
     if b.has("network.har"):
         load_json(b, "network.har", r) and r.ok("network.har parses")
     check_redaction(b, r)
