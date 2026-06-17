@@ -22,29 +22,33 @@ curl -L https://cdn.jsdelivr.net/npm/rrweb@2.0.0/dist/rrweb.umd.min.cjs -o src/l
    that's a manifest/syntax problem, fix before continuing.
 4. Pin it (puzzle-piece icon → pin).
 
-## 2. Record a throwaway task
+## 2. Record a throwaway task (v2 — full screen, all tabs)
 
-1. Open a **normal website** in a tab (not `chrome://`, not the web store — the
-   extension will refuse those with a message; that's the restricted-page guard).
+> v2 records your **whole screen** and instruments **every** open tab, so it follows
+> you across tabs and windows. (v1 recorded a single pinned tab.) For the detailed
+> verification checklist, see `../LIVE-TEST.md`.
+
+1. Open **two or three normal website tabs** (not `chrome://`, not the web store —
+   those are skipped by the restricted-page guard).
 2. For narration: leave **Record microphone (narration)** checked. The first time,
    the popup shows "Microphone not enabled" with an **Enable microphone…** button —
    click it, then **Allow** in the tab that opens. This grants the mic to the
    extension once; after that the popup shows "Microphone enabled ✓" and every
    recording includes your voice. (An MV3 offscreen doc can't prompt for the mic
    itself, which is why the grant goes through that page.) Then click the
-   extension → **Start recording this tab**.
-   - Expect a **"… is being debugged"** banner. That IS the network capture.
+   extension → **Start**.
+   - A Chrome **"Choose what to share"** picker appears — pick a **screen** (or
+     window). Picking it may close the popup; that's fine, recording continues.
+   - Expect a **"… is being debugged"** banner on **every** open website tab. That
+     IS the per-tab network capture.
    - Expect a red **REC** badge on the icon.
-   - If the mic isn't enabled (or is blocked at the OS level), recording continues
-     **without** narration (non-fatal) and the manifest records
-     `narration_in_video: false`.
-   - If you just installed/reloaded, the current tab may need one reload for the
-     DOM stream — the popup will tell you ("DOM stream off — reload the tab once").
-3. Do a short task: click a few things, type into a field, submit a form,
-   navigate once. ~20–30 seconds is plenty. Narrate aloud — that audio lands in
-   `video.webm` on the same clock as everything else. To test pointer capture,
-   pause your cursor (~½s) over an area you're describing — that logs a `hover`
-   with its position, so "and in this area" resolves to a real element.
+   - If you cancel the picker, recording continues **data-only** (clicks/network/DOM,
+     no video). If the mic is blocked, it continues without narration (non-fatal).
+3. Do a short cross-tab task: click/type in one tab, **switch to another tab**, open
+   a **new tab** and navigate it, act there, switch back. ~30 seconds. Narrate aloud
+   — that audio lands in `video.webm` on the same clock as everything else. To test
+   pointer capture, pause your cursor (~½s) over an area you're describing — that
+   logs a `hover` with its position.
 4. Click **Stop & export** → a **Save** dialog → save `capture-<timestamp>.zip`.
 
 ## 3. Validate before analyzing
