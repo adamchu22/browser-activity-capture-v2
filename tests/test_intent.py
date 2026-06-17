@@ -188,8 +188,18 @@ class TestBundledSkills(unittest.TestCase):
         # deduped when both UI purposes are picked
         self.assertEqual(pack.skills_for(["ux", "ui"]), ["analyze-capture", "ui-improvement"])
 
+    def test_research_adds_competitive_research(self):
+        self.assertEqual(pack.skills_for(["research"]), ["analyze-capture", "competitive-research"])
+        # combined with a UI purpose, both activity skills ship
+        self.assertEqual(pack.skills_for(["ui", "research"]),
+                         ["analyze-capture", "ui-improvement", "competitive-research"])
+
+    def test_research_is_a_purpose(self):
+        self.assertIn("research", pack.PURPOSES)
+        self.assertIn("research.md", pack.render_purpose(["research"]))
+
     def test_skill_files_have_frontmatter(self):
-        for name in ("analyze-capture", "ui-improvement"):
+        for name in ("analyze-capture", "ui-improvement", "competitive-research"):
             text = (pack.SKILLS_DIR / name / "SKILL.md").read_text()
             self.assertTrue(text.startswith("---"), f"{name} missing frontmatter")
             self.assertIn(f"name: {name}", text)

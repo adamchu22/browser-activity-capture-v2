@@ -77,6 +77,13 @@ Write these files into the pack directory:
    navigation, things doable via an observed API instead of the UI, batchable rekeying.
    Cite the steps/endpoints each suggestion is based on.
 
+7. **`research.md`** (competitive-research purpose) — a teardown of the other product:
+   product & flow, UX patterns to learn from (with frame refs), architecture & data model
+   inferred from the network (with endpoint cites), what they do well, gaps to
+   differentiate on, and a "for your version" takeaways list. Learn patterns/principles,
+   never copy proprietary assets. Follow the bundled `agent-skills/competitive-research`
+   skill.
+
 ## Ground rules
 
 - Ground every claim in the bundle. Prefer `(inferred)` over confident invention.

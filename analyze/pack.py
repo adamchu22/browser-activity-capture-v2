@@ -40,6 +40,7 @@ RAW_FILES = ["manifest.json", "timeline.json", "transcript.vtt", "network.har", 
 SKILLS_FOR_PURPOSE = {
     "ux": ["ui-improvement"],
     "ui": ["ui-improvement"],
+    "research": ["competitive-research"],
 }
 
 
@@ -93,6 +94,15 @@ PURPOSES = {
                 "things doable in fewer clicks or via an API instead of the UI, rekeying "
                 "that could be batched.",
         "make": "`improvements.md` — concrete suggestions ranked by time saved",
+    },
+    "research": {
+        "label": "Competitive / product research",
+        "read": "This is another product worth learning from. Extract how it works — UX "
+                "patterns from the frames, the flow from the steps, and the architecture / "
+                "data model from the network (HAR). Note what they do well and gaps to "
+                "differentiate on. Learn patterns and principles, never copy proprietary "
+                "assets. Follow the bundled `competitive-research` skill.",
+        "make": "`research.md` — a competitive teardown with takeaways for your own version",
     },
     "general": {
         "label": "General capture",
