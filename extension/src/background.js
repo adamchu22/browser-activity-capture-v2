@@ -24,6 +24,8 @@ import { navActions } from "./nav-policy.js";
 
 const state = {
   recording: false,
+  arming: false, // picker open / countdown running, before capture goes live
+  activeTabId: null, // the tab Start was pressed in — instrumented when we go live
   paused: false,
   t0: 0,
   tabIds: new Set(), // every tab we've attached the debugger + content script to
@@ -53,11 +55,25 @@ self.addEventListener("unhandledrejection", (e) =>
 );
 
 async function getSettings() {
-  const { blocklist = [], micEnabled = true } = await chrome.storage.local.get([
-    "blocklist",
-    "micEnabled",
-  ]);
-  return { blocklist, micEnabled };
+  const {
+    blocklist = [],
+    micEnabled = true,
+    downloadSubfolder = "",
+    askWhereToSave = false,
+  } = await chrome.storage.local.get(["blocklist", "micEnabled", "downloadSubfolder", "askWhereToSave"]);
+  return { blocklist, micEnabled, downloadSubfolder: cleanSubfolder(downloadSubfolder), askWhereToSave };
+}
+
+// A download subfolder must be a relative path UNDER Downloads — chrome.downloads
+// rejects absolute paths and `..`. Mirror the popup's sanitiser so a hand-edited
+// storage value can't escape Downloads either.
+function cleanSubfolder(v) {
+  return (v || "")
+    .trim()
+    .replace(/^[/\\]+|[/\\]+$/g, "")
+    .split(/[/\\]+/)
+    .filter((seg) => seg && seg !== "..")
+    .join("/");
 }
 
 function hostBlocked(url) {
@@ -163,46 +179,89 @@ async function uninstrumentTab(tabId) {
   } catch {}
 }
 
-async function start(triggerTabId, task, purposes) {
-  if (state.recording) return { ok: false, error: "Already recording." };
+const COUNTDOWN_SECONDS = 3;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const { blocklist, micEnabled } = await getSettings();
+async function start(triggerTabId, task, purposes) {
+  if (state.recording || state.arming) return { ok: false, error: "Already recording." };
+
+  const { blocklist, micEnabled, downloadSubfolder, askWhereToSave } = await getSettings();
   await db.clearAll();
+
+  let activeTabId = triggerTabId;
+  if (activeTabId == null) {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    activeTabId = active?.id;
+  }
+
+  // ARMING phase: the screen picker is up and a 3-2-1 countdown will run before
+  // capture goes live. recording stays FALSE through all of it, so NOTHING is
+  // recorded during the pre-roll — is-recording answers false, appendTimeline and
+  // rrweb ingest drop, frames don't fire. t0 is set in goLive() at the END of the
+  // countdown, so the clock starts exactly when capture does.
   Object.assign(state, {
-    recording: true,
+    recording: false,
+    arming: true,
+    activeTabId,
     paused: false,
-    t0: Date.now(),
+    t0: 0,
     task: (task || "").slice(0, 500), // the user's stated goal — anchors the analysis
     purposes: Array.isArray(purposes) ? purposes.slice(0, 8) : [], // why they recorded — steers analysis
     tabIds: new Set(),
     tabs: new Map(),
     blocklist,
+    downloadSubfolder, // preset export folder (subdir of Downloads) — set in Settings
+    askWhereToSave, // when false, export drops straight into Downloads (no Save dialog)
     har: new Map(),
     frames: [],
     urls: new Set(),
     errors: [],
   });
 
-  // Pick the screen/window to record (full-screen video that follows the user
-  // across tabs). If the user cancels the picker, keep going data-only.
-  const hasVideo = await startVideo(micEnabled);
+  setBadge("•••", "#f39c12"); // arming (amber) — distinct from REC
+  // Open the screen picker in the offscreen doc. When the user finishes the picker,
+  // offscreen replies `offscreen-armed`; runCountdownThenGo() then runs the 3-2-1
+  // and goes live. If the offscreen layer is unavailable, go live data-only.
+  const attempted = await startVideo(micEnabled);
+  if (!attempted) runCountdownThenGo();
+  return { ok: true, arming: true };
+}
 
-  // Instrument ONLY the tab the user is recording in. Other tabs are
-  // instrumented lazily, the moment the user switches into them
-  // (tabs.onActivated below) — so we capture what they're actually doing, not
-  // every tab that happens to be open (a password manager, chat, calendar…).
-  // See nav-policy.js / learnings.md 2026-06-17.
-  let activeTabId = triggerTabId;
-  if (activeTabId == null) {
-    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-    activeTabId = active?.id;
+// Picker done → 3-2-1 countdown in the active tab → go live. The countdown is shown
+// by the content script (injected if needed; it stays inert for capture because
+// recording is still false). Bails at every step if stop()/cancel() raced us.
+async function runCountdownThenGo() {
+  if (!state.arming) return;
+  const tabId = state.activeTabId;
+  if (tabId != null) {
+    await ensureContentScript(tabId);
+    for (let n = COUNTDOWN_SECONDS; n >= 1; n--) {
+      if (!state.arming) return;
+      chrome.tabs.sendMessage(tabId, { type: "countdown", n }).catch(() => {});
+      await sleep(1000);
+    }
+    chrome.tabs.sendMessage(tabId, { type: "countdown", n: 0 }).catch(() => {}); // clear it
   }
-  if (activeTabId != null) await instrumentTab(activeTabId);
+  if (!state.arming) return;
+  await goLive();
+}
 
+// Capture actually begins here: set t0, flip recording on, instrument the active
+// tab for real (mounts the pill, starts rrweb + listeners), and tell the offscreen
+// recorder to start — all against the fresh t0. Other tabs are instrumented lazily
+// when the user switches into them (tabs.onActivated), so we capture what they
+// actually do, not every open tab. See nav-policy.js / learnings.md 2026-06-17.
+async function goLive() {
+  if (!state.arming) return;
+  state.arming = false;
+  state.recording = true;
+  state.paused = false;
+  state.t0 = Date.now();
+  if (state.activeTabId != null) await instrumentTab(state.activeTabId);
+  chrome.runtime.sendMessage({ type: "offscreen-go" }).catch(() => {}); // recorder.start()
   await captureFrame("recording started");
   startFrameTimer();
   setBadge("REC");
-  return { ok: true, video: hasVideo, tabs: state.tabIds.size };
 }
 
 async function stop() {
@@ -230,7 +289,11 @@ async function stop() {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const url = `data:application/zip;base64,${base64FromBytes(bytes)}`;
     const stamp = new Date(state.t0).toISOString().replace(/[:.]/g, "-");
-    await chrome.downloads.download({ url, filename: `capture-${stamp}.zip`, saveAs: true });
+    // Honor the Settings: drop into a preset subfolder of Downloads and skip the
+    // Save dialog unless the user asked to be prompted each time.
+    const sub = cleanSubfolder(state.downloadSubfolder);
+    const filename = (sub ? sub + "/" : "") + `capture-${stamp}.zip`;
+    await chrome.downloads.download({ url, filename, saveAs: !!state.askWhereToSave });
   } catch (e) {
     console.error("bundle export failed:", e);
   } finally {
@@ -290,8 +353,14 @@ async function restart() {
 // Cancel: stop recording and discard — no bundle, no download. Tears down the
 // overlay in every tab, detaches debuggers, and drops the in-progress video.
 async function cancel() {
-  if (!state.recording) return;
+  if (!state.recording && !state.arming) return;
+  // If we're still arming (picker/countdown), abort it: clearing the flag makes
+  // runCountdownThenGo() bail, and we clear any countdown number from the tab.
+  if (state.arming && state.activeTabId != null) {
+    chrome.tabs.sendMessage(state.activeTabId, { type: "countdown", n: 0 }).catch(() => {});
+  }
   state.recording = false;
+  state.arming = false;
   state.paused = false;
   stopFrameTimer();
   for (const tabId of state.tabIds) {
@@ -523,6 +592,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "capture-error") {
     logError(msg.where || "unknown", { message: msg.message, stack: msg.stack });
   }
+  // The offscreen doc finished the screen picker (the user picked, or cancelled →
+  // video:false). Run the countdown, then go live. Sent once per recording.
+  if (msg.type === "offscreen-armed") {
+    runCountdownThenGo();
+  }
   // Both the popup and the injected on-screen overlay drive the same verbs.
   if (msg.type === "popup-command" || msg.type === "overlay-command") {
     const c = msg.command;
@@ -540,7 +614,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (c === "restart") restart();
     if (c === "cancel") cancel();
     if (c === "status") {
-      sendResponse({ recording: state.recording, paused: state.paused });
+      sendResponse({ recording: state.recording, paused: state.paused, arming: state.arming });
       return true;
     }
   }

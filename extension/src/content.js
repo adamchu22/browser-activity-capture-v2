@@ -799,6 +799,60 @@
     return { setMode, exit, teardown, mode: () => mode, onChange: null };
   })();
 
+  // --- pre-recording countdown ----------------------------------------------
+  //
+  // A big 3-2-1 shown in the active tab AFTER the screen picker, BEFORE capture
+  // goes live (the worker holds recording=false until it finishes, then sets t0).
+  // Driven entirely by the worker via `countdown` messages: n>=1 shows the number,
+  // n=0 clears it. Shadow-DOM isolated, non-interactive (pointer-events:none).
+  const countdown = (() => {
+    let host = null, numEl = null;
+
+    function ensure() {
+      if (host) return;
+      host = document.createElement("div");
+      host.id = "__bac_countdown__";
+      host.style.cssText =
+        "position:fixed;inset:0;z-index:2147483647;pointer-events:none;" +
+        "display:flex;align-items:center;justify-content:center;";
+      const sh = host.attachShadow({ mode: "open" });
+      sh.innerHTML = `
+        <style>
+          .num{font:600 92px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+            color:#fff;width:168px;height:168px;border-radius:50%;display:flex;
+            align-items:center;justify-content:center;background:rgba(28,28,30,.82);
+            box-shadow:0 8px 40px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.12);}
+          .num.tick{animation:pop .9s ease;}
+          @keyframes pop{0%{transform:scale(.6);opacity:0}
+            30%{transform:scale(1);opacity:1}100%{transform:scale(1);opacity:1}}
+        </style>
+        <div class="num" id="num"></div>`;
+      (document.documentElement || document.body).appendChild(host);
+      numEl = sh.getElementById("num");
+    }
+
+    function show(n) {
+      if (n >= 1) {
+        ensure();
+        numEl.textContent = String(n);
+        // Restart the pop animation on each tick.
+        numEl.classList.remove("tick");
+        void numEl.offsetWidth;
+        numEl.classList.add("tick");
+      } else {
+        remove();
+      }
+    }
+
+    function remove() {
+      host?.remove();
+      host = null;
+      numEl = null;
+    }
+
+    return { show, remove };
+  })();
+
   // rrweb: full DOM recording. Loaded from src/lib/rrweb.min.js (see README for
   // how to vendor it). Guarded so the extension still loads without it. record()
   // emits a full DOM snapshot once up front, then incremental mutations — so it
@@ -853,6 +907,7 @@
     dwellTimer = null;
     lastHoverSelector = null;
     annotate.teardown();
+    countdown.remove(); // clear any lingering pre-roll number
     overlay.unmount();
   }
 
@@ -861,6 +916,9 @@
     if (msg.type === "start") startCapture({ t0: msg.t0, paused: msg.paused });
     if (msg.type === "stop") stopCapture();
     if (msg.type === "restart") restartCapture();
+    // Pre-roll countdown pushed by the worker (n=3..1, then 0 to clear) — shown
+    // before capture goes live, while recording is still false.
+    if (msg.type === "countdown") countdown.show(msg.n);
     // Worker pushes live state to every tab so all overlays stay in sync
     // (pause/resume, Restart's new t0) regardless of which tab is focused.
     if (msg.type === "overlay-state") overlay.update(msg.state);

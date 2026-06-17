@@ -46,6 +46,16 @@ chrome.runtime.onMessage.addListener(async (msg) => {
   if (msg.type === "offscreen-start") {
     await startRecording(msg.withMic !== false);
   }
+  if (msg.type === "offscreen-go") {
+    // The worker's countdown finished — actually begin recording now, so the video
+    // starts on the same t0 as the event/network streams (not when the picker
+    // resolved, which could be seconds earlier while the user chose a window).
+    try {
+      if (recorder && recorder.state === "inactive") recorder.start(1000);
+    } catch (e) {
+      reportError("MediaRecorder start failed: " + (e?.message || e), e?.stack);
+    }
+  }
   if (msg.type === "offscreen-stop") {
     stopRecording();
   }
@@ -88,7 +98,9 @@ async function startRecording(withMic) {
   } catch (e) {
     console.warn("offscreen video capture failed:", e);
     reportError("video capture failed: " + (e?.message || e), e?.stack);
-    chrome.runtime.sendMessage({ type: "offscreen-video", dataUrl: null, mic: false, micError });
+    // Picker cancelled / failed — tell the worker to proceed data-only (it still
+    // runs the countdown and goes live). The null video is reported at stop time.
+    chrome.runtime.sendMessage({ type: "offscreen-armed", video: false });
     return;
   }
 
@@ -115,14 +127,18 @@ async function startRecording(withMic) {
   try {
     recorder = new MediaRecorder(new MediaStream(tracks), { mimeType: "video/webm" });
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    recorder.start(1000);
+    // NB: do NOT start() here — the worker runs a 3-2-1 countdown first, then sends
+    // `offscreen-go`. Starting now would record the countdown seconds.
   } catch (e) {
     console.warn("offscreen MediaRecorder failed:", e);
     reportError("MediaRecorder failed: " + (e?.message || e), e?.stack);
     releaseStreams();
     recorder = null;
-    chrome.runtime.sendMessage({ type: "offscreen-video", dataUrl: null, mic: false, micError });
+    chrome.runtime.sendMessage({ type: "offscreen-armed", video: false });
+    return;
   }
+  // Picker done and recorder armed — tell the worker to run the countdown + go live.
+  chrome.runtime.sendMessage({ type: "offscreen-armed", video: true });
 }
 
 function stopRecording() {
