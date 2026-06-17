@@ -19,6 +19,7 @@
 import { redactHeaders, redactBody, redactUrl, scrubTokens } from "./redact.js";
 import { makeZip } from "./zip.js";
 import * as db from "./db.js";
+import { bundleReadme, bundleClaudeMd, bundleAgentsMd } from "./bundle-docs.js";
 
 const state = {
   recording: false,
@@ -486,6 +487,11 @@ async function assembleBundle(video) {
     { name: "transcript.vtt", data: buildTranscript(timeline) },
     { name: "errors.json", data: JSON.stringify(state.errors, null, 2) },
     { name: "README.md", data: bundleReadme(manifest) },
+    // Self-driving instructions: the bundle alone is enough to analyze, with no
+    // external pipeline. CLAUDE.md and AGENTS.md carry the same guidance for
+    // Claude agents and the cross-agent AGENTS.md convention respectively.
+    { name: "CLAUDE.md", data: bundleClaudeMd(manifest) },
+    { name: "AGENTS.md", data: bundleAgentsMd(manifest) },
   ];
   for (const f of state.frames) files.push({ name: f.file, data: dataUrlToBytes(f.dataUrl) });
   if (videoDataUrl) files.push({ name: "video.webm", data: dataUrlToBytes(videoDataUrl) });
@@ -512,20 +518,8 @@ function buildTranscript(timeline) {
   return out;
 }
 
-function bundleReadme(m) {
-  return `# Capture Bundle — ${m.capture_id}
-
-Portable recording of one browser task, aligned on one clock (ms since t0).
-Hand it to ../analyze/pack.py to produce an analysis pack for any agent.
-
-- manifest.json — metadata, redaction policy, frame index
-- timeline.json — merged event stream (nav/speech/click/input/key/network)
-- events.jsonl — raw rrweb DOM stream
-- network.har  — HTTP requests (auth/cookies redacted)
-- transcript.vtt — narration (replace stub with a real transcript if needed)
-- frames/ — screenshots at key moments
-${m.video ? `- video.webm — screen recording${m.narration_in_video ? " (includes microphone narration, aligned to t0)" : " (no microphone narration)"}\n` : ""}`;
-}
+// bundleReadme, bundleClaudeMd, bundleAgentsMd are imported from ./bundle-docs.js
+// (pure manifest→markdown functions, unit-tested in tests/test_bundle_docs.mjs).
 
 function dataUrlToBytes(dataUrl) {
   const b64 = dataUrl.split(",")[1];
