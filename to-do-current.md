@@ -8,26 +8,29 @@ run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v
 
 ## Now (in order)
 
-- [ ] **Live-verify v2 in real Chrome** — run `LIVE-TEST.md` end to end. Risk items:
-      (1) the `desktopCapture` screen picker opens from the popup→worker path; (2) tabs
-      opened mid-recording get the CDP debugger via `tabs.onUpdated`. Also confirm the
-      intent layer in `context.md`: the Task callout, the narrated `## Steps`, semantic
-      click labels, the `## Tabs` legend + `━━━ tab #N ━━━` markers, and that
-      `frames-annotated.html` draws markers on the right elements. Record the outcome
-      (and which picker-trigger path worked) in `learnings.md`.
+- [x] ~~**Live test, run 1** (2026-06-17)~~ — multi-tab instrumentation (RISK 2)
+      **passed**; screen picker (RISK 1) **failed** and a `?jwt=` URL token leaked.
+      Both fixed in code (see below). See `learnings.md`.
+- [x] ~~Picker/video fix~~ — switched video to **`getDisplayMedia()` in the offscreen
+      doc** (reason `DISPLAY_MEDIA`), Chrome's recommended MV3 path. `desktopCapture`
+      streamId→offscreen was a dead end ("Invalid state"). Start stays in the popup;
+      dropped the `desktopCapture` permission. (A first recorder-page attempt was the
+      wrong layer and was reverted.) Needs live re-verify.
+- [x] ~~URL redaction~~ — `redactUrl()` in `redact.js` applied at every URL sink in
+      `background.js`; locked by `tests/test_redact.mjs`.
+- [x] ~~Re-run `LIVE-TEST.md`~~ — **run 3 (`outputs/v2-test-2-jwt-fix.zip`) PASSED**:
+      getDisplayMedia opened the picker from the popup, `video.webm` landed,
+      `validate_bundle.py` PASS, zero tokens in any sink. v2 capture is live-verified.
+- [ ] **Re-run `pack.py` on the clean bundle** and eyeball the intent layer in
+      `context.md` (`## Steps`, semantic click labels, `## Tabs` + `━━━ tab #N ━━━`)
+      and `frames-annotated.html` — these rendered in earlier runs but haven't been
+      re-checked on a video-bearing PASS bundle.
 
 - [ ] **On-screen control overlay** (injected, visible during recording):
       **Pause, Cancel, Restart, Finish (stop & export)**. In v2 it must work
       regardless of which tab is focused — consider a single overlay the worker keeps
       in sync across tabs. Must stay separate from Chrome's "this tab is being
       debugged" bar (its "Cancel" detaches the debugger and kills network capture).
-
-## After live-verify (depends on the picker outcome)
-
-- [ ] If the picker does NOT open from the worker (RISK 1), move the
-      `chooseDesktopMedia` call to a gesture context — `chrome.action.onClicked` or
-      the popup's click handler passing `streamId` to the worker. See
-      `LIVE-TEST.md` → "If the picker never shows".
 
 ## Optional / noticed (not blocking)
 

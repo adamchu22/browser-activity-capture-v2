@@ -21,19 +21,24 @@ unknowns are marked **⚠ RISK**.
 3. One-time mic grant (for narration): popup → **Enable microphone…** → Allow in the
    tab that opens. (Unchanged from v1.)
 
+> **Video path rebuilt (2026-06-17 fix #2).** Run 1 proved `desktopCapture` from the
+> worker can't open the picker, and research showed its streamId isn't consumable in
+> an offscreen doc anyway ("Invalid state"). Video now uses **`getDisplayMedia()` inside
+> the offscreen document** (Chrome's recommended MV3 path), so **Start is back in the
+> popup** — no dedicated page needed. The picker is Chrome's own "Choose what to share"
+> dialog, shown after Start.
+
 ## The test
 
 1. Open **two or three normal website tabs** (not `chrome://`). Optionally a second
    window.
-2. In the popup, type a one-line **task goal** ("What are you doing in this
-   recording?") and tick at least one **purpose** ("Why are you recording?" — e.g.
-   *Build a skill*, *UX feedback*). Start is blocked until a purpose is picked. Then
-   **Start**.
-   - **⚠ RISK 1 — the screen picker.** A Chrome "Choose what to share" picker should
-     appear. Pick a **screen** (or a window). If no picker appears, `desktopCapture`
-     wasn't triggered from the worker — see "If the picker never shows" below.
-   - Picking the target may close the popup. That's fine — the worker keeps running.
-   - Expect a red **REC** badge.
+2. In the popup, type a one-line **task goal** and optionally tick a **purpose**
+   (none → *general*). Then **Start**.
+   - **⚠ RISK 1 (re-test) — the screen picker.** Chrome's **"Choose what to share"**
+     dialog should now appear (run 1 showed nothing). Pick a **screen** (best for
+     follow-across-tabs) or a window. If it instead errors with a gesture complaint,
+     note it — that's the one residual unknown for getDisplayMedia-in-offscreen.
+   - Expect a red **REC** badge and a `video.webm` in the final bundle (run 1 had none).
    - Expect the **"… is being debugged"** banner on **every** eligible tab (that's
      the per-tab CDP network capture — confirms all-tabs instrumentation).
 3. Do a cross-tab task (~30s), narrating aloud:
@@ -74,15 +79,17 @@ exists, plus `ui-improvement` if you picked a UX/UI purpose. Point a coding agen
 the pack and tell it to read that skill first — it should produce the outputs your
 purpose named.
 
-## If the picker never shows (RISK 1 fallback)
+## If the picker STILL never shows (RISK 1 — after the getDisplayMedia fix)
 
-`chrome.desktopCapture.chooseDesktopMedia` is called from the service worker
-(`startVideo` in `background.js`). If Chrome requires a user gesture it can't see
-through the popup→worker message, the picker won't open and `errors.json` will note
-"screen picker cancelled". Fix options, in order of preference:
-1. Call `chooseDesktopMedia` from a context with a live gesture — e.g. move Start to
-   `chrome.action.onClicked` (drop the popup for starting), or call it in the popup's
-   click handler and pass the `streamId` to the worker.
-2. Confirm the `desktopCapture` permission is present in `manifest.json` (it is).
+Video now comes from `getDisplayMedia({video:true})` called inside the offscreen
+document (`offscreen.js`), which the worker creates with the `DISPLAY_MEDIA` reason.
+If no "Choose what to share" dialog appears or `errors.json` notes a video failure:
+1. Check the offscreen error in `errors.json` — a gesture complaint
+   (`getDisplayMedia must be called from a user gesture`) means this Chrome build
+   doesn't waive activation in offscreen. Fix: relay the popup's click activation, or
+   call `getDisplayMedia` from a short-lived extension page opened on Start.
+2. Confirm the offscreen doc was created with reason `DISPLAY_MEDIA` (it is).
+3. `getUserMedia`/`Invalid state` errors mean something still passes a desktopCapture
+   streamId — there should be none left.
 
-Record which path worked in `learnings.md` so the next person doesn't re-derive it.
+Record the outcome in `learnings.md` so the next person doesn't re-derive it.

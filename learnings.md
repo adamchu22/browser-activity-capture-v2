@@ -4,6 +4,70 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (first v2 live test — picker fails, multi-tab works, URL leak)
+
+First real-Chrome run of v2 (Adam's machine; bundle `outputs/v2-test-1-switching-pages.zip`,
+3 tabs, ~5.5 min, 1391 events). Three findings:
+
+- **For MV3 whole-screen recording, use `getDisplayMedia()` inside the offscreen
+  document — NOT `desktopCapture` + a streamId.** Our original path (worker mints a
+  `chooseDesktopMedia` streamId → offscreen consumes it via
+  `getUserMedia(chromeMediaSource:"desktop")`) is a dead end two ways: (1) from a
+  service worker `chooseDesktopMedia` needs a `targetTab` — without it you get
+  `"A target tab is required…"` (this is what killed RISK 1 in run 1, picker never
+  opened); and (2) even if you mint the streamId elsewhere, a desktopCapture streamId
+  is **not consumable in an offscreen document** — `getUserMedia` throws
+  `DOMException: Invalid state`. Chrome DevRel confirmed this is unsupported, was NOT
+  fixed the way `tabCapture` was in Chrome 116, and won't be prioritized; they steer
+  you to `getDisplayMedia()`. **The blessed pattern (Chrome's own docs):** create the
+  offscreen doc with reason **`DISPLAY_MEDIA`** (which *waives the user-gesture
+  requirement* there), call `navigator.mediaDevices.getDisplayMedia({video:true})`
+  inside it, and run `MediaRecorder` in the same context. This is simpler than the
+  streamId dance and means the **popup can start** (no gesture/dedicated-page needed).
+  A first fix attempt (a dedicated recorder page to give `chooseDesktopMedia` a page
+  gesture) was the wrong layer — it'd still have hit "Invalid state" at offscreen
+  consumption — and was reverted. _Found by studying Screenity (a real MV3 recorder)
+  and the Chromium-extensions thread; classic Search-Before-Building catch._
+  Sources: Chrome "Audio recording and screen capture" docs;
+  groups.google.com/a/chromium.org/g/chromium-extensions/c/3RanHldyp9c.
+  **Confirmed live (run 2, 2026-06-17):** getDisplayMedia-in-offscreen runs
+  gesture-free — Start in the popup → macOS screen-record permission prompt → Chrome's
+  "Choose what to share" dialog → a 12 MB `video.webm` in the bundle, `errors.json`
+  empty. No dedicated page or gesture relay needed. _(Cross-project candidate for the
+  LLM Wiki.)_
+
+- **Redaction has THREE URL-bearing sinks, and rrweb (`events.jsonl`) is the sneaky
+  one.** Run 1 leaked a `?jwt=` token in `timeline.json` + `network.har` (fixed with
+  `redactUrl` at the worker URL sinks). Run 2 then leaked the SAME token a third way:
+  rrweb serializes the live DOM, so an `<img src=…?jwt=…>` carried it straight into
+  the raw DOM stream, which bypasses every per-field scrubber. Fix: scrub the rrweb
+  node at the worker chokepoint — `JSON.parse(scrubTokens(JSON.stringify(node)))` in
+  the `rrweb-event` handler — which catches a token shape anywhere in the DOM tree
+  (attribute, text, nested), same net as `redactBody`, lockstep with the validator's
+  `TOKEN_RE`. Verified on the real `events.jsonl` (3 leaked lines → 0, all 527 lines
+  still valid JSON) and regression-tested in `tests/test_redact.mjs`. Lesson: enumerate
+  EVERY sink a value lands in (timeline, HAR, urls_visited, tab legend, AND the rrweb
+  DOM snapshot) — a value-shape rule only protects the sinks you actually route through
+  it. _(Cross-project candidate for the LLM Wiki.)_
+
+- **Multi-tab / all-tabs instrumentation works (RISK 2 passed).** All 3 tabs were
+  tagged (`tab` field) and instrumented — clicks, navs, network, hovers — and a tab
+  opened mid-recording got full instrumentation, confirming the `tabs.onUpdated`
+  attach path. `pack.py`'s tab legend + `━━━ tab #N ━━━` markers render from this.
+
+- **Redaction missed tokens in URL query strings.** GitHub serves private images as
+  `…png?jwt=eyJ…`; that JWT leaked verbatim into `timeline.json` AND `network.har`
+  (21×) because URLs were recorded raw — the value-shape scrubber only ran over header
+  values, JSON/form bodies, and array leaves, never URLs. `validate_bundle.py`'s
+  `TOKEN_RE` caught it and FAILED the bundle (the gate worked). Fix: a `redactUrl()` in
+  `redact.js` (mask secret-keyed query params by name — incl. `jwt`/`sig`/`access_token`
+  — then `scrubTokens` the whole URL), applied at every URL sink in `background.js`
+  (`instrumentTab`, the CDP `requestWillBeSent`, the nav handler, and a chokepoint in
+  `appendTimeline`). Host/path are preserved; only the query secrets are masked. This
+  extends the run-3 v1 lesson ("redact by value SHAPE, not key name") to a sink that
+  rule had skipped — URLs. Regression-locked in `tests/test_redact.mjs` (`node --test`).
+  _(Cross-project candidate for the LLM Wiki.)_
+
 ## 2026-06-17 (self-driving pack — ship the consumption skill with the data)
 
 - **A portable artifact should carry its own instructions as a loadable skill, not
