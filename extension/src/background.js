@@ -119,7 +119,12 @@ async function instrumentTab(tabId) {
   }
 
   const injected = await ensureContentScript(tabId);
-  if (injected) chrome.tabs.sendMessage(tabId, { type: "start" }).catch(() => {});
+  // Carry t0 + paused so a tab that joins mid-recording renders its overlay in
+  // the correct state (right elapsed clock, paused or live).
+  if (injected)
+    chrome.tabs
+      .sendMessage(tabId, { type: "start", t0: state.t0, paused: state.paused })
+      .catch(() => {});
 }
 
 async function uninstrumentTab(tabId) {
@@ -199,6 +204,70 @@ async function stop() {
   }
 }
 
+// ---- overlay controls: pause / resume / restart / cancel -----------------
+//
+// These are the on-screen overlay's verbs (also reachable from the popup). The
+// worker owns the semantics; the offscreen MediaRecorder is told to match so the
+// video and the event/network streams pause, restart, and discard together.
+
+async function pause() {
+  if (!state.recording || state.paused) return;
+  state.paused = true; // appendTimeline + rrweb ingest drop while paused
+  chrome.runtime.sendMessage({ type: "offscreen-pause" }).catch(() => {});
+  setBadge("REC", "#f39c12"); // amber = paused
+  broadcastOverlay();
+}
+
+async function resume() {
+  if (!state.recording || !state.paused) return;
+  state.paused = false;
+  chrome.runtime.sendMessage({ type: "offscreen-resume" }).catch(() => {});
+  setBadge("REC");
+  broadcastOverlay();
+}
+
+// Restart: throw away everything captured so far and begin a fresh take WITHOUT
+// re-prompting the screen picker. The same tabs stay instrumented (their content
+// scripts keep recording) and the offscreen doc reuses the live screen/mic
+// streams; we just reset t0 and clear the buffers, so the new take is clean.
+async function restart() {
+  if (!state.recording) return;
+  await db.clearAll();
+  state.t0 = Date.now();
+  state.paused = false;
+  state.har = new Map();
+  state.frames = [];
+  state.errors = [];
+  // Reseed the URL set from the still-instrumented tabs' current pages.
+  state.urls = new Set();
+  for (const info of state.tabs.values()) if (info.url) state.urls.add(info.url);
+  chrome.runtime.sendMessage({ type: "offscreen-restart" }).catch(() => {});
+  // Tell each still-attached tab to re-emit its rrweb full snapshot against the
+  // new t0 — the cleared events.jsonl has no base snapshot to replay from otherwise.
+  for (const tabId of state.tabIds) chrome.tabs.sendMessage(tabId, { type: "restart" }).catch(() => {});
+  await captureFrame("recording restarted");
+  setBadge("REC");
+  broadcastOverlay(); // new t0 resets every overlay's elapsed clock
+}
+
+// Cancel: stop recording and discard — no bundle, no download. Tears down the
+// overlay in every tab, detaches debuggers, and drops the in-progress video.
+async function cancel() {
+  if (!state.recording) return;
+  state.recording = false;
+  state.paused = false;
+  for (const tabId of state.tabIds) {
+    chrome.tabs.sendMessage(tabId, { type: "stop" }).catch(() => {}); // removes overlay + listeners
+    try {
+      await chrome.debugger.detach({ tabId });
+    } catch {}
+  }
+  state.tabIds.clear();
+  chrome.runtime.sendMessage({ type: "offscreen-cancel" }).catch(() => {}); // discard video, release streams
+  await db.clearAll();
+  setBadge("");
+}
+
 // btoa can't take a Uint8Array and chokes on huge strings, so encode in chunks.
 function base64FromBytes(bytes) {
   let binary = "";
@@ -209,9 +278,20 @@ function base64FromBytes(bytes) {
   return btoa(binary);
 }
 
-function setBadge(text) {
+function setBadge(text, color = "#c0392b") {
   chrome.action.setBadgeText({ text });
-  chrome.action.setBadgeBackgroundColor({ color: "#c0392b" });
+  if (text) chrome.action.setBadgeBackgroundColor({ color });
+}
+
+// Push the live recording state to every instrumented tab so each tab's overlay
+// stays in sync regardless of which one is focused (worker is the source of
+// truth). t0 lets each overlay run the same elapsed-time clock.
+function broadcastOverlay() {
+  const payload = {
+    type: "overlay-state",
+    state: { recording: state.recording, paused: state.paused, t0: state.t0 },
+  };
+  for (const tabId of state.tabIds) chrome.tabs.sendMessage(tabId, payload).catch(() => {});
 }
 
 // Follow the user across tabs: instrument any tab that starts loading a real URL
@@ -318,7 +398,10 @@ async function appendTimeline(event) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "is-recording") {
-    sendResponse({ recording: state.recording && !state.paused });
+    // A content script asking on load whether to attach + show its overlay.
+    // Report the full state (incl. paused + t0) so a tab that loads mid-recording
+    // renders the overlay correctly; capture still drops events while paused.
+    sendResponse({ recording: state.recording, paused: state.paused, t0: state.t0 });
     return true;
   }
   if (msg.type === "timeline-event") {
@@ -352,18 +435,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "capture-error") {
     logError(msg.where || "unknown", { message: msg.message, stack: msg.stack });
   }
-  if (msg.type === "popup-command") {
-    if (msg.command === "start") {
+  // Both the popup and the injected on-screen overlay drive the same verbs.
+  if (msg.type === "popup-command" || msg.type === "overlay-command") {
+    const c = msg.command;
+    if (c === "start") {
       start(msg.tabId, msg.task, msg.purposes).then(sendResponse);
       return true; // async response
     }
-    if (msg.command === "stop") {
+    // "finish" is the overlay's word for stop+save+export; same as the popup's stop.
+    if (c === "stop" || c === "finish") {
       stop().then(() => sendResponse({ ok: true }));
       return true;
     }
-    if (msg.command === "pause") state.paused = true;
-    if (msg.command === "resume") state.paused = false;
-    if (msg.command === "status") {
+    if (c === "pause") pause();
+    if (c === "resume") resume();
+    if (c === "restart") restart();
+    if (c === "cancel") cancel();
+    if (c === "status") {
       sendResponse({ recording: state.recording, paused: state.paused });
       return true;
     }

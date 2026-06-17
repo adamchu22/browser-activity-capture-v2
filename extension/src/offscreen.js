@@ -31,6 +31,7 @@
 let recorder = null;
 let chunks = [];
 let streams = []; // every MediaStream we open, so stop() can release them all
+let activeTracks = []; // the live screen+mic tracks, reused by restart without re-prompting
 let micRecorded = false; // did the final recording actually include the mic?
 let micError = null; // why the mic was absent (surfaced into the bundle manifest)
 
@@ -47,6 +48,24 @@ chrome.runtime.onMessage.addListener(async (msg) => {
   }
   if (msg.type === "offscreen-stop") {
     stopRecording();
+  }
+  // Overlay verbs, mirrored onto the MediaRecorder so the video pauses,
+  // restarts, and discards in lockstep with the event/network streams.
+  if (msg.type === "offscreen-pause") {
+    try {
+      if (recorder?.state === "recording") recorder.pause();
+    } catch {}
+  }
+  if (msg.type === "offscreen-resume") {
+    try {
+      if (recorder?.state === "paused") recorder.resume();
+    } catch {}
+  }
+  if (msg.type === "offscreen-restart") {
+    restartRecording();
+  }
+  if (msg.type === "offscreen-cancel") {
+    cancelRecording();
   }
 });
 
@@ -92,6 +111,7 @@ async function startRecording(withMic) {
     }
   }
 
+  activeTracks = tracks; // keep a handle so restart can reuse the live streams
   try {
     recorder = new MediaRecorder(new MediaStream(tracks), { mimeType: "video/webm" });
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
@@ -118,6 +138,43 @@ function stopRecording() {
     chrome.runtime.sendMessage({ type: "offscreen-video", dataUrl, mic: micRecorded, micError });
   };
   recorder.stop();
+}
+
+// Restart: drop the in-progress recording but keep the screen + mic streams
+// LIVE, so a fresh take starts immediately with no second "Choose what to share"
+// prompt. Clearing onstop first prevents the discarded recorder from shipping its
+// bytes back as a finished video.
+function restartRecording() {
+  if (recorder) {
+    recorder.onstop = null;
+    try {
+      recorder.stop();
+    } catch {}
+  }
+  chunks = [];
+  try {
+    recorder = new MediaRecorder(new MediaStream(activeTracks), { mimeType: "video/webm" });
+    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    recorder.start(1000);
+  } catch (e) {
+    reportError("MediaRecorder restart failed: " + (e?.message || e), e?.stack);
+    recorder = null;
+  }
+}
+
+// Cancel: stop and discard everything, release the camera/mic/screen so the
+// browser's "sharing" indicator clears. No video is sent back.
+function cancelRecording() {
+  if (recorder) {
+    recorder.onstop = null;
+    try {
+      recorder.stop();
+    } catch {}
+  }
+  chunks = [];
+  releaseStreams();
+  activeTracks = [];
+  recorder = null;
 }
 
 function releaseStreams() {

@@ -331,13 +331,172 @@
     if (["Enter", "Tab", "Escape"].includes(e.key)) emit("key", { key: e.key });
   }
 
-  function startCapture() {
-    if (recording) return;
-    recording = true;
-    emit("nav", { url: location.href });
+  // --- on-screen recording overlay -----------------------------------------
+  //
+  // A single shadow-DOM pill the user sees while recording. The worker shows it
+  // in EVERY instrumented tab and keeps it in sync (broadcastOverlay), so it's
+  // present no matter which tab is focused. Styled deliberately unlike Chrome's
+  // "<ext> is debugging this browser" bar: that bar's Cancel detaches the
+  // debugger and kills network capture, whereas this Cancel discards the take
+  // through the worker. Controls: Pause/Resume, Restart, Cancel, Finish.
+  const overlay = (() => {
+    let host = null;
+    let els = {};
+    let timer = null;
+    let t0 = 0;
+    let paused = false;
 
-    // rrweb: full DOM recording. Loaded from src/lib/rrweb.min.js (see README
-    // for how to vendor it). Guarded so the extension still loads without it.
+    const fmt = (ms) => {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+    };
+    const tick = () => {
+      if (els.time) els.time.textContent = fmt(Date.now() - t0);
+    };
+    const startTimer = () => {
+      stopTimer();
+      tick();
+      timer = setInterval(tick, 1000);
+    };
+    const stopTimer = () => {
+      if (timer) clearInterval(timer);
+      timer = null;
+    };
+
+    const cmd = (command) => {
+      try {
+        chrome.runtime.sendMessage({ type: "overlay-command", command });
+      } catch {}
+    };
+
+    // Destructive verbs need a deliberate second click: Restart wipes the
+    // current take, Cancel discards the whole recording with no export.
+    function wireDestructive(btn, command, label) {
+      let armed = false;
+      let t = null;
+      btn.addEventListener("click", () => {
+        if (armed) {
+          clearTimeout(t);
+          armed = false;
+          btn.textContent = label;
+          btn.classList.remove("armed");
+          cmd(command);
+          return;
+        }
+        armed = true;
+        btn.textContent = "Sure?";
+        btn.classList.add("armed");
+        t = setTimeout(() => {
+          armed = false;
+          btn.textContent = label;
+          btn.classList.remove("armed");
+        }, 3000);
+      });
+    }
+
+    function mount(meta) {
+      if (host) return; // already shown
+      t0 = meta?.t0 || Date.now();
+      paused = !!meta?.paused;
+
+      host = document.createElement("div");
+      host.id = "__bac_overlay__";
+      // Survive page CSS: isolate in a shadow root, pin above everything.
+      host.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;";
+      const shadow = host.attachShadow({ mode: "open" });
+      shadow.innerHTML = `
+        <style>
+          .bar{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+            display:flex;align-items:center;gap:10px;pointer-events:auto;
+            font:13px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+            background:#1c1c1e;color:#fff;padding:8px 12px;border-radius:9999px;
+            box-shadow:0 6px 24px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.12);
+            user-select:none;}
+          .dot{width:10px;height:10px;border-radius:50%;background:#ff3b30;
+            box-shadow:0 0 0 0 rgba(255,59,48,.6);animation:pulse 1.4s infinite;}
+          .dot.paused{background:#ff9f0a;animation:none;}
+          @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,59,48,.6)}
+            70%{box-shadow:0 0 0 7px rgba(255,59,48,0)}100%{box-shadow:0 0 0 0 rgba(255,59,48,0)}}
+          .time{font-variant-numeric:tabular-nums;min-width:42px;text-align:center;opacity:.9;}
+          .sep{width:1px;height:18px;background:rgba(255,255,255,.15);}
+          button{font:inherit;color:#fff;background:transparent;border:0;cursor:pointer;
+            padding:5px 9px;border-radius:7px;white-space:nowrap;}
+          button:hover{background:rgba(255,255,255,.12);}
+          button.primary{background:#ff3b30;font-weight:600;}
+          button.primary:hover{background:#ff5147;}
+          button.armed{background:#ff9f0a;color:#000;font-weight:600;}
+        </style>
+        <div class="bar" part="bar">
+          <span class="dot" id="dot"></span>
+          <span class="time" id="time">00:00</span>
+          <span class="sep"></span>
+          <button id="pause">Pause</button>
+          <button id="restart">Restart</button>
+          <button id="cancel">Cancel</button>
+          <button id="finish" class="primary">Finish</button>
+        </div>`;
+      (document.documentElement || document.body).appendChild(host);
+
+      els = {
+        dot: shadow.getElementById("dot"),
+        time: shadow.getElementById("time"),
+        pause: shadow.getElementById("pause"),
+        restart: shadow.getElementById("restart"),
+        cancel: shadow.getElementById("cancel"),
+        finish: shadow.getElementById("finish"),
+      };
+      els.pause.addEventListener("click", () => cmd(paused ? "resume" : "pause"));
+      els.finish.addEventListener("click", () => cmd("finish"));
+      wireDestructive(els.restart, "restart", "Restart");
+      wireDestructive(els.cancel, "cancel", "Cancel");
+
+      applyPaused();
+      if (!paused) startTimer();
+    }
+
+    function applyPaused() {
+      if (!els.dot) return;
+      els.dot.classList.toggle("paused", paused);
+      els.pause.textContent = paused ? "Resume" : "Pause";
+    }
+
+    // Reflect a worker state broadcast: unmount when recording ends, otherwise
+    // sync t0 (resets on Restart), paused, and the elapsed clock.
+    function update(s) {
+      if (!s || !s.recording) {
+        unmount();
+        return;
+      }
+      if (!host) {
+        mount(s);
+        return;
+      }
+      if (s.t0 && s.t0 !== t0) t0 = s.t0; // Restart reset the clock
+      paused = !!s.paused;
+      applyPaused();
+      if (paused) {
+        stopTimer();
+        tick();
+      } else {
+        startTimer();
+      }
+    }
+
+    function unmount() {
+      stopTimer();
+      host?.remove();
+      host = null;
+      els = {};
+    }
+
+    return { mount, update, unmount };
+  })();
+
+  // rrweb: full DOM recording. Loaded from src/lib/rrweb.min.js (see README for
+  // how to vendor it). Guarded so the extension still loads without it. record()
+  // emits a full DOM snapshot once up front, then incremental mutations — so it
+  // must be (re)started whenever a fresh, replayable stream is needed.
+  function startRrweb() {
     if (window.rrweb?.record) {
       rrwebStop = window.rrweb.record({
         emit: emitRaw,
@@ -345,6 +504,28 @@
         maskInputOptions: { password: true },
       });
     }
+  }
+
+  // Restart: the worker wiped the buffers for a fresh take. Re-emit the full
+  // rrweb snapshot + current URL (the cleared events.jsonl has no base snapshot
+  // otherwise) so the new take replays from scratch. Listeners + overlay stay.
+  function restartCapture() {
+    if (!recording) return;
+    rrwebStop?.();
+    rrwebStop = null;
+    emit("nav", { url: location.href });
+    startRrweb();
+  }
+
+  function startCapture(meta) {
+    if (recording) {
+      overlay.update({ recording: true, ...(meta || {}) });
+      return;
+    }
+    recording = true;
+    overlay.mount(meta);
+    emit("nav", { url: location.href });
+    startRrweb();
 
     document.addEventListener("click", onClick, true);
     document.addEventListener("change", onChange, true);
@@ -364,11 +545,17 @@
     if (dwellTimer) clearTimeout(dwellTimer);
     dwellTimer = null;
     lastHoverSelector = null;
+    overlay.unmount();
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === "start") startCapture();
+    // t0/paused ride along so a tab joining mid-recording shows the right clock.
+    if (msg.type === "start") startCapture({ t0: msg.t0, paused: msg.paused });
     if (msg.type === "stop") stopCapture();
+    if (msg.type === "restart") restartCapture();
+    // Worker pushes live state to every tab so all overlays stay in sync
+    // (pause/resume, Restart's new t0) regardless of which tab is focused.
+    if (msg.type === "overlay-state") overlay.update(msg.state);
     // The worker pings this (via tabs.sendMessage) to check we're already here
     // before injecting a second copy. Answer so it skips re-injection.
     if (msg.type === "is-recording") {
@@ -378,8 +565,9 @@
   });
 
   // If a recording is already in progress when this frame loads (SPA nav, new
-  // page), ask the worker so we attach immediately.
+  // page), ask the worker so we attach immediately — and show the overlay in the
+  // correct state (right elapsed clock, paused or live).
   chrome.runtime.sendMessage({ type: "is-recording" }, (res) => {
-    if (res?.recording) startCapture();
+    if (res?.recording) startCapture({ t0: res.t0, paused: res.paused });
   });
 })();
