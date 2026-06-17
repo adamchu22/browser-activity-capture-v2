@@ -4,6 +4,31 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (P3 — popup redesign, preset download folder, pre-recording countdown)
+
+Three UX items. Two non-obvious things worth not relearning:
+
+- **A truthful countdown requires deferring capture-start, not just a pre-roll animation.**
+  The picker (getDisplayMedia in offscreen) resolves seconds before recording should begin
+  (the user is choosing a window). To make "3-2-1 → begin" honest, the worker now holds
+  `state.recording = false` and `t0 = 0` through an **arming** phase: offscreen creates the
+  MediaRecorder but does NOT `.start()`, sends `offscreen-armed`, and waits; the worker runs the
+  countdown overlay in the active tab, then `goLive()` sets t0, flips `recording` on, instruments
+  the active tab, and sends `offscreen-go` so the recorder starts on the SAME t0 as the
+  event/network streams. Because everything gates on the `recording` flag, the pre-roll captures
+  nothing (no events, frames, network, or video) — no half-started state. The cancelled-picker
+  path sends `offscreen-armed{video:false}` so the worker still counts down and goes live
+  data-only (fallback preserved). Capture-start is the most fragile part of the system (see the
+  P1b nav bug), so the gating is deliberately a single boolean.
+- **A preset download folder can only be a subfolder of Downloads.** `chrome.downloads.download`
+  rejects absolute paths and `..`, so the "save exports to" setting is a *relative* subdir
+  (`captures` → `Downloads/captures/capture-….zip`), sanitised in BOTH the popup and the worker
+  (`cleanSubfolder`). `saveAs:false` (default) skips the Save dialog so export doesn't prompt each
+  time — that's the actual ask ("so it doesn't prompt"). An "Ask where to save each time" toggle
+  restores the prompt.
+- Popup: collapsible `<details>` is the cheapest "dropdown" — purpose stays open + prominent
+  (it seeds the agent's context), blocklist + folder move into a collapsed Settings section.
+
 ## 2026-06-17 (P4 — rendering the annotation events on the analyze side)
 
 Wired the P2 `annotation:select` / `annotation:draw` events through `pack.py` so they're

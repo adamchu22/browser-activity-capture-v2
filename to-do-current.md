@@ -207,12 +207,26 @@ grabs a frame at emit time so the annotated screen is in `frames/`. See `learnin
       and `frames/` contains a shot showing the mark. Esc / toggle exits cleanly; tools are
       disabled while paused.
 
-**P3 — Popup → compact dropdown + Settings** (current popup is "too big / a bit ugly"):
-- [ ] Shrink the popup to a compact dropdown; KEEP the purpose/"why are you recording"
-      field at top (it seeds the agent's context — Adam likes this).
-- [ ] **Settings panel** — move the **"Never record on" host blocklist** here, and add a
-      **preset download folder** (so export doesn't prompt each time). Loom-style "More" menu.
-- [ ] **Countdown** before recording starts.
+**P3 — Popup → compact dropdown + Settings (CODE DONE; needs live-Chrome verify)**
+(current popup was "too big / a bit ugly"):
+- [x] ~~Shrink the popup to a compact dropdown~~ — collapsible `<details>` sections (purpose
+      stays open + prominent at top since it seeds the agent's context; Settings collapsed).
+      Tighter spacing, single-column.
+- [x] ~~**Settings panel**~~ — moved the **"Never record on" host blocklist** into a collapsed
+      Settings `<details>`, added a **preset download folder** (subfolder of Downloads) + an
+      **"Ask where to save each time"** toggle. When off (default), export drops straight into
+      Downloads/<folder> with no Save dialog (`background.js` `getSettings`/`stop`, sanitised by
+      `cleanSubfolder`; `chrome.downloads` rejects absolute paths / `..`).
+- [x] ~~**Countdown** before recording starts~~ — a 3-2-1 shown in the active tab AFTER the
+      screen picker, BEFORE capture goes live. Implemented as a picker→countdown→go handshake:
+      offscreen sends `offscreen-armed` once the picker resolves; the worker holds
+      `recording=false` (nothing captured during the pre-roll), runs the countdown overlay
+      (`content.js` `countdown`), then `goLive()` sets t0 + instruments + `offscreen-go` starts
+      the recorder. Data-only fallback (cancelled picker) preserved.
+- [ ] **Live-Chrome verify** (no unit test — popup/offscreen/content are DOM + chrome.*):
+      Start → pick a screen → see 3-2-1 → recording begins, pill shows, t0 starts at the count's
+      end (no countdown seconds in the video); export lands in the preset folder without a Save
+      dialog; blocklist still honored from Settings. Cancel the picker → still records data-only.
 
 **P4 — Analyze side renders the new signals:**
 - [x] ~~`pack.py` renders `annotation:draw` / `annotation:select` in `context.md` and marks

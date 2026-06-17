@@ -1,8 +1,23 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-17 (P2 annotations built + unit-tested; P4 annotation-rendering done + unit-tested; NEXT: live-verify P2, then build P3 popup/Settings; Adam live-re-verifies the tab-scope change too)_
+_Last updated: 2026-06-17 (P2 + P4 + P3 all built/unit-tested where possible; NEXT: one live-Chrome run to verify P2 annotations + P3 popup/countdown/folder, and re-verify the tab-scope change)_
 
-## ▶ NEXT — live-Chrome verify P2 (Selector + Draw), then build P3 (popup → dropdown + Settings). Adam still live-re-verifies the tab-scope change.
+## ▶ NEXT — one live-Chrome run verifies P2 (Selector + Draw) + P3 (popup, countdown, preset download folder) + the tab-scope change. Then the only code left is P4's auto-transcribe + small follow-ups.
+
+## ✅ P3 (popup → compact dropdown + Settings + countdown) — CODE DONE; needs live verify (2026-06-17)
+
+- **Popup** compacted into collapsible `<details>` sections — purpose stays open/prominent (it
+  seeds the agent's context), blocklist + a new **download folder** + **"ask where to save"**
+  toggle moved into a collapsed **Settings** section. (`popup.html`/`popup.js`.)
+- **Preset download folder:** export now drops into `Downloads/<subfolder>` with no Save dialog
+  unless "Ask where to save each time" is on. Subfolder is sanitised (relative-only; no `..`) in
+  both popup and worker (`cleanSubfolder`). (`background.js` `getSettings`/`stop`.)
+- **Countdown:** a 3-2-1 in the active tab AFTER the picker, BEFORE capture goes live, via a
+  picker→countdown→go handshake (offscreen `offscreen-armed` → worker holds `recording=false`,
+  runs the countdown, then `goLive()` sets t0 + instruments + `offscreen-go` starts the recorder).
+  Nothing is captured during the pre-roll; data-only fallback (cancelled picker) preserved.
+  (`background.js` arming/`runCountdownThenGo`/`goLive`, `offscreen.js` deferred `start()`,
+  `content.js` `countdown`.) Details + the two gotchas in `learnings.md`.
 
 ## ✅ P4 (analyze-side annotation rendering) — DONE + unit-tested (2026-06-17)
 
@@ -196,18 +211,24 @@ unique-selector AND semantic-context (`describe()`) logic is verified in real Ch
 and `allCtxPass` all true. The overlay + annotation tools are shadow-DOM + chrome.* dependent,
 so their live behavior has no unit test (needs a load-unpacked run — see P2 verify steps).
 
-## Exact next step — live-verify P2 (annotations); then P3. Adam re-verifies tab-scope too.
+## Exact next step — one live-Chrome run verifies P2 + P3; re-verify tab-scope too.
 
-P1 + P1b are live-verified (see top). P2 (Selector + Draw) is built + unit-tested — its
-live-Chrome sign-off is the next step (P2 block in `to-do-current.md`). The tab-scope change is
-implemented + unit-tested and can be re-verified on the same run. Files touched this session
-(P2 + P4):
+P1 + P1b are live-verified (see top). P2 (annotations), P4 (rendering), and P3 (popup/countdown/
+folder) are built + unit-tested where possible. The remaining sign-off is interactive (DOM +
+chrome.*-dependent, no unit test): see the P2 and P3 live-verify checklists in
+`to-do-current.md`. The tab-scope change rides along on the same run. Files touched this session:
 - **P2 (annotations):** `content.js` (`annotate` IIFE + mirrored `drawGeom`; two overlay
   buttons + `syncTools`; `onClick`/`emitDwell` guards), `extension/src/annotate-geom.js` (new,
   pure), `background.js` (annotation kinds added to the frame trigger), `tests/test_annotate.mjs` (new).
 - **P4 (analyze-side rendering):** `analyze/pack.py` (`_draw_region`; timeline + steps cases;
   `_point_card`/`_draw_card` split in `build_annotated_frames_html` with blue `.sel` + SVG ink;
   `## ✦ Annotations` section in `build_context`), `tests/test_annotations.py` (new, 13).
+- **P3 (popup/Settings/folder/countdown):** `popup.html` + `popup.js` (compact `<details>`
+  layout, Settings section, folder + ask-save), `background.js` (`getSettings`/`cleanSubfolder`,
+  download into `stop()`, the arming/countdown lifecycle: `start()` rewrite +
+  `runCountdownThenGo`/`goLive` + `offscreen-armed` handler + status `arming`),
+  `offscreen.js` (deferred recorder start via `offscreen-go`, `offscreen-armed` signal),
+  `content.js` (`countdown` overlay module).
 
 Prior sessions:
 - **Tab-scope change:** `background.js` (`start()` active-tab-only, `onActivated` lazy
