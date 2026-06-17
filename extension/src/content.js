@@ -281,6 +281,10 @@
   }
 
   function onClick(e) {
+    // While an annotation tool is active, the catcher intercepts the click — don't
+    // also log it as a workflow click (the event still bubbles to this document
+    // listener, retargeted to our annotation host).
+    if (annotate.mode()) return;
     const el = e.target;
     lastHoverSelector = null; // let a re-hover on the same element log again
     emit("click", { selector: selectorFor(el), label: labelFor(el), ctx: describe(el), ...positionFor(e.clientX, e.clientY, el) });
@@ -304,6 +308,7 @@
 
   function emitDwell() {
     if (!recording || !lastMove) return;
+    if (annotate.mode()) return; // pointer is driving an annotation tool, not browsing
     const el = document.elementFromPoint(lastMove.x, lastMove.y);
     if (!el || isSecretInput(el)) return;
     const selector = selectorFor(el);
@@ -425,10 +430,17 @@
           button.primary{background:#ff3b30;font-weight:600;}
           button.primary:hover{background:#ff5147;}
           button.armed{background:#ff9f0a;color:#000;font-weight:600;}
+          button.active{background:#0a84ff;color:#fff;font-weight:600;}
+          button.active:hover{background:#3a9bff;}
+          button:disabled{opacity:.4;cursor:default;}
+          button:disabled:hover{background:transparent;}
         </style>
         <div class="bar" part="bar">
           <span class="dot" id="dot"></span>
           <span class="time" id="time">00:00</span>
+          <span class="sep"></span>
+          <button id="select" title="Pick an element you mean">Select</button>
+          <button id="draw" title="Draw on the screen">Draw</button>
           <span class="sep"></span>
           <button id="pause">Pause</button>
           <button id="restart">Restart</button>
@@ -440,6 +452,8 @@
       els = {
         dot: shadow.getElementById("dot"),
         time: shadow.getElementById("time"),
+        select: shadow.getElementById("select"),
+        draw: shadow.getElementById("draw"),
         pause: shadow.getElementById("pause"),
         restart: shadow.getElementById("restart"),
         cancel: shadow.getElementById("cancel"),
@@ -450,14 +464,35 @@
       wireDestructive(els.restart, "restart", "Restart");
       wireDestructive(els.cancel, "cancel", "Cancel");
 
+      // The two annotation tools (Selector / Draw). Toggling one button enters
+      // that mode; clicking it again (or pressing Esc, or switching to the other)
+      // exits. annotate.onChange is the single sync point, so a mode exit it
+      // triggers itself (Esc) repaints the buttons too.
+      els.select.addEventListener("click", () => annotate.setMode("select"));
+      els.draw.addEventListener("click", () => annotate.setMode("draw"));
+      annotate.onChange = syncTools;
+
       applyPaused();
       if (!paused) startTimer();
+    }
+
+    // Reflect the active annotation mode on the tool buttons.
+    function syncTools() {
+      if (!els.select) return;
+      const mode = annotate.mode();
+      els.select.classList.toggle("active", mode === "select");
+      els.draw.classList.toggle("active", mode === "draw");
     }
 
     function applyPaused() {
       if (!els.dot) return;
       els.dot.classList.toggle("paused", paused);
       els.pause.textContent = paused ? "Resume" : "Pause";
+      // Annotations are dropped while paused (the worker ignores events then), so
+      // disable the tools and leave any active mode.
+      els.select.disabled = paused;
+      els.draw.disabled = paused;
+      if (paused) annotate.exit();
     }
 
     // Reflect a worker state broadcast: unmount when recording ends, otherwise
@@ -490,6 +525,278 @@
     }
 
     return { mount, update, unmount };
+  })();
+
+  // --- annotation geometry (mirror of src/annotate-geom.js) -----------------
+  //
+  // VERBATIM copy of drawGeom from src/annotate-geom.js (the tested module). A
+  // content script is a classic script and can't import the module, so we keep a
+  // copy here — keep the two in sync (same arrangement as the redact.js helpers
+  // above). Converts a viewport-pixel stroke into resolution-independent %-coords
+  // + bounding box so pack.py can place the highlight on a frame of any size.
+  function drawGeom(points, viewport) {
+    const w = (viewport && viewport.w) || 0;
+    const h = (viewport && viewport.h) || 0;
+    const pct = (v, total) => (total ? Math.round((v / total) * 1000) / 10 : 0);
+    const pts = (points || []).map((p) => ({ xpct: pct(p.x, w), ypct: pct(p.y, h) }));
+    if (!pts.length) return { points: [], bbox: null, viewport: { w, h } };
+    const xs = pts.map((p) => p.xpct);
+    const ys = pts.map((p) => p.ypct);
+    const minx = Math.min(...xs), maxx = Math.max(...xs);
+    const miny = Math.min(...ys), maxy = Math.max(...ys);
+    return {
+      points: pts,
+      bbox: { xpct: minx, ypct: miny, wpct: Math.round((maxx - minx) * 10) / 10, hpct: Math.round((maxy - miny) * 10) / 10 },
+      viewport: { w, h },
+    };
+  }
+
+  // --- annotation tools: Selector + Draw (Adam's headline ask) ---------------
+  //
+  // Two SEPARATE tools on the overlay, both usable mid-recording:
+  //   • Selector — element pick that snaps to the DOM (reuses selectorFor() +
+  //     describe()). Emits `annotation:select` so the user and the analyzing agent
+  //     are aligned on the SAME element ("this button, not that one").
+  //   • Draw — freeform highlight of an area/region (not element-bound). Emits
+  //     `annotation:draw` (a %-coord stroke + bbox via drawGeom) so the agent gets
+  //     "user circled here", not just video pixels.
+  //
+  // Visual layer: one shadow-DOM host (separate from the overlay pill), z-indexed
+  // just below it so the pill stays clickable. A full-viewport "catcher" intercepts
+  // pointer events ONLY while a mode is active (so a Select click doesn't also
+  // navigate the page, and a Draw stroke doesn't select page text). Marks are drawn
+  // on a <canvas> and fade after a few seconds — long enough to land in the video
+  // and in the frame we grab at emit time, without permanently obscuring the page.
+  const annotate = (() => {
+    const Z = 2147483646; // one below the overlay pill (2147483647)
+    const FADE_HOLD_MS = 3000; // keep a mark fully visible this long, then fade
+    const FADE_MS = 500;
+    const STROKE = "#ff3b30";
+    const MAX_POINTS = 200; // cap a stroke's payload; long drags get sampled down
+
+    let mode = null; // null | "select" | "draw"
+    let host = null, shadow = null;
+    let catcher = null, canvas = null, ctx = null, outline = null, hint = null;
+    let dpr = 1;
+    let drawing = false;
+    let points = []; // current stroke, viewport-pixel
+    let hovered = null; // element under cursor in select mode
+    let fadeT = null, clearT = null;
+
+    function ensureLayer() {
+      if (host) return;
+      host = document.createElement("div");
+      host.id = "__bac_annotate__";
+      host.style.cssText = `position:fixed;inset:0;z-index:${Z};pointer-events:none;`;
+      shadow = host.attachShadow({ mode: "open" });
+      shadow.innerHTML = `
+        <style>
+          .catcher{position:fixed;inset:0;pointer-events:none;}
+          .catcher.on{pointer-events:auto;cursor:crosshair;}
+          canvas{position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;
+            transition:opacity ${FADE_MS}ms ease;}
+          .outline{position:fixed;border:2px solid ${STROKE};border-radius:3px;
+            background:rgba(255,59,48,.10);pointer-events:none;display:none;
+            box-sizing:border-box;}
+          .hint{position:fixed;bottom:64px;left:50%;transform:translateX(-50%);
+            background:rgba(28,28,30,.92);color:#fff;display:none;white-space:nowrap;
+            font:12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+            padding:6px 12px;border-radius:8px;pointer-events:none;}
+        </style>
+        <canvas class="ink" id="ink"></canvas>
+        <div class="outline" id="outline"></div>
+        <div class="catcher" id="catcher"></div>
+        <div class="hint" id="hint"></div>`;
+      (document.documentElement || document.body).appendChild(host);
+      catcher = shadow.getElementById("catcher");
+      canvas = shadow.getElementById("ink");
+      outline = shadow.getElementById("outline");
+      hint = shadow.getElementById("hint");
+      ctx = canvas.getContext("2d");
+      sizeCanvas();
+      window.addEventListener("resize", sizeCanvas);
+      catcher.addEventListener("mousemove", onMove);
+      catcher.addEventListener("mousedown", onDown);
+      catcher.addEventListener("mouseup", onUp);
+      catcher.addEventListener("click", onPick, true);
+      // Let the wheel still scroll the page so Select can reach off-screen elements.
+      catcher.addEventListener("wheel", (e) => window.scrollBy(0, e.deltaY), { passive: true });
+      document.addEventListener("keydown", onEsc, true);
+    }
+
+    function sizeCanvas() {
+      if (!canvas) return;
+      dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(window.innerWidth * dpr);
+      canvas.height = Math.round(window.innerHeight * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+    }
+
+    // The page element under (x,y) — momentarily make the catcher transparent to
+    // hit-testing so elementFromPoint returns the real page node, not our layer.
+    function pageElAt(x, y) {
+      const wasAuto = catcher.style.pointerEvents === "auto";
+      catcher.style.pointerEvents = "none";
+      let el = document.elementFromPoint(x, y);
+      if (wasAuto) catcher.style.pointerEvents = "auto";
+      if (el && (el.id === "__bac_annotate__" || el.id === "__bac_overlay__")) el = null;
+      return el;
+    }
+
+    // --- fade: a single timer dims then clears the whole canvas after idle ----
+    function holdFade() {
+      if (fadeT) { clearTimeout(fadeT); fadeT = null; }
+      if (clearT) { clearTimeout(clearT); clearT = null; }
+      if (canvas) canvas.style.opacity = "1";
+    }
+    function scheduleFade() {
+      holdFade();
+      fadeT = setTimeout(() => {
+        if (canvas) canvas.style.opacity = "0";
+        clearT = setTimeout(clearInk, FADE_MS + 50);
+      }, FADE_HOLD_MS);
+    }
+    function clearInk() {
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      canvas.style.opacity = "1";
+    }
+
+    // --- draw mode ------------------------------------------------------------
+    function addPoint(x, y) {
+      const prev = points[points.length - 1];
+      points.push({ x, y });
+      if (prev) {
+        ctx.strokeStyle = STROKE;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(prev.x, prev.y);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+      }
+    }
+    function onDown(e) {
+      if (mode !== "draw") return;
+      holdFade();
+      drawing = true;
+      points = [];
+      addPoint(e.clientX, e.clientY);
+    }
+    function onUp() {
+      if (mode !== "draw" || !drawing) return;
+      drawing = false;
+      if (points.length > 1) {
+        emit("annotation:draw", drawGeom(sample(points, MAX_POINTS), { w: window.innerWidth, h: window.innerHeight }));
+      }
+      points = [];
+      scheduleFade();
+    }
+
+    // --- select mode ----------------------------------------------------------
+    function showOutline(r) {
+      outline.style.display = "block";
+      outline.style.left = `${r.x}px`;
+      outline.style.top = `${r.y}px`;
+      outline.style.width = `${r.width}px`;
+      outline.style.height = `${r.height}px`;
+    }
+    function hideOutline() {
+      if (outline) outline.style.display = "none";
+    }
+    function onPick(e) {
+      if (mode !== "select") return;
+      // Don't let the pick double as a real page click / navigation.
+      e.preventDefault();
+      e.stopPropagation();
+      const el = hovered || pageElAt(e.clientX, e.clientY);
+      if (!el || el.nodeType !== 1) return;
+      const r = el.getBoundingClientRect();
+      emit("annotation:select", {
+        selector: selectorFor(el),
+        label: labelFor(el),
+        ctx: describe(el),
+        ...positionFor(r.x + r.width / 2, r.y + r.height / 2, el),
+      });
+      // Flash the picked box onto the canvas so the confirmation lands in the video.
+      holdFade();
+      ctx.strokeStyle = STROKE;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(r.x, r.y, r.width, r.height);
+      scheduleFade();
+    }
+
+    function onMove(e) {
+      if (mode === "select") {
+        const el = pageElAt(e.clientX, e.clientY);
+        hovered = el;
+        if (el) showOutline(el.getBoundingClientRect());
+        else hideOutline();
+      } else if (mode === "draw" && drawing) {
+        addPoint(e.clientX, e.clientY);
+      }
+    }
+
+    function onEsc(e) {
+      if (e.key === "Escape" && mode) {
+        e.stopPropagation();
+        setMode(null);
+      }
+    }
+
+    // Keep at most `max` points, evenly sampled, always keeping the last one.
+    function sample(pts, max) {
+      if (pts.length <= max) return pts;
+      const step = pts.length / max;
+      const out = [];
+      for (let i = 0; i < max; i++) out.push(pts[Math.floor(i * step)]);
+      out.push(pts[pts.length - 1]);
+      return out;
+    }
+
+    // Enter `next`, or toggle off if it's already active. Switching modes resets
+    // the other mode's transient state. onChange repaints the overlay buttons.
+    function setMode(next) {
+      const target = mode === next ? null : next;
+      mode = target;
+      drawing = false;
+      points = [];
+      hovered = null;
+      if (mode) {
+        ensureLayer();
+        catcher.classList.add("on");
+        catcher.style.pointerEvents = "auto";
+        hint.textContent = mode === "select" ? "Click an element to mark it · Esc to exit" : "Drag to draw · Esc to exit";
+        hint.style.display = "block";
+      } else if (catcher) {
+        catcher.classList.remove("on");
+        catcher.style.pointerEvents = "none";
+        hideOutline();
+        if (hint) hint.style.display = "none";
+      }
+      try { annotate.onChange?.(); } catch {}
+      return mode;
+    }
+
+    function exit() {
+      if (mode) setMode(null);
+    }
+
+    // Remove the whole layer (on stop/cancel). Listeners die with the host.
+    function teardown() {
+      mode = null;
+      drawing = false;
+      points = [];
+      hovered = null;
+      holdFade();
+      window.removeEventListener("resize", sizeCanvas);
+      document.removeEventListener("keydown", onEsc, true);
+      host?.remove();
+      host = shadow = catcher = canvas = ctx = outline = hint = null;
+    }
+
+    return { setMode, exit, teardown, mode: () => mode, onChange: null };
   })();
 
   // rrweb: full DOM recording. Loaded from src/lib/rrweb.min.js (see README for
@@ -545,6 +852,7 @@
     if (dwellTimer) clearTimeout(dwellTimer);
     dwellTimer = null;
     lastHoverSelector = null;
+    annotate.teardown();
     overlay.unmount();
   }
 

@@ -501,11 +501,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const info = state.tabs.get(tabId);
       if (info) info.url = navUrl; // keep the tab legend current as the user navigates
     }
-    // Grab a frame at the precise moment of a click or navigation. The periodic
-    // frame timer covers everything in between (including idle dwell), so we no
-    // longer take a frame on every hover — that just competed with the timer for
-    // Chrome's ~2/sec captureVisibleTab quota.
-    if (e.kind === "click" || e.kind === "nav") {
+    // Grab a frame at the precise moment of a click, navigation, or annotation.
+    // For annotations the frame is the point — it captures the screen with the
+    // user's drawn highlight / selected-element box still painted on it, so the
+    // analyst sees exactly what was marked. The periodic frame timer covers
+    // everything in between (including idle dwell), so we no longer take a frame on
+    // every hover — that just competed with the timer for Chrome's ~2/sec
+    // captureVisibleTab quota.
+    if (e.kind === "click" || e.kind === "nav" || e.kind === "annotation:select" || e.kind === "annotation:draw") {
       captureFrame(e.kind);
     }
   }
