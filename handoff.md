@@ -38,7 +38,7 @@ v1 and works the same; it now also renders the multi-tab data.
 ## Status — built, static-checked, NOT live-verified
 
 All v2 code is committed. Extension files parse, manifest is valid JSON, and the
-analyze side has 37 passing unit tests. **But the extension has not run in a real
+analyze side has 70 passing unit tests. **But the extension has not run in a real
 browser from this environment** — there's no Chrome runtime here. Before trusting
 v2, run `LIVE-TEST.md`. Two highest-risk unknowns it checks:
 1. the screen picker actually opening from the worker (`desktopCapture`), and
@@ -65,12 +65,23 @@ steer, bundled skills incl. competitive-research). Stdlib only. The content.js u
 verified in real Chromium via `tests/browser/selector-harness.html` (browser, not
 unittest) — `allUnique`, `allIdentify`, and `allCtxPass` all true.
 
-## Exact next step
+## Exact next step — LIVE TEST (happening now)
 
-Run `LIVE-TEST.md` and record the outcome in `learnings.md` — especially which path
-made the screen picker work (worker vs. popup vs. action.onClicked). Then build the
-**on-screen control overlay** (Pause/Cancel/Restart/Finish) — in v2 it should be a
-single overlay that's visible regardless of which tab is focused.
+**▶ NEXT ACTION: run `LIVE-TEST.md` end to end in real Chrome.** This is the immediate
+next thing — all v2 code is built and unit-tested, but unverified in a live browser.
+The run will confirm (or break) the two risk items: the `desktopCapture` screen picker
+opening from the popup→worker path, and `tabs.onUpdated` instrumenting tabs opened
+mid-recording. Also eyeball the intent layer in `context.md` (Task callout, Purpose
+steer, narrated `## Steps`, semantic click labels, `## Tabs` + `━━━ tab #N ━━━`
+markers) and that `frames-annotated.html` draws markers on the right elements.
+
+**Record the outcome in `learnings.md`** — especially which path made the screen picker
+work (worker vs. popup vs. `action.onClicked`), and anything that broke.
+
+After the live test passes: build the **on-screen control overlay**
+(Pause/Cancel/Restart/Finish) — in v2 a single overlay visible regardless of which tab
+is focused. (Deferred until now because its cross-tab design depends on confirming the
+live multi-tab behavior first.)
 
 ## Known caveats
 
