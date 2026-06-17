@@ -14,11 +14,14 @@ opened mid-recording. Events are tagged with their source tab; `pack.py` renders
 tab legend + tab-switch markers.
 
 **Intent capture** — to make the bundle 10x more legible to the analyzing model:
-a stated **task goal** (popup → manifest → top of context.md); **semantic element
-context** (accessible name / role / section, so "click button 'Issue refund' in
-'Order actions'" not a selector); a **narrated procedure** (`## Steps`, segmenting
-the timeline and binding the narration to each step); and **frame linking + a
-`frames-annotated.html`** that draws the click point + element box on each screenshot.
+a stated **task goal**; a required **purpose** (skill / docs / ux / improve / general)
+that renders a steer block at the top of context.md so the *same* recording yields a
+skill, a doc, UX feedback, or an efficiency teardown depending on why it was recorded;
+**semantic element context** (accessible name / role / section, so "click button
+'Issue refund' in 'Order actions'" not a selector); a **narrated procedure**
+(`## Steps`, segmenting the timeline and binding narration to each step); and **frame
+linking + a `frames-annotated.html`** drawing the click point + element box on each
+screenshot.
 
 The `analyze/` pipeline (validate → transcribe → glossary → pack) is inherited from
 v1 and works the same; it now also renders the multi-tab data.

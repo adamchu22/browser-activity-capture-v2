@@ -26,7 +26,9 @@ unknowns are marked **⚠ RISK**.
 1. Open **two or three normal website tabs** (not `chrome://`). Optionally a second
    window.
 2. In the popup, type a one-line **task goal** ("What are you doing in this
-   recording?"), then **Start**.
+   recording?") and tick at least one **purpose** ("Why are you recording?" — e.g.
+   *Build a skill*, *UX feedback*). Start is blocked until a purpose is picked. Then
+   **Start**.
    - **⚠ RISK 1 — the screen picker.** A Chrome "Choose what to share" picker should
      appear. Pick a **screen** (or a window). If no picker appears, `desktopCapture`
      wasn't triggered from the worker — see "If the picker never shows" below.
@@ -52,7 +54,8 @@ python3 analyze/pack.py <bundle-dir> --out ./pack
 ```
 
 In `pack/context.md` confirm the v2 signal:
-- your typed **Task** appears as a callout at the very top;
+- your typed **Task** and a **## Purpose of this recording** steer block (the
+  lenses + outputs for the purpose(s) you picked) appear at the very top;
 - a **## Steps (narrated procedure)** section that reads like a draft SOP, with your
   narration bound to each step and clicks described semantically (e.g. `click button
   "…" in "…"`, not a bare selector);

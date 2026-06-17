@@ -16,6 +16,12 @@ Asked "what would make this 10x better at conveying user intent?", built the bin
   `## Steps (narrated procedure)` section reads like a draft SOP.
 - **Stated task goal.** Popup field → `manifest.task` → bold callout at the top of
   `context.md`. The single best intent anchor.
+- **Capture purpose (steers the analysis).** Required popup selector (skill / docs /
+  ux / improve / general; pick ≥1) → `manifest.purposes` → a `## Purpose of this
+  recording` steer block at the top of `context.md` giving each purpose its reading
+  lens + deliverable. Same recording → a skill, a doc, UX feedback, or an efficiency
+  teardown depending on intent. BRIEF.md defers to it and documents `feedback.md` /
+  `improvements.md`.
 - **Frame linking + "draw on screen".** Each click links to its nearest frame
   (`→ frames/x.png @(x%,y%)`); `build_pack` writes `frames-annotated.html` drawing a
   ring at the click point + the element's box on each screenshot. Verified end-to-end
