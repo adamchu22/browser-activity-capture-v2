@@ -3,47 +3,83 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      body { font: 13px system-ui, sans-serif; width: 260px; margin: 0; padding: 12px; }
-      h1 { font-size: 14px; margin: 0 0 8px; }
-      button { font: inherit; padding: 6px 10px; margin: 2px 0; cursor: pointer; width: 100%; }
-      #rec { background: #c0392b; color: #fff; border: none; border-radius: 4px; }
-      #stop { background: #2c3e50; color: #fff; border: none; border-radius: 4px; }
-      .row { display: flex; gap: 6px; }
-      .row button { flex: 1; }
-      label { display: block; margin: 10px 0 4px; color: #555; }
-      label.check { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; }
+      :root { --accent: #c0392b; }
+      body { font: 13px system-ui, sans-serif; width: 264px; margin: 0; padding: 12px 12px 10px; color: #1c1c1e; }
+      h1 { font-size: 13px; font-weight: 600; margin: 0 0 10px; display: flex; align-items: center; gap: 6px; }
+      h1 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+      button { font: inherit; padding: 6px 10px; cursor: pointer; border-radius: 6px; border: 1px solid #d0d0d5; background: #fff; }
+      #rec { background: var(--accent); color: #fff; border: none; font-weight: 600; width: 100%; padding: 8px; }
+      #rec:disabled { opacity: .6; cursor: default; }
+      #stop { background: #1c1c1e; color: #fff; border: none; flex: 2; }
+      #pause { flex: 1; }
+      .row { display: flex; gap: 6px; margin-top: 6px; }
+      label { display: block; margin: 0 0 4px; color: #444; font-size: 12px; }
+      label.check { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: #333; }
       label.check input { width: auto; }
-      textarea { width: 100%; box-sizing: border-box; font: 12px monospace; }
-      #status { margin-top: 8px; color: #777; min-height: 16px; }
-      .hint { color: #999; font-size: 11px; margin-top: 8px; }
+      textarea, input[type="text"] { width: 100%; box-sizing: border-box; font: 12px/1.4 system-ui, sans-serif; border: 1px solid #d0d0d5; border-radius: 6px; padding: 5px 6px; }
+      textarea#task { resize: vertical; }
+      /* Collapsible sections — the "dropdown" feel, so the popup stays small. */
+      details { margin-top: 10px; border-top: 1px solid #eee; padding-top: 8px; }
+      details > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: #333; list-style: none; user-select: none; }
+      details > summary::-webkit-details-marker { display: none; }
+      details > summary::before { content: "▸ "; color: #999; }
+      details[open] > summary::before { content: "▾ "; }
+      .purposes { margin-top: 8px; display: grid; gap: 3px; }
+      .field { margin-top: 8px; }
+      #status { margin-top: 8px; color: #777; min-height: 15px; font-size: 12px; }
+      .hint { color: #999; font-size: 11px; line-height: 1.4; margin-top: 8px; }
+      #micState { margin-top: 4px; }
+      #enableMic { width: 100%; margin-top: 6px; }
     </style>
   </head>
   <body>
-    <h1>Browser Activity Capture v2</h1>
-    <label for="task">What are you doing in this recording? (one line)</label>
+    <h1><span class="dot"></span> Activity Capture</h1>
+
+    <label for="task">What are you doing in this recording?</label>
     <textarea id="task" rows="2" placeholder="e.g. Issue a refund for a damaged order in Distru"></textarea>
-    <label>Why are you recording? (optional — steers the analysis; defaults to general)</label>
-    <div id="purposes">
-      <label class="check"><input type="checkbox" name="purpose" value="skill" /> Build a skill / automation</label>
-      <label class="check"><input type="checkbox" name="purpose" value="docs" /> Documentation / SOP</label>
-      <label class="check"><input type="checkbox" name="purpose" value="ux" /> UX / product feedback</label>
-      <label class="check"><input type="checkbox" name="purpose" value="ui" /> Propose UI changes</label>
-      <label class="check"><input type="checkbox" name="purpose" value="improve" /> Find a better / faster way</label>
-      <label class="check"><input type="checkbox" name="purpose" value="research" /> Competitive / product research</label>
-      <label class="check"><input type="checkbox" name="purpose" value="general" /> General capture</label>
+
+    <!-- Kept prominent (open by default): the purpose seeds the analyzing agent's
+         context. Collapsible so the popup can shrink when you don't need it. -->
+    <details id="whyBox" open>
+      <summary>Why are you recording? <span style="font-weight:400;color:#999">(optional)</span></summary>
+      <div class="purposes" id="purposes">
+        <label class="check"><input type="checkbox" name="purpose" value="skill" /> Build a skill / automation</label>
+        <label class="check"><input type="checkbox" name="purpose" value="docs" /> Documentation / SOP</label>
+        <label class="check"><input type="checkbox" name="purpose" value="ux" /> UX / product feedback</label>
+        <label class="check"><input type="checkbox" name="purpose" value="ui" /> Propose UI changes</label>
+        <label class="check"><input type="checkbox" name="purpose" value="improve" /> Find a better / faster way</label>
+        <label class="check"><input type="checkbox" name="purpose" value="research" /> Competitive / product research</label>
+        <label class="check"><input type="checkbox" name="purpose" value="general" /> General capture</label>
+      </div>
+    </details>
+
+    <div class="field">
+      <button id="rec">● Start recording</button>
+      <label class="check" style="margin-top:6px"><input type="checkbox" id="mic" checked /> Record microphone (narration)</label>
+      <div id="micState" class="hint"></div>
+      <button id="enableMic" hidden>Enable microphone…</button>
+      <div class="row" hidden id="live">
+        <button id="pause">Pause</button>
+        <button id="stop">■ Stop &amp; export</button>
+      </div>
     </div>
-    <button id="rec">● Start recording (all tabs)</button>
-    <label class="check"><input type="checkbox" id="mic" checked /> Record microphone (narration)</label>
-    <div id="micState" class="hint"></div>
-    <button id="enableMic" hidden>Enable microphone…</button>
-    <div class="row" hidden id="live">
-      <button id="pause">Pause</button>
-      <button id="stop">■ Stop &amp; export</button>
-    </div>
-    <label for="blocklist">Never record on (one host per line)</label>
-    <textarea id="blocklist" rows="3" placeholder="mail.google.com&#10;bank.example.com"></textarea>
+
+    <!-- Settings, collapsed by default (out of the main flow, Loom-style). -->
+    <details id="settings">
+      <summary>Settings</summary>
+      <div class="field">
+        <label for="blocklist">Never record on (one host per line)</label>
+        <textarea id="blocklist" rows="3" placeholder="mail.google.com&#10;bank.example.com"></textarea>
+      </div>
+      <div class="field">
+        <label for="folder">Save exports to (subfolder of Downloads, optional)</label>
+        <input type="text" id="folder" placeholder="captures" />
+      </div>
+      <label class="check" style="margin-top:8px"><input type="checkbox" id="askSave" /> Ask where to save each time</label>
+    </details>
+
     <div id="status"></div>
-    <div class="hint">When you Start, Chrome asks which screen/window to share, and a "this tab is being debugged" banner appears on every tab (that's the network capture). Secrets are redacted before export.</div>
+    <div class="hint">On Start, Chrome asks which screen/window to share, then a short countdown begins. A "this tab is being debugged" banner is the network capture. Secrets are redacted before export.</div>
     <script src="popup.js"></script>
   </body>
 </html>
