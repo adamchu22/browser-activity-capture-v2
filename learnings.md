@@ -4,6 +4,46 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (CAPTURE BUG — content script dies on navigation; only network survives)
+
+**The most serious capture bug found so far.** A real session
+(`distru-freemium/feedback-sessions/capture-…16-12-14-616Z`) ran 6 min but clicks, hovers,
+rrweb DOM, and frames all stopped at **1:43** — while network kept recording to 5:53. The
+bundle still "validated" (video present, 0 errors, 659 events) because the events were almost
+all network. ~4.5 min of the most important part (error states, the `/fixes?filter=…` views)
+had no DOM capture and no frames.
+
+- **Root cause.** The app is server-rendered: every click is a full-page `text/html`
+  navigation. A navigation destroys the content script — but the **CDP debugger stays attached
+  to the tab**, so network keeps flowing while the page-side capture is gone. Re-attachment
+  depended entirely on the fresh content script's single fire-and-forget `is-recording` check,
+  with no retry and no worker-side re-push; `instrumentTab()` even early-returns for an
+  already-tracked tab, so the worker never re-armed it. One lost message = capture dead for the
+  rest of that tab's life, silently (errors.json empty).
+- **Why it hid:** SPAs don't trigger it (the content script isn't torn down on pushState), and
+  the dev-time test pages were SPA-ish. Server-rendered apps — which is most of Distru's own
+  tooling — trigger it on the very first click.
+- **Fix.** (A) The worker now re-arms the content script on EVERY navigation: `tabs.onUpdated`
+  with `status==="complete"` (or an in-place `changeInfo.url`) on a tracked tab →
+  `reattachTab()` → `ensureContentScript` + re-send `start`. The debugger is left attached
+  (it survived). Gating is a pure, unit-tested module (`nav-policy.js`, `navActions()`).
+  (B) The content script's self-attach now retries on transient failure instead of
+  fire-and-forget. Both together = belt and suspenders; `startCapture` is idempotent so whoever
+  wins first is fine.
+- **Frames were also coupled to DOM events** (`captureFrame` only ran on click/nav/hover), so
+  when the content script died, frames died too. Added a **3s periodic frame timer** in the
+  worker (`startFrameTimer`/`stopFrameTimer`, wired to start/pause/resume/restart/stop/cancel),
+  decoupled from events. Kept PNG — `validate_bundle.py` only counts `frames/*.png`. Dropped
+  the per-hover frame (timer covers it; avoids Chrome's ~2/sec captureVisibleTab quota).
+- **`network.har` has no response bodies** — only method/url/status/headers/mimeType. The
+  worker never calls `Network.getResponseBody`. So you cannot recover rendered HTML / error
+  text from the HAR; the late error states live only in `video.webm`. (Capturing bodies is a
+  separate task — needs response-body redaction, which we don't do yet. Flagged in to-do P4c.)
+- **New diagnostic:** `analyze/check_coverage.py` flags this signature on any bundle (per-tab:
+  network continuing >45s past the last content-script event). It FAILs the original bad bundle
+  and is the one-command sign-off for the fix on a fresh recording. Unit-tested
+  (`tests/test_check_coverage.py`).
+
 ## 2026-06-17 (P1 — on-screen overlay; two non-obvious gotchas)
 
 Built the injected recording overlay (Finish/Pause/Restart/Cancel), worker-synced across

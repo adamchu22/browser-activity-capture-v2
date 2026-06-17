@@ -1,8 +1,20 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-17 (P1 overlay CODE DONE, tests green; next: live-verify P1, then P2 annotations)_
+_Last updated: 2026-06-17 (P1 overlay + P1b capture-on-nav bug fix CODE DONE, tests green; next: one live run to verify both, then P2)_
 
-## ▶ NEXT — live-verify P1, then start P2 (Selector + Draw annotations)
+## ⚠ P1b — capture died on navigation (FIXED in code; live-verify is the sign-off)
+
+A real 6-min session lost ~4.5 min of DOM + visual capture: on a server-rendered app, the
+first full-page navigation tore down the content script while the CDP debugger kept network
+flowing — so clicks/rrweb/frames stopped at 1:43 but network ran to 5:53, and the bundle still
+"validated." Root cause + fix in `learnings.md`. **Fix (done):** worker re-arms the content
+script on every navigation (`reattachTab` via `tabs.onUpdated`; gating in pure `nav-policy.js`,
+unit-tested); content-script self-attach now retries; frames moved to a 3s timer (decoupled
+from DOM events). **Diagnostic:** `analyze/check_coverage.py` detects the signature on any
+bundle (FAILs the original bad one). **Sign-off:** re-record the distru-freemium flow and run
+`python3 analyze/check_coverage.py <bundle>` → must PASS. This shares the same live run as P1.
+
+## ▶ NEXT — one live run verifies P1 + P1b, then start P2 (Selector + Draw annotations)
 
 **P1 (on-screen recording overlay) is CODE-COMPLETE and unit-tests pass; it has NOT been
 live-verified in Chrome yet.** A shadow-DOM pill (the `overlay` IIFE in `content.js`) shows
@@ -13,11 +25,15 @@ MediaRecorder (`offscreen-pause/-resume/-restart/-cancel`). Restart reuses the l
 getDisplayMedia tracks (no re-prompt) and re-inits rrweb per tab so the new take keeps a base
 snapshot — see `learnings.md` for the two gotchas. Restart/Cancel take a 2-click confirm.
 
-**▶ NEXT ACTION (do this first): live-verify P1.** Load unpacked, record across ≥2 tabs and:
-the pill appears on each tab; Pause freezes the timer + turns the dot amber and stops the
-MediaRecorder; Restart resets the clock to 00:00 and the exported bundle still validates +
-replays (rrweb snapshot present); Cancel exports nothing and clears the badge; Finish exports
-a PASS bundle. See the live-verify checkbox in the P1 block of `to-do-current.md`.
+**▶ NEXT ACTION (do this first): one live run verifies BOTH P1 and P1b.** Load unpacked.
+*For P1b (the important one):* record on the **server-rendered** distru-freemium app
+(127.0.0.1:8765), click through several full-page navigations (the `/fixes?filter=…` views),
+Stop, then `python3 analyze/check_coverage.py <bundle>` → must **PASS** (clicks + frames
+present after the first navigation, content capture tracks network). *For P1 (the overlay):*
+also record across ≥2 tabs and check the pill appears on each tab; Pause freezes the timer +
+amber dot + stops the recorder; Restart resets to 00:00 and the bundle still validates +
+replays (rrweb snapshot present); Cancel exports nothing; Finish exports a PASS bundle.
+See the live-verify checkboxes in `to-do-current.md` (P1 + P1b blocks).
 
 **Then P2** — the two annotation tools (Selector: snaps to DOM via the existing
 `selectorFor()`+`describe()`, emits `annotation:select`; Draw: freeform region, emits
@@ -28,7 +44,8 @@ Settings, then P4 analyze-side rendering of the annotation events.
 `CLAUDE.md` + `AGENTS.md` (from `extension/src/bundle-docs.js`) with the read order, analysis
 procedure, and the audio-recovery fallback (stub transcript → Opus track in `video.webm`,
 recover with ffmpeg + local ASR; the docs now also include the `uv pip install mlx-audio`
-setup step). Tests: `tests/test_bundle_docs.mjs` (15) + python (70) + redact (7) all green.
+setup step). Tests (whole repo): node 29 (redact + bundle-docs + nav-policy) + python 78
+(incl. the new `test_check_coverage.py`) all green.
 
 Why P0 was needed (verified): the raw zip's README pointed at `../analyze/pack.py` (a path a
 recipient won't have); the self-driving layer only existed in the *pack*, not the zip; and
@@ -138,17 +155,19 @@ steer, bundled skills incl. competitive-research). Stdlib only.
 `tests/browser/selector-harness.html` (browser, not unittest) — `allUnique`,
 `allIdentify`, and `allCtxPass` all true.
 
-## Exact next step — live-verify P1, then build P2
+## Exact next step — one live run verifies P1 + P1b, then build P2
 
-**P1 (overlay) is code-complete; unit tests pass; live-Chrome verify is the next action**
-(see the top section + the P1 live-verify checkbox in `to-do-current.md`). Files touched:
-`content.js` (the `overlay` IIFE + `restartCapture`/`startRrweb`), `background.js`
-(`broadcastOverlay` + `pause/resume/restart/cancel` + routing for `overlay-command`),
-`offscreen.js` (MediaRecorder pause/resume/restart/cancel, retained `activeTracks`).
+Both are code-complete with unit tests; a single live Chrome run signs off both.
+Files touched this session:
+- **P1b (capture-on-nav fix):** `background.js` (`reattachTab`, rewritten `onUpdated`
+  listener, 3s `startFrameTimer`/`stopFrameTimer`), `nav-policy.js` (new, pure gating),
+  `content.js` (retrying `selfAttach`), `analyze/check_coverage.py` (new diagnostic).
+- **P1 (overlay):** `content.js` (`overlay` IIFE + `restartCapture`/`startRrweb`),
+  `background.js` (`broadcastOverlay` + `pause/resume/restart/cancel` + `overlay-command`),
+  `offscreen.js` (MediaRecorder pause/resume/restart/cancel, retained `activeTracks`).
 
-After verifying P1, build **P2** (Selector + Draw annotations on the overlay), then P3
-popup→dropdown + Settings, then P4 analyze-side rendering. The live capture pipeline itself
-is already verified (run 3 + entire-screen run both PASS).
+After the live run, build **P2** (Selector + Draw annotations on the overlay), then P3
+popup→dropdown + Settings, then P4 analyze-side rendering.
 
 ## Known caveats
 

@@ -147,6 +147,29 @@ across tabs so it shows regardless of which tab is focused) — **CODE DONE; nee
       the timer + amber dot, Restart resets the clock and yields a replayable bundle, Cancel
       exports nothing, Finish exports a PASS bundle.
 
+**P1b — Capture-death-on-navigation bug (CODE DONE + unit-tested; needs live verify)** 🐞
+Found in a real 6-min session (`distru-freemium/.../capture-…16-12-14-616Z`): clicks/rrweb/
+frames stopped at 1:43 on the first full-page navigation while network ran to 5:53 — only the
+CDP debugger survived. Most of the session's DOM + visual capture was lost. See `learnings.md`.
+- [x] ~~Worker re-arms the content script on every navigation~~ — `tabs.onUpdated` complete /
+      url change → `reattachTab()` (re-inject + re-send `start`); debugger left attached.
+      Gating in pure `nav-policy.js` (`navActions`), unit-tested (`tests/test_nav_policy.mjs`).
+- [x] ~~Content-script self-attach retries on transient failure~~ (was fire-and-forget).
+- [x] ~~Periodic 3s frame timer~~ — frames no longer coupled to DOM events
+      (`startFrameTimer`/`stopFrameTimer`, wired to all lifecycle verbs). Dropped per-hover frame.
+- [x] ~~Coverage diagnostic~~ — `analyze/check_coverage.py` detects the signature on any bundle;
+      FAILs the original bad bundle, unit-tested (`tests/test_check_coverage.py`, 8 tests).
+- [ ] **Live verify (the sign-off):** re-record the same distru-freemium flow (several
+      `/fixes?filter=…` full-page navigations), Stop, then run
+      `python3 analyze/check_coverage.py <bundle>` → must PASS (content capture tracks network
+      on the active tab; clicks + frames present after the first navigation). Needs the screen
+      picker + mic, so it's an interactive run.
+
+**P4c — Capture network response bodies (follow-up, not blocking):** `network.har` currently
+has no response bodies (no `Network.getResponseBody` call), so rendered HTML / error text can't
+be recovered from the HAR — only from `video.webm`. Adding bodies needs response-body redaction
+(we don't scrub those yet). Scope separately.
+
 **P2 — Annotation tools on the overlay** (the headline ask; Selector and Draw are SEPARATE):
 - [ ] **Draw** — freeform canvas highlight of an area/region (not element-bound). Emit a
       timestamped, tab-tagged `annotation:draw` event so `pack.py` can show "user
