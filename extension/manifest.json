@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Browser Activity Capture",
+  "version": "0.1.0",
+  "description": "Record a browser task — narration, screen, timestamped clicks/keystrokes/navigation, and network — aligned on one clock and exported as a portable Capture Bundle.",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "debugger",
+    "downloads",
+    "storage",
+    "offscreen",
+    "tabCapture"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Browser Activity Capture"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/lib/rrweb.min.js", "src/content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/offscreen.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

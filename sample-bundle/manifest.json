@@ -1,0 +1,32 @@
+{
+  "bundle_version": "0.1",
+  "capture_id": "capture-2026-06-04-1430",
+  "t0_wall": "2026-06-04T14:30:00.000Z",
+  "duration_ms": 23500,
+  "sync_mode": "self_record",
+  "video": "video.webm",
+  "transcript": "transcript.vtt",
+  "browser": { "name": "Chrome", "version": "126.0" },
+  "tool_versions": {
+    "extension": "0.1.0",
+    "rrweb": "2.0.0",
+    "transcriber": "whisper-large-v3"
+  },
+  "urls_visited": [
+    "https://admin.acme.example.com/login",
+    "https://admin.acme.example.com/dashboard",
+    "https://admin.acme.example.com/orders/ORD-48213"
+  ],
+  "redaction": {
+    "policy": "mask_secrets_and_auth",
+    "password_fields_masked": true,
+    "redacted_headers": ["Authorization", "Cookie", "Set-Cookie"],
+    "redacted_value_token": "‹redacted›"
+  },
+  "frames": [
+    { "t": 2500, "file": "frames/0000002500.png" },
+    { "t": 16000, "file": "frames/0000016000.png" },
+    { "t": 21000, "file": "frames/0000021000.png" }
+  ],
+  "counts": { "events": 18, "network": 4, "speech_cues": 7, "frames": 3 }
+}

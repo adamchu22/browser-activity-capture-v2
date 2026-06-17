@@ -1,0 +1,40 @@
+{
+  "_comment": "Domain dictionary applied to transcript.vtt after transcription. General ASR mishears domain terms no model is trained on (company names, compliance systems, chemistry). This is a deterministic find/replace post-pass. Each term: canonical = the correct spelling to write; variants = the misheard forms to catch (matched case-insensitively, on word boundaries); context (optional) = guard words — for variants that are also ordinary English ('ease', 'metric', 'dispute'), the replacement only fires when one of these words also appears in the same cue, so normal prose isn't corrupted. Edit freely.",
+  "terms": [
+    {
+      "canonical": "Distru",
+      "variants": ["distru", "this true", "the true", "destru"],
+      "context": []
+    },
+    {
+      "canonical": "Distru",
+      "variants": ["dispute"],
+      "context": ["metrc", "inventory", "manifest", "transfer", "compliance", "sync", "integration", "erp", "seed to sale", "wholesale"]
+    },
+    {
+      "canonical": "METRC",
+      "variants": ["metric"],
+      "context": ["distru", "compliance", "license", "manifest", "transfer", "track and trace", "seed to sale", "cannabis", "dispensary", "biotrack"]
+    },
+    {
+      "canonical": "Eaze",
+      "variants": ["ease"],
+      "context": ["dispensary", "delivery", "menu", "cannabis", "integration", "marketplace", "eaze"]
+    },
+    {
+      "canonical": "Stiiizy",
+      "variants": ["stisy", "stizzy", "stiizy", "stiizzy", "steezy", "stizy"],
+      "context": []
+    },
+    {
+      "canonical": "BioTrack",
+      "variants": ["biotrac", "bio track", "bio trac", "biotrack"],
+      "context": []
+    },
+    {
+      "canonical": "myrcene",
+      "variants": ["micrine", "mercene", "myrcine", "mer scene", "mur scene"],
+      "context": []
+    }
+  ]
+}

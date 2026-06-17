@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>content.js unique-selector harness</title>
+</head>
+<body>
+  <!--
+    Loads the REAL extension/src/content.js with a stubbed chrome.runtime (the
+    pattern from learnings.md), auto-starts capture, programmatically clicks a set
+    of diverse elements, and self-checks every emitted selector: it must resolve to
+    exactly ONE element, and that element must be the one we clicked. Results land
+    in window.__results for a driver (Playwright) to read.
+
+    Serve over HTTP (Playwright MCP blocks file:):
+        python3 -m http.server 8123
+        → http://localhost:8123/tests/browser/selector-harness.html
+  -->
+
+  <!-- 1. unique id -->
+  <button id="save-btn">Save</button>
+
+  <!-- 2. test-id attribute, non-unique tag -->
+  <div data-testid="user-card">Card</div>
+
+  <!-- 3. name attribute -->
+  <input name="email-field" />
+
+  <!-- 4. three sibling divs with nothing distinguishing — needs :nth-of-type -->
+  <section id="siblings">
+    <div class="row">one</div>
+    <div class="row">two</div>
+    <div class="row" data-pick="row3">three</div>
+  </section>
+
+  <!-- 5. the real-world failure: bare svg/path inside a wrapper -->
+  <div class="chart-wrap">
+    <svg width="20" height="20"><path d="M0 0 L10 10" data-pick="the-path"></path></svg>
+  </div>
+
+  <!-- 6. deeply nested element with no ids on the way up -->
+  <main>
+    <article><ul><li><span data-pick="deep-span">deep</span></li></ul></article>
+  </main>
+
+  <script>
+    // --- chrome.runtime stub: collect timeline events, auto-start recording ---
+    window.__events = [];
+    window.chrome = {
+      runtime: {
+        onMessage: { addListener() {} },
+        sendMessage(msg, cb) {
+          if (msg && msg.type === "timeline-event") window.__events.push(msg.event);
+          // content.js asks "is-recording" on load; say yes so it self-attaches.
+          if (typeof cb === "function") cb({ recording: true });
+        },
+      },
+    };
+  </script>
+
+  <!-- 2. the code under test -->
+  <script src="../../extension/src/content.js"></script>
+
+  <script>
+    // --- 3. drive clicks and self-check the emitted selectors ----------------
+    function run() {
+      const targets = [
+        document.querySelector("#save-btn"),
+        document.querySelector('[data-testid="user-card"]'),
+        document.querySelector('input[name="email-field"]'),
+        document.querySelector('[data-pick="row3"]'),
+        document.querySelector('[data-pick="the-path"]'),
+        document.querySelector('[data-pick="deep-span"]'),
+      ];
+
+      const results = [];
+      for (const el of targets) {
+        const before = window.__events.length;
+        // dispatchEvent (not el.click()) so SVG elements work too — SVGElement has
+        // no .click(). content.js listens on document in the capture phase.
+        el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        const ev = window.__events[before]; // the event this click produced
+        const sel = ev && ev.selector;
+        let matches = [];
+        try { matches = Array.from(document.querySelectorAll(sel)); } catch (e) { matches = []; }
+        results.push({
+          tag: el.tagName.toLowerCase(),
+          selector: sel,
+          unique: matches.length === 1,
+          identifiesTarget: matches.length === 1 && matches[0] === el,
+        });
+      }
+      window.__results = {
+        clicks: window.__events.filter((e) => e.kind === "click").length,
+        results,
+        allUnique: results.every((r) => r.unique),
+        allIdentify: results.every((r) => r.identifiesTarget),
+      };
+      // Render for eyeballing too.
+      const pre = document.createElement("pre");
+      pre.id = "out";
+      pre.textContent = JSON.stringify(window.__results, null, 2);
+      document.body.appendChild(pre);
+    }
+    // content.js attaches its click listener synchronously on the is-recording
+    // reply, but give the event loop one tick to be safe.
+    setTimeout(run, 50);
+  </script>
+</body>
+</html>

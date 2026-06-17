@@ -1,0 +1,15 @@
+{"t":0,"type":"meta","href":"https://admin.acme.example.com/login","width":1440,"height":900}
+{"t":2500,"type":"click","selector":"#email","x":620,"y":318}
+{"t":3400,"type":"input","selector":"#email","redacted":true}
+{"t":4200,"type":"input","selector":"#password","redacted":true,"secret":true}
+{"t":5000,"type":"click","selector":"button[type=submit]","text":"Sign in","x":620,"y":402}
+{"t":6800,"type":"navigate","href":"https://admin.acme.example.com/dashboard"}
+{"t":9500,"type":"click","selector":"#order-search","x":300,"y":120}
+{"t":10300,"type":"input","selector":"#order-search","value":"ORD-48213"}
+{"t":11000,"type":"keydown","key":"Enter"}
+{"t":12500,"type":"navigate","href":"https://admin.acme.example.com/orders/ORD-48213"}
+{"t":16000,"type":"click","selector":"#issue-refund","text":"Issue refund","x":1080,"y":240}
+{"t":18000,"type":"click","selector":"input[name=refund-type][value=full]","x":480,"y":520}
+{"t":19500,"type":"input","selector":"#refund-reason","value":"Customer received damaged item"}
+{"t":21000,"type":"click","selector":"#confirm-refund","text":"Confirm refund","x":700,"y":640}
+{"t":22500,"type":"navigate","href":"https://admin.acme.example.com/orders/ORD-48213?refunded=1"}

@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 13px system-ui, sans-serif; width: 260px; margin: 0; padding: 12px; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      button { font: inherit; padding: 6px 10px; margin: 2px 0; cursor: pointer; width: 100%; }
+      #rec { background: #c0392b; color: #fff; border: none; border-radius: 4px; }
+      #stop { background: #2c3e50; color: #fff; border: none; border-radius: 4px; }
+      .row { display: flex; gap: 6px; }
+      .row button { flex: 1; }
+      label { display: block; margin: 10px 0 4px; color: #555; }
+      label.check { display: flex; align-items: center; gap: 6px; margin: 6px 0 2px; }
+      label.check input { width: auto; }
+      textarea { width: 100%; box-sizing: border-box; font: 12px monospace; }
+      #status { margin-top: 8px; color: #777; min-height: 16px; }
+      .hint { color: #999; font-size: 11px; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Browser Activity Capture</h1>
+    <button id="rec">● Start recording this tab</button>
+    <label class="check"><input type="checkbox" id="mic" checked /> Record microphone (narration)</label>
+    <div id="micState" class="hint"></div>
+    <button id="enableMic" hidden>Enable microphone…</button>
+    <div class="row" hidden id="live">
+      <button id="pause">Pause</button>
+      <button id="stop">■ Stop &amp; export</button>
+    </div>
+    <label for="blocklist">Never record on (one host per line)</label>
+    <textarea id="blocklist" rows="3" placeholder="mail.google.com&#10;bank.example.com"></textarea>
+    <div id="status"></div>
+    <div class="hint">A "this tab is being debugged" banner is expected — that's the network capture. Secrets are redacted before export.</div>
+    <script src="popup.js"></script>
+  </body>
+</html>

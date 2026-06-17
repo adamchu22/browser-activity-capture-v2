@@ -1,0 +1,16 @@
+WEBVTT
+
+00:00:01.200 --> 00:00:07.000
+Okay, I'm going to walk through how we issue a refund for a customer who received a damaged item.
+
+00:00:08.000 --> 00:00:13.500
+Now I search for the customer by their order ID. We always start from the order, never the customer record.
+
+00:00:14.000 --> 00:00:16.800
+I verify the order total and check the eligibility badge — refunds only allowed within 30 days.
+
+00:00:17.000 --> 00:00:21.000
+I select a full refund and add a reason so the finance team has context.
+
+00:00:23.500 --> 00:00:27.000
+And that's it — the customer gets an email confirmation automatically, no extra step needed.
