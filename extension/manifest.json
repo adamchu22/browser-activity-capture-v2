@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Browser Activity Capture",
-  "version": "0.1.0",
-  "description": "Record a browser task — narration, screen, timestamped clicks/keystrokes/navigation, and network — aligned on one clock and exported as a portable Capture Bundle.",
+  "name": "Browser Activity Capture v2",
+  "version": "0.2.0",
+  "description": "Record a browser task across ALL tabs — narration, full-screen video, timestamped clicks/keystrokes/navigation, and network — aligned on one clock and exported as a portable Capture Bundle.",
   "permissions": [
     "tabs",
     "activeTab",
@@ -11,7 +11,7 @@
     "downloads",
     "storage",
     "offscreen",
-    "tabCapture"
+    "desktopCapture"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

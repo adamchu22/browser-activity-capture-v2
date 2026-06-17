@@ -1,15 +1,19 @@
-// Offscreen document: records the captured tab's VIDEO plus the user's
+// Offscreen document: records the captured SCREEN/WINDOW video plus the user's
 // MICROPHONE to a single webm via MediaRecorder, then hands the result back to
 // the worker as a data URL. The worker drops it into the bundle as video.webm.
 //
-// Why the mic lives here: narration is one of the capture modalities, but
-// tabCapture only yields the tab's OWN audio (sound playing inside the page) —
-// never the microphone. So we open a second getUserMedia({audio:true}) stream
-// for the mic and merge its audio track with the tab's video track into one
-// MediaStream before recording. Both tracks are produced in the same context on
-// the same clock, so the narration in video.webm is aligned by construction —
-// a transcript (Whisper/Parakeet) drops straight onto t0. See ../docs/02-design.md
-// and ../extension/FIRST-CAPTURE.md.
+// v2: the video source is a desktopCapture stream (chromeMediaSource:"desktop"),
+// so the recording follows the user across every tab and window — not pinned to
+// one tab like v1's tabCapture. The worker picks the source via the screen picker
+// and hands us its streamId.
+//
+// Why the mic lives here: narration is one of the capture modalities, but the
+// desktop video stream carries no microphone. So we open a second
+// getUserMedia({audio:true}) stream for the mic and merge its audio track with the
+// screen video track into one MediaStream before recording. Both tracks are
+// produced in the same context on the same clock, so the narration in video.webm
+// is aligned by construction — a transcript (Whisper/Parakeet) drops straight onto
+// t0. See ../docs/02-design.md and ../extension/FIRST-CAPTURE.md.
 //
 // Permissions caveat: an MV3 offscreen document can't surface a mic permission
 // prompt itself, and there is no "audioCapture" extension permission (that's a
@@ -35,30 +39,32 @@ self.addEventListener("unhandledrejection", (e) => reportError(e.reason?.message
 
 chrome.runtime.onMessage.addListener(async (msg) => {
   if (msg.type === "offscreen-start") {
-    await startRecording(msg.streamId, msg.withMic !== false);
+    await startRecording(msg.streamId, msg.withMic !== false, msg.source || "desktop");
   }
   if (msg.type === "offscreen-stop") {
     stopRecording();
   }
 });
 
-async function startRecording(streamId, withMic) {
+async function startRecording(streamId, withMic, source) {
   chunks = [];
   streams = [];
   micRecorded = false;
   micError = withMic ? null : "mic not requested";
   const tracks = [];
 
-  // Tab video. Fatal if it fails — there's no recording without it.
+  // Screen/window video (v1 "tab" still supported for compatibility). Fatal if it
+  // fails — there's no recording without it.
+  const chromeMediaSource = source === "tab" ? "tab" : "desktop";
   try {
-    const tabStream = await navigator.mediaDevices.getUserMedia({
-      video: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
+    const videoStream = await navigator.mediaDevices.getUserMedia({
+      video: { mandatory: { chromeMediaSource, chromeMediaSourceId: streamId } },
     });
-    streams.push(tabStream);
-    tracks.push(...tabStream.getVideoTracks());
+    streams.push(videoStream);
+    tracks.push(...videoStream.getVideoTracks());
   } catch (e) {
-    console.warn("offscreen tab video capture failed:", e);
-    reportError("tab video capture failed: " + (e?.message || e), e?.stack);
+    console.warn("offscreen video capture failed:", e);
+    reportError("video capture failed: " + (e?.message || e), e?.stack);
     chrome.runtime.sendMessage({ type: "offscreen-video", dataUrl: null, mic: false, micError });
     return;
   }

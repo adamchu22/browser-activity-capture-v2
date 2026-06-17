@@ -43,13 +43,17 @@ $("rec").addEventListener("click", async () => {
     $("status").textContent = "Allow the mic in the tab that opened, then press Start again.";
     return;
   }
+  // Starting opens Chrome's screen picker, which may steal focus and close this
+  // popup — that's fine, the worker runs start() independently. `res` is only seen
+  // if the popup survives. Pick a screen/window in the picker to record video.
+  $("status").textContent = "Pick a screen/window in the picker to record…";
   const res = await send("start", { tabId: await activeTabId() });
   if (res && !res.ok) {
     $("status").textContent = res.error || "Couldn't start.";
     return;
   }
-  if (res && res.dom === false) {
-    $("status").textContent = "Recording (DOM stream off — reload the tab once).";
+  if (res && res.video === false) {
+    $("status").textContent = `Recording ${res.tabs} tab(s) without video (picker cancelled).`;
   }
   setTimeout(refresh, 200);
 });

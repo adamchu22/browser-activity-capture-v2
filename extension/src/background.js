@@ -5,6 +5,12 @@
 // construction — no post-hoc syncing. On stop it assembles the Capture Bundle
 // (the exact shape ../analyze/pack.py consumes) and downloads it as a zip.
 //
+// v2: capture is GLOBAL, not pinned to one tab. The screen video comes from a
+// desktopCapture stream (follows the user across tabs and windows), and the CDP
+// debugger + content script are attached to EVERY eligible tab — including tabs
+// opened mid-recording. Every event is tagged with its source tab so the merged
+// one-clock timeline stays disambiguable.
+//
 // Heavy third-party pieces are integration points, not reimplemented:
 //   - rrweb runs in the content script (raw DOM stream)
 //   - video is recorded in an offscreen document via MediaRecorder
@@ -18,7 +24,8 @@ const state = {
   recording: false,
   paused: false,
   t0: 0,
-  tabId: null,
+  tabIds: new Set(), // every tab we've attached the debugger + content script to
+  tabs: new Map(), // tabId -> { id, url, title } legend for the bundle
   blocklist: [], // hostnames we never record on
   har: new Map(), // requestId -> partial HAR entry
   frames: [], // { t, file, dataUrl }
@@ -62,9 +69,12 @@ function hostBlocked(url) {
 // ---- lifecycle -----------------------------------------------------------
 
 // Pages where content scripts, captureVisibleTab, and the debugger all fail.
-// Recording here can't work — refuse early with a clear reason instead of
-// half-starting and producing an empty bundle.
+// We skip these tabs instead of half-attaching and logging noise.
 const RESTRICTED = /^(chrome|edge|about|chrome-extension|devtools|view-source):|^https:\/\/chrome\.google\.com\/webstore/;
+
+function isEligible(tab) {
+  return !!(tab && tab.url && !RESTRICTED.test(tab.url));
+}
 
 // The content script is registered for new page loads, but a tab opened BEFORE
 // the extension loaded won't have it. Inject on demand so the first recording
@@ -88,13 +98,39 @@ async function ensureContentScript(tabId) {
   }
 }
 
-async function start(tabId) {
-  if (state.recording) return { ok: false, error: "Already recording." };
-
+// Attach the CDP debugger (for network) and the content script (for DOM/events)
+// to one tab. Idempotent — safe to call again for a tab we already track.
+async function instrumentTab(tabId) {
+  if (!state.recording || state.tabIds.has(tabId)) return;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!tab?.url || RESTRICTED.test(tab.url)) {
-    return { ok: false, error: "Can't record this page (browser/internal page). Open a normal website tab." };
+  if (!isEligible(tab)) return;
+  state.tabIds.add(tabId);
+  state.tabs.set(tabId, { id: tabId, url: tab.url, title: tab.title || "" });
+  state.urls.add(tab.url);
+
+  // CDP network capture (shows the per-tab "is being debugged" banner — by design).
+  try {
+    await chrome.debugger.attach({ tabId }, "1.3");
+    await chrome.debugger.sendCommand({ tabId }, "Network.enable");
+  } catch (e) {
+    logError("debugger", { message: `attach failed on tab ${tabId}: ${e?.message || e}`, stack: e?.stack });
   }
+
+  const injected = await ensureContentScript(tabId);
+  if (injected) chrome.tabs.sendMessage(tabId, { type: "start" }).catch(() => {});
+}
+
+async function uninstrumentTab(tabId) {
+  if (!state.tabIds.has(tabId)) return;
+  state.tabIds.delete(tabId);
+  chrome.tabs.sendMessage(tabId, { type: "stop" }).catch(() => {});
+  try {
+    await chrome.debugger.detach({ tabId });
+  } catch {}
+}
+
+async function start(triggerTabId) {
+  if (state.recording) return { ok: false, error: "Already recording." };
 
   const { blocklist, micEnabled } = await getSettings();
   await db.clearAll();
@@ -102,7 +138,8 @@ async function start(tabId) {
     recording: true,
     paused: false,
     t0: Date.now(),
-    tabId,
+    tabIds: new Set(),
+    tabs: new Map(),
     blocklist,
     har: new Map(),
     frames: [],
@@ -110,35 +147,38 @@ async function start(tabId) {
     errors: [],
   });
 
-  // CDP network capture (shows the "is being debugged" banner — by design).
-  try {
-    await chrome.debugger.attach({ tabId }, "1.3");
-    await chrome.debugger.sendCommand({ tabId }, "Network.enable");
-  } catch (e) {
-    console.warn("debugger attach failed (network capture disabled):", e);
+  // Pick the screen/window to record (full-screen video that follows the user
+  // across tabs). If the user cancels the picker, keep going data-only.
+  const hasVideo = await startVideo(micEnabled);
+
+  // Instrument every eligible tab across all windows. New tabs opened during the
+  // recording are picked up by the tabs.onUpdated listener below.
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (isEligible(tab)) await instrumentTab(tab.id);
   }
 
-  await startVideo(tabId, micEnabled);
-  const injected = await ensureContentScript(tabId);
-  if (injected) chrome.tabs.sendMessage(tabId, { type: "start" }).catch(() => {});
   await captureFrame("recording started");
   setBadge("REC");
-  return { ok: true, network: true, dom: injected };
+  return { ok: true, video: hasVideo, tabs: state.tabIds.size };
 }
 
 async function stop() {
   if (!state.recording) return;
   state.recording = false;
-  const tabId = state.tabId;
 
-  chrome.tabs.sendMessage(tabId, { type: "stop" });
+  for (const tabId of state.tabIds) {
+    chrome.tabs.sendMessage(tabId, { type: "stop" }).catch(() => {});
+    try {
+      await chrome.debugger.detach({ tabId });
+    } catch {}
+  }
+  state.tabIds.clear();
+
   const video = await stopVideo();
   if (video?.micError && video.micError !== "mic not requested") {
     logError("offscreen-mic", { message: video.micError });
   }
-  try {
-    await chrome.debugger.detach({ tabId });
-  } catch {}
 
   // MV3 service workers have no URL.createObjectURL, so we hand chrome.downloads
   // a base64 data: URL built from the zip bytes instead of a blob URL.
@@ -170,6 +210,17 @@ function setBadge(text) {
   chrome.action.setBadgeBackgroundColor({ color: "#c0392b" });
 }
 
+// Follow the user across tabs: instrument any tab that starts loading a real URL
+// while we're recording (covers brand-new tabs and navigations to eligible pages),
+// and drop tabs as they close.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!state.recording) return;
+  if (changeInfo.status === "loading" && isEligible(tab)) instrumentTab(tabId);
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (state.recording) uninstrumentTab(tabId);
+});
+
 // ---- frames --------------------------------------------------------------
 
 async function captureFrame(reason = "") {
@@ -188,13 +239,14 @@ async function captureFrame(reason = "") {
 // ---- network (CDP -> HAR) ------------------------------------------------
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
-  if (source.tabId !== state.tabId || !state.recording) return;
+  if (!state.recording || !state.tabIds.has(source.tabId)) return;
 
   if (method === "Network.requestWillBeSent") {
     const { request, requestId, timestamp } = params;
     if (hostBlocked(request.url)) return;
     state.urls.add(request.url);
     state.har.set(requestId, {
+      _tab: source.tabId,
       _t: now(),
       startedDateTime: new Date().toISOString(),
       _start: timestamp,
@@ -228,6 +280,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       url: entry.request.url,
       status: r.status,
       ms: entry.time,
+      tab: entry._tab,
     });
   }
 });
@@ -249,18 +302,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "timeline-event") {
-    const e = msg.event;
+    // Tag every event with its source tab so the merged one-clock timeline stays
+    // disambiguable across tabs. The content script doesn't know its own tabId;
+    // the worker reads it from the message sender.
+    const tabId = sender.tab?.id;
+    const e = { ...msg.event, tab: tabId };
     appendTimeline(e);
+    if (e.kind === "nav" && tabId != null) {
+      state.urls.add(e.url);
+      const info = state.tabs.get(tabId);
+      if (info) info.url = e.url; // keep the tab legend current as the user navigates
+    }
     // Grab a frame on clicks, navigations, and pointer dwells — the moments
     // worth seeing. captureVisibleTab is rate-limited by Chrome (~1/s) and
     // hovers are deduped per element, so dwell frames can't flood the bundle.
     if (e.kind === "click" || e.kind === "nav" || e.kind === "hover") {
-      if (e.kind === "nav") state.urls.add(e.url);
       captureFrame(e.kind);
     }
   }
   if (msg.type === "rrweb-event") {
-    if (state.recording && !state.paused) db.append("rrweb", { t: now(), node: msg.node });
+    if (state.recording && !state.paused) db.append("rrweb", { t: now(), node: msg.node, tab: sender.tab?.id });
   }
   if (msg.type === "capture-error") {
     logError(msg.where || "unknown", { message: msg.message, stack: msg.stack });
@@ -291,17 +352,42 @@ async function ensureOffscreen() {
   await chrome.offscreen.createDocument({
     url: "src/offscreen.html",
     reasons: ["USER_MEDIA"],
-    justification: "Record the captured tab's video and the user's microphone narration via MediaRecorder.",
+    justification: "Record the chosen screen/window and the user's microphone narration via MediaRecorder.",
   });
 }
 
-async function startVideo(tabId, withMic) {
+// Show Chrome's screen/window/tab picker and resolve with a single-use streamId
+// the offscreen doc consumes via getUserMedia(chromeMediaSource:"desktop"). Called
+// with no targetTab (2-arg form) so the streamId is consumable by our own offscreen
+// document — the pattern from Chrome's offscreen screen-recording sample.
+function chooseDesktopStream() {
+  return new Promise((resolve) => {
+    try {
+      chrome.desktopCapture.chooseDesktopMedia(["screen", "window", "tab"], (streamId) =>
+        resolve(streamId || null)
+      );
+    } catch (e) {
+      logError("desktopCapture", { message: e?.message || String(e), stack: e?.stack });
+      resolve(null);
+    }
+  });
+}
+
+// Returns true if a video recording started. If the user cancels the picker we
+// continue data-only (clicks/network/DOM still record) rather than abort.
+async function startVideo(withMic) {
   try {
     await ensureOffscreen();
-    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
-    chrome.runtime.sendMessage({ type: "offscreen-start", streamId, withMic });
+    const streamId = await chooseDesktopStream();
+    if (!streamId) {
+      logError("desktopCapture", { message: "screen picker cancelled — recording without video" });
+      return false;
+    }
+    chrome.runtime.sendMessage({ type: "offscreen-start", streamId, withMic, source: "desktop" });
+    return true;
   } catch (e) {
-    console.warn("video capture unavailable:", e);
+    logError("desktopCapture", { message: "video capture unavailable: " + (e?.message || e), stack: e?.stack });
+    return false;
   }
 }
 
@@ -333,11 +419,15 @@ async function assembleBundle(video) {
   const duration = timeline.length ? timeline[timeline.length - 1].t : now();
 
   const manifest = {
-    bundle_version: "0.1",
+    bundle_version: "0.2",
     capture_id: `capture-${new Date(state.t0).toISOString()}`,
     t0_wall: new Date(state.t0).toISOString(),
     duration_ms: duration,
     sync_mode: "self_record",
+    // v2: video is a full screen/window recording that spans every tab; events
+    // carry a `tab` id and this legend maps each id to its page.
+    capture_scope: "all_tabs",
+    tabs: [...state.tabs.values()],
     video: videoDataUrl ? "video.webm" : null,
     // Whether video.webm contains the user's microphone narration (mixed in on
     // the same clock). If true, transcribing video.webm yields t0-aligned cues.
@@ -348,7 +438,7 @@ async function assembleBundle(video) {
     narration_error: narrationInVideo ? null : (video?.micError || null),
     transcript: "transcript.vtt",
     browser: { name: "Chrome", version: navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] || "?" },
-    tool_versions: { extension: "0.1.0", rrweb: "2.0.0" },
+    tool_versions: { extension: "0.2.0", rrweb: "2.0.0" },
     urls_visited: [...state.urls],
     redaction: {
       policy: "mask_secrets_and_auth",
@@ -370,7 +460,7 @@ async function assembleBundle(video) {
       version: "1.2",
       creator: { name: "browser-activity-capture", version: "0.1.0" },
       comment: `t0_wall=${manifest.t0_wall}. Auth headers and cookies redacted before write.`,
-      entries: [...state.har.values()].map(({ _t, _start, ...e }) => e),
+      entries: [...state.har.values()].map(({ _t, _start, _tab, ...e }) => e),
     },
   };
 
