@@ -1,6 +1,31 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-17 (v2 capture rework built, not yet live-verified)_
+_Last updated: 2026-06-17 (v2 live-verified end-to-end; entire-screen + app-switch run in progress)_
+
+## ⏳ In progress — read first (chat was cleared after this was written)
+
+Adam reloaded the extension and is running a **new live test**: capture the **Entire
+Screen** (not a window) and **switch to a different application** (outside the browser)
+mid-recording. He will then **give feedback on the browser tool itself** — that
+feedback is NOT yet recorded here; capture it when he gives it (placeholder in
+`to-do-current.md`).
+
+**What to expect from this run (so you can interpret the bundle correctly):**
+- A **new bundle in `outputs/`** to validate. With the redaction fixes now committed
+  (commits `8aa428c`/`25ae868`), it should be the second clean **`validate_bundle.py`
+  PASS** — confirm it, and confirm `video.webm` is present.
+- **Video (`video.webm`) will show the WHOLE screen, including the other application**
+  — entire-screen `getDisplayMedia` records everything on the monitor, browser or not.
+- **Structured capture only covers browser tabs.** DOM (rrweb), clicks, and CDP
+  network exist ONLY for instrumented browser tabs. While Adam is in the other app,
+  expect a **gap** in `timeline.json`/`events.jsonl` (little/no events) — that's
+  expected, not a bug. The video is the only record of the non-browser app.
+- **Frames during the app-switch may be stale/absent:** `captureVisibleTab` grabs the
+  active *browser* tab; with another app focused it can fail or return the last tab.
+  Again, the video covers that window; the frames don't.
+- **Privacy note:** video pixels are NOT redacted (only the structured DOM/network is).
+  An entire-screen recording can capture other apps, notifications, secrets on screen.
+  This is inherent to screen recording — flag it if Adam's feedback touches on it.
 
 ## What this is
 

@@ -8,6 +8,11 @@ run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v
 
 ## Now (in order)
 
+- [ ] **⏳ AWAITING ADAM'S FEEDBACK on the browser tool** (from the entire-screen +
+      app-switch run; chat was cleared so it isn't captured yet). When he gives it,
+      record it here verbatim and act on it. Also validate the new `outputs/` bundle
+      from that run (expect `validate_bundle.py` PASS + `video.webm`; a timeline gap
+      while he's in the non-browser app is expected — see handoff "In progress").
 - [x] ~~**Live test, run 1** (2026-06-17)~~ — multi-tab instrumentation (RISK 2)
       **passed**; screen picker (RISK 1) **failed** and a `?jwt=` URL token leaked.
       Both fixed in code (see below). See `learnings.md`.
