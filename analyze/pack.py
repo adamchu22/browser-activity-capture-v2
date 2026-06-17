@@ -114,13 +114,20 @@ def _collapsed_line(run: list[dict]) -> str:
     return f"- `{t}`  ⋯ {n} low-signal request{'s' if n != 1 else ''} collapsed · {shown}"
 
 
-def render_timeline(events: list[dict], blocklist: list[str] | None = None) -> str:
+def render_timeline(events: list[dict], blocklist: list[str] | None = None,
+                    tab_labels: dict | None = None) -> str:
     """One readable line per event. Consecutive low-signal network pings (analytics,
     ads, trackers) are collapsed into a single summary line so the timeline stays
-    readable; pass blocklist=None to render everything verbatim."""
+    readable; pass blocklist=None to render everything verbatim. When the capture
+    spans multiple tabs (tab_labels has >1 entry), a marker line is emitted each
+    time the active tab changes, so the merged one-clock timeline reads as the user
+    moving between tabs."""
     blocklist = blocklist or []
+    tab_labels = tab_labels or {}
+    multi_tab = len(tab_labels) > 1
     lines = []
     run: list[dict] = []  # accumulating consecutive low-signal network events
+    current_tab = None
 
     def flush():
         if run:
@@ -134,6 +141,11 @@ def render_timeline(events: list[dict], blocklist: list[str] | None = None) -> s
             continue
         flush()
         t = ms(e.get("t", 0))
+        # Mark a tab switch so a multi-tab recording reads in order.
+        tab = e.get("tab")
+        if multi_tab and tab is not None and tab in tab_labels and tab != current_tab:
+            current_tab = tab
+            lines.append(f"- `{t}`  ━━━ tab {tab_labels[tab]} ━━━")
         kind = e.get("kind", "?")
         if kind == "nav":
             body = f"→ navigate {e.get('url','')}"
@@ -201,6 +213,16 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     if dropped:
         urls_block += f"\n- _({dropped} low-signal URL(s) hidden)_"
 
+    # Multi-tab legend (v2 bundles). Map each tab id to a short ordinal (#1, #2…)
+    # used both here and as the timeline's tab-switch markers.
+    tabs = manifest.get("tabs", [])
+    tab_labels = {t["id"]: f"#{i + 1}" for i, t in enumerate(tabs) if "id" in t}
+    tabs_block = ""
+    if len(tabs) > 1:
+        rows = [f"- **#{i + 1}** {t.get('url', '')}" + (f" — {t['title']}" if t.get("title") else "")
+                for i, t in enumerate(tabs)]
+        tabs_block = "\n## Tabs (recorded in parallel)\n" + "\n".join(rows) + "\n"
+
     frames = manifest.get("frames", [])
     frame_index = "\n".join(f"- `{ms(f['t'])}` → `frames/{Path(f['file']).name}`" for f in frames)
 
@@ -222,12 +244,12 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
 
 Captured {manifest.get('t0_wall','?')} · duration {manifest.get('duration_ms','?')} ms ·
 sync mode `{manifest.get('sync_mode','?')}`. Secrets redacted as `‹redacted›`.
-{issues_block}
+{issues_block}{tabs_block}
 ## URLs visited
 {urls_block}
 
 ## Timeline (one clock, ms since t0)
-{render_timeline(timeline, blocklist)}
+{render_timeline(timeline, blocklist, tab_labels)}
 
 ## Narration (transcript)
 ```
