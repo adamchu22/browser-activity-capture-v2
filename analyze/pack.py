@@ -237,6 +237,15 @@ def input_label(e: dict) -> str:
     return f'"{ctx["name"]}"' if ctx.get("name") else e.get("selector", "")
 
 
+def _draw_region(e: dict) -> str:
+    """A short '@(x%,y%) w×h%' summary of a freeform Draw annotation's bounding box,
+    so the region the user highlighted reads at a glance. Empty if no bbox."""
+    b = e.get("bbox") or {}
+    if not b or b.get("xpct") is None:
+        return ""
+    return f"@({b.get('xpct')}%,{b.get('ypct')}%) {b.get('wpct')}×{b.get('hpct')}%"
+
+
 def _collapsed_line(run: list[dict]) -> str:
     """One summary line standing in for a run of collapsed low-signal requests."""
     t = ms(run[0].get("t", 0))
@@ -299,6 +308,12 @@ def render_timeline(events: list[dict], blocklist: list[str] | None = None,
             body = f"{e.get('method','')} {e.get('url','')} → {e.get('status','')} ({e.get('ms','?')}ms)"
             if e.get("request_body"):
                 body += f"  body={json.dumps(e['request_body'])}"
+        elif kind == "annotation:select":
+            # The user pointed at THIS element to align with the analyst.
+            body = f"✦ marked {action_label(e)}  [{e.get('selector','')}]" + pos(e)
+        elif kind == "annotation:draw":
+            region = _draw_region(e)
+            body = "✦ drew on screen" + (f" · {region}" if region else "")
         else:
             body = json.dumps({k: v for k, v in e.items() if k != "t"})
         frame = f"   {{frame: {e['frame']}}}" if e.get("frame") else ""
@@ -405,6 +420,11 @@ def render_steps(events: list[dict], blocklist: list[str] | None = None,
                 out.append(f"- type into {input_label(e)} = {e.get('value', '')}")
             elif k == "key":
                 out.append(f"- press {e.get('key', '')}")
+            elif k == "annotation:select":
+                out.append(f"- ✦ marked {action_label(e)}{_frame_ref(e, frames)}")
+            elif k == "annotation:draw":
+                region = _draw_region(e)
+                out.append(f"- ✦ drew on screen{(' · ' + region) if region else ''}{_frame_ref(e, frames)}")
             elif k == "network":
                 if blocklist and is_low_signal(e.get("url", ""), blocklist):
                     net_collapsed += 1
@@ -423,42 +443,86 @@ def _esc(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+def _point_card(e: dict, frames: list[dict], kind: str) -> str:
+    """A frame card with a ring at the %coords + (when known) the element's box. Used
+    for click/hover and for annotation:select (drawn in blue, the tool's colour)."""
+    if e.get("xpct") is None or e.get("ypct") is None:
+        return ""
+    f = nearest_frame(e.get("t", 0), frames)
+    if not f:
+        return ""
+    ctx = e.get("ctx") or {}
+    label = ctx.get("name") or e.get("label") or e.get("selector", "")
+    role = ctx.get("role", "")
+    x, y = e["xpct"], e["ypct"]
+    sel = kind == "annotation:select"
+    cls = " sel" if sel else ""  # blue, to match the in-extension Select tool
+    box = ""
+    rect, vp = e.get("rect"), e.get("viewport")
+    if rect and vp and vp.get("w") and vp.get("h"):
+        bx, by = rect["x"] / vp["w"] * 100, rect["y"] / vp["h"] * 100
+        bw, bh = rect["w"] / vp["w"] * 100, rect["h"] / vp["h"] * 100
+        box = f'<div class="box{cls}" style="left:{bx:.1f}%;top:{by:.1f}%;width:{bw:.1f}%;height:{bh:.1f}%"></div>'
+    caption_kind = "✦ marked" if sel else _esc(kind)
+    return (
+        f'<figure>\n'
+        f'  <figcaption><code>{ms(e.get("t",0))}</code> · {caption_kind} '
+        f'<b>{_esc(label)}</b>{(" (" + _esc(role) + ")") if role else ""}</figcaption>\n'
+        f'  <div class="shot">\n'
+        f'    <img src="{_esc(f)}" loading="lazy" alt="{_esc(label)}">\n'
+        f'    {box}\n'
+        f'    <div class="dot{cls}" style="left:{x}%;top:{y}%"></div>\n'
+        f'  </div>\n'
+        f'</figure>'
+    )
+
+
+def _draw_card(e: dict, frames: list[dict]) -> str:
+    """A frame card with the freeform Draw stroke traced over it as an SVG polyline.
+    The stroke points are %coords (0–100) so a viewBox of 0 0 100 100 with
+    preserveAspectRatio=none maps them straight onto the screenshot at any size."""
+    pts = e.get("points") or []
+    if len(pts) < 2:
+        return ""
+    f = nearest_frame(e.get("t", 0), frames)
+    if not f:
+        return ""
+    poly = " ".join(f'{p.get("xpct", 0)},{p.get("ypct", 0)}' for p in pts)
+    region = _draw_region(e)
+    svg = (
+        '<svg class="ink" viewBox="0 0 100 100" preserveAspectRatio="none">'
+        f'<polyline points="{poly}" fill="none" stroke="#0a84ff" stroke-width="3" '
+        'stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>'
+        '</svg>'
+    )
+    return (
+        f'<figure>\n'
+        f'  <figcaption><code>{ms(e.get("t",0))}</code> · ✦ drew on screen'
+        f'{(" · " + _esc(region)) if region else ""}</figcaption>\n'
+        f'  <div class="shot">\n'
+        f'    <img src="{_esc(f)}" loading="lazy" alt="freeform drawing">\n'
+        f'    {svg}\n'
+        f'  </div>\n'
+        f'</figure>'
+    )
+
+
 def build_annotated_frames_html(events: list[dict], frames: list[dict]) -> str:
-    """The 'draw on screen' view: each click/hover frame with a marker drawn on the
-    targeted element — a ring at the click %coords and (when known) the element's
-    bounding box. Pure HTML/CSS layered over the copied frames/ PNGs; open it in a
-    browser. Returns '' if there's nothing to annotate."""
+    """The 'draw on screen' view: each click/hover/annotation frame with its marker
+    drawn on top — a ring + element box for clicks/hovers/selections, the traced
+    stroke for a freeform draw. Pure HTML/CSS/SVG layered over the copied frames/
+    PNGs; open it in a browser. Returns '' if there's nothing to annotate."""
     cards = []
     for e in events:
-        if e.get("kind") not in ("click", "hover"):
+        kind = e.get("kind")
+        if kind in ("click", "hover", "annotation:select"):
+            card = _point_card(e, frames, kind)
+        elif kind == "annotation:draw":
+            card = _draw_card(e, frames)
+        else:
             continue
-        if e.get("xpct") is None or e.get("ypct") is None:
-            continue
-        f = nearest_frame(e.get("t", 0), frames)
-        if not f:
-            continue
-        ctx = e.get("ctx") or {}
-        label = ctx.get("name") or e.get("label") or e.get("selector", "")
-        role = ctx.get("role", "")
-        x, y = e["xpct"], e["ypct"]
-        # Optional element box, as % of the viewport/screenshot.
-        box = ""
-        rect, vp = e.get("rect"), e.get("viewport")
-        if rect and vp and vp.get("w") and vp.get("h"):
-            bx, by = rect["x"] / vp["w"] * 100, rect["y"] / vp["h"] * 100
-            bw, bh = rect["w"] / vp["w"] * 100, rect["h"] / vp["h"] * 100
-            box = f'<div class="box" style="left:{bx:.1f}%;top:{by:.1f}%;width:{bw:.1f}%;height:{bh:.1f}%"></div>'
-        cards.append(
-            f'<figure>\n'
-            f'  <figcaption><code>{ms(e.get("t",0))}</code> · {_esc(e.get("kind"))} '
-            f'<b>{_esc(label)}</b>{(" (" + _esc(role) + ")") if role else ""}</figcaption>\n'
-            f'  <div class="shot">\n'
-            f'    <img src="{_esc(f)}" loading="lazy" alt="{_esc(label)}">\n'
-            f'    {box}\n'
-            f'    <div class="dot" style="left:{x}%;top:{y}%"></div>\n'
-            f'  </div>\n'
-            f'</figure>'
-        )
+        if card:
+            cards.append(card)
     if not cards:
         return ""
     return (
@@ -474,6 +538,11 @@ def build_annotated_frames_html(events: list[dict], frames: list[dict]) -> str:
         ".dot{position:absolute;width:18px;height:18px;margin:-9px 0 0 -9px;border:3px solid #e11;"
         "border-radius:50%;box-shadow:0 0 0 2px #fff,0 0 6px rgba(0,0,0,.5)}\n"
         ".box{position:absolute;border:2px solid rgba(225,17,17,.7);background:rgba(225,17,17,.08)}\n"
+        # annotation:select is drawn in blue (the in-extension Select tool's colour);
+        # the freeform draw stroke is an absolutely-positioned SVG over the shot.
+        ".dot.sel{border-color:#0a84ff}\n"
+        ".box.sel{border-color:rgba(10,132,255,.8);background:rgba(10,132,255,.10)}\n"
+        ".ink{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}\n"
         "</style></head><body>\n"
         "<h1>Annotated frames — where each action landed</h1>\n"
         f"<div class='grid'>\n{chr(10).join(cards)}\n</div>\n</body></html>\n"
@@ -556,11 +625,39 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     purpose_block = render_purpose(manifest.get("purposes", []))
     purpose_block = ("\n" + purpose_block) if purpose_block else ""
 
+    # Annotations — the elements/regions the user EXPLICITLY marked mid-recording
+    # (Selector = "I mean this exact element"; Draw = "this area"). Pulled out into
+    # their own section so this high-signal intent is easy to find, not buried in the
+    # timeline. Each points at the frame captured when the mark was made.
+    anno_lines = []
+    for e in timeline:
+        k = e.get("kind")
+        if k not in ("annotation:select", "annotation:draw"):
+            continue
+        fr = nearest_frame(e.get("t", 0), frames)
+        frref = f" → `frames/{Path(fr).name}`" if fr else ""
+        if k == "annotation:select":
+            anno_lines.append(
+                f"- `{ms(e.get('t', 0))}` selected {action_label(e)}  "
+                f"`[{e.get('selector', '')}]`{pos(e)}{frref}"
+            )
+        else:
+            region = _draw_region(e)
+            anno_lines.append(
+                f"- `{ms(e.get('t', 0))}` drew on screen{(' · ' + region) if region else ''}{frref}"
+            )
+    annotations_block = (
+        "\n## ✦ Annotations (what the user explicitly marked)\n"
+        "_Selector = the exact element the user means (agree on this); Draw = a freeform "
+        "region they highlighted. See `frames-annotated.html` to view them drawn on the page._\n"
+        + "\n".join(anno_lines) + "\n"
+    ) if anno_lines else ""
+
     return f"""# Analysis context — {manifest.get('capture_id', bundle.name)}
 {task_block}{purpose_block}
 Captured {manifest.get('t0_wall','?')} · duration {manifest.get('duration_ms','?')} ms ·
 sync mode `{manifest.get('sync_mode','?')}`. Secrets redacted as `‹redacted›`.
-{issues_block}{tabs_block}
+{issues_block}{tabs_block}{annotations_block}
 ## URLs visited
 {urls_block}
 
@@ -584,7 +681,8 @@ are what they did. See the raw timeline below for full detail (hovers, every req
 ## Frames
 Screenshots at key moments — open these from the pack's `frames/` directory.
 Open **`frames-annotated.html`** to see each click/hover drawn on the page (a ring at
-the click point + the element's box).
+the click point + the element's box), plus the user's annotations — selected elements
+boxed in blue, freeform drawings traced in blue.
 {frame_index or '- (none)'}
 
 ---
