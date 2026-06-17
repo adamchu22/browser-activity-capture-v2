@@ -29,6 +29,23 @@ Asked "what would make this 10x better at conveying user intent?", built the bin
 - Updated `analyze/BRIEF.md` so the consuming agent uses the task/steps/tabs/annotated
   frames. 61 unit tests green (+ harness for the DOM capture).
 
+## 2026-06-17 — self-driving pack: bundled skills + UI-change capability
+
+- **Post-transfer consumption skill.** Each pack now ships
+  `agent-skills/analyze-capture/SKILL.md` — the procedure a receiving agent follows
+  (read purpose → narration → identify → analyze under the lens → produce outputs).
+  The pack README tells a coding agent to read it first. The pack is now self-driving,
+  not reliant on prose.
+- **UI-change capability + preloaded-skills mechanism.** Seed skill
+  `agent-skills/ui-improvement/SKILL.md` turns observed friction into concrete UI
+  changes and — when the app's source is available — locates the element by the
+  captured selector and implements the change, then verifies. New **"Propose UI
+  changes"** purpose (distinct from UX feedback: prescribe/apply vs. diagnose) →
+  `ui-changes.md`. `build_pack` bundles `analyze-capture` always + skills mapped to the
+  purpose via `SKILLS_FOR_PURPOSE`. **Extend by dropping a skill into
+  `analyze/skills/<name>/` and adding a purpose→skill mapping** — Adam can add more
+  activity skills (UI or otherwise) and they travel with the pack.
+
 ## 2026-06-17 — v2 capture rework (built, pending live verification)
 
 - **Forked v1 as the v2 baseline.** Verbatim copy of the working v1 tool into this

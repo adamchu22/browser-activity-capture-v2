@@ -4,6 +4,25 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (self-driving pack — ship the consumption skill with the data)
+
+- **A portable artifact should carry its own instructions as a loadable skill, not
+  just prose.** The pack now bundles `agent-skills/analyze-capture/SKILL.md` (the
+  read-order + analyze-under-the-purpose procedure) so a receiving agent is told how to
+  use the pack without external context — matches the project's self-contained-bundle
+  ethos. BRIEF.md remains the neutral output spec for chat-LLM paste.
+- **Purpose → bundled activity skills is the extension point.** `SKILLS_FOR_PURPOSE`
+  maps a capture purpose to skills copied into the pack (e.g. ux/ui → `ui-improvement`).
+  Adding a capability = drop `analyze/skills/<name>/SKILL.md` + a mapping; it then
+  travels with every pack of that purpose. Keep the shipped skills in `agent-skills/`
+  separate from the agent's OUTPUT `skills/<name>/` to avoid collision.
+- **"Make UI changes" = give the agent the capture's selectors as the bridge to code.**
+  The capture already records a unique selector + accessible name per element; the
+  ui-improvement skill tells the agent to grep the app's source for that
+  id/test-id/text to find the component, implement the smallest fix for the observed
+  friction, and verify — turning observation into an applied change. _(Cross-project
+  candidate for the LLM Wiki.)_
+
 ## 2026-06-17 (intent capture — bind and structure, don't add raw signal)
 
 - **The 10x for the analyzing model isn't more raw data — it's binding + structure.**

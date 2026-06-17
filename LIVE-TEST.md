@@ -69,6 +69,11 @@ Then open **`pack/frames-annotated.html`** in a browser: each click/hover frame 
 show a red ring on the spot you clicked and a box around the element. (Confirms the
 captured coordinates + element rect line up with what was on screen.)
 
+Also confirm the pack is self-driving: `pack/agent-skills/analyze-capture/SKILL.md`
+exists, plus `ui-improvement` if you picked a UX/UI purpose. Point a coding agent at
+the pack and tell it to read that skill first — it should produce the outputs your
+purpose named.
+
 ## If the picker never shows (RISK 1 fallback)
 
 `chrome.desktopCapture.chooseDesktopMedia` is called from the service worker

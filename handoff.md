@@ -13,6 +13,13 @@ attaches the CDP debugger + content script to every eligible tab, including tabs
 opened mid-recording. Events are tagged with their source tab; `pack.py` renders a
 tab legend + tab-switch markers.
 
+**Self-driving pack** — the analysis pack now ships the skills a receiving agent
+uses, in `agent-skills/`: `analyze-capture` (the consumption procedure — read it
+first) always, plus activity skills mapped to the recording's purpose. The seed
+`ui-improvement` skill turns friction into concrete UI changes and *implements* them
+when the app's source is present. Extend by adding a skill to `analyze/skills/<name>/`
+and a `SKILLS_FOR_PURPOSE` mapping in `pack.py`.
+
 **Intent capture** — to make the bundle 10x more legible to the analyzing model:
 a stated **task goal**; a required **purpose** (skill / docs / ux / improve / general)
 that renders a steer block at the top of context.md so the *same* recording yields a
@@ -50,9 +57,9 @@ v2, run `LIVE-TEST.md`. Two highest-risk unknowns it checks:
 
 ## Tests
 
-`python3 -m unittest discover -s tests` — 61 tests (glossary, network-noise collapse,
-multi-tab rendering, semantic labels + step segmentation + frame annotation). Stdlib
-only. The content.js unique-selector AND semantic-context (`describe()`) logic is
+`python3 -m unittest discover -s tests` — 68 tests (glossary, network-noise collapse,
+multi-tab rendering, semantic labels + step segmentation + frame annotation, purpose
+steer, bundled skills). Stdlib only. The content.js unique-selector AND semantic-context (`describe()`) logic is
 verified in real Chromium via `tests/browser/selector-harness.html` (browser, not
 unittest) — `allUnique`, `allIdentify`, and `allCtxPass` all true.
 
