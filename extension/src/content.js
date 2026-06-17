@@ -564,10 +564,37 @@
     }
   });
 
-  // If a recording is already in progress when this frame loads (SPA nav, new
-  // page), ask the worker so we attach immediately — and show the overlay in the
-  // correct state (right elapsed clock, paused or live).
-  chrome.runtime.sendMessage({ type: "is-recording" }, (res) => {
-    if (res?.recording) startCapture({ t0: res.t0, paused: res.paused });
-  });
+  // If a recording is already in progress when this frame loads (full nav, new
+  // page, SPA route), ask the worker so we attach immediately — and show the
+  // overlay in the correct state (right elapsed clock, paused or live).
+  //
+  // This MUST be robust: on a full-page navigation the old content script is
+  // destroyed and this brand-new one is the only thing that knows to start
+  // recording again. A single fire-and-forget check is fragile — if the worker
+  // is momentarily unreachable (waking up, busy) the message is lost and capture
+  // silently dies for the rest of the page's life. So retry on transient
+  // failure, and stop as soon as we get a definitive answer. The worker ALSO
+  // re-pushes `start` on navigation (background.js reattachTab); startCapture is
+  // idempotent, so whichever lands first wins and the other is a no-op.
+  function selfAttach(attempt = 0) {
+    let replied = false;
+    const again = () => {
+      if (attempt < 5) setTimeout(() => selfAttach(attempt + 1), 300);
+    };
+    try {
+      chrome.runtime.sendMessage({ type: "is-recording" }, (res) => {
+        replied = true;
+        if (chrome.runtime.lastError) return again(); // worker unreachable — retry
+        if (res?.recording) startCapture({ t0: res.t0, paused: res.paused });
+        // res.recording === false is a definitive "not recording" — stop retrying.
+      });
+    } catch {
+      return again();
+    }
+    // Callback never fired (worker asleep mid-navigation) — retry.
+    setTimeout(() => {
+      if (!replied) again();
+    }, 400);
+  }
+  selfAttach();
 })();

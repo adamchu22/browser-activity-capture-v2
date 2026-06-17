@@ -20,6 +20,7 @@ import { redactHeaders, redactBody, redactUrl, scrubTokens } from "./redact.js";
 import { makeZip } from "./zip.js";
 import * as db from "./db.js";
 import { bundleReadme, bundleClaudeMd, bundleAgentsMd } from "./bundle-docs.js";
+import { navActions } from "./nav-policy.js";
 
 const state = {
   recording: false,
@@ -127,6 +128,32 @@ async function instrumentTab(tabId) {
       .catch(() => {});
 }
 
+// Re-arm a tab AFTER A NAVIGATION. A full-page navigation (every click in a
+// server-rendered app) tears down the content script — but the CDP debugger
+// stays attached to the tab, so network keeps recording while clicks/rrweb/frames
+// silently die for the rest of the page's life. (This is the bug that lost
+// ~4.5 min of a 6 min server-rendered session: only network survived.) The
+// freshly-loaded content script is supposed to self-attach, but that single
+// fire-and-forget check is unreliable; the worker stays alive throughout (the
+// debugger keeps it warm), so we re-push capture from here on every navigation.
+// We deliberately do NOT touch the debugger — it survives the navigation. See
+// learnings.md 2026-06-17.
+async function reattachTab(tabId, tab) {
+  if (!state.recording || !state.tabIds.has(tabId)) return;
+  // Keep the tab legend + URL set current as the user navigates.
+  if (tab?.url) {
+    const u = redactUrl(tab.url);
+    state.urls.add(u);
+    const info = state.tabs.get(tabId);
+    if (info) info.url = u;
+  }
+  const present = await ensureContentScript(tabId);
+  if (present)
+    chrome.tabs
+      .sendMessage(tabId, { type: "start", t0: state.t0, paused: state.paused })
+      .catch(() => {});
+}
+
 async function uninstrumentTab(tabId) {
   if (!state.tabIds.has(tabId)) return;
   state.tabIds.delete(tabId);
@@ -168,6 +195,7 @@ async function start(triggerTabId, task, purposes) {
   }
 
   await captureFrame("recording started");
+  startFrameTimer();
   setBadge("REC");
   return { ok: true, video: hasVideo, tabs: state.tabIds.size };
 }
@@ -175,6 +203,7 @@ async function start(triggerTabId, task, purposes) {
 async function stop() {
   if (!state.recording) return;
   state.recording = false;
+  stopFrameTimer();
 
   for (const tabId of state.tabIds) {
     chrome.tabs.sendMessage(tabId, { type: "stop" }).catch(() => {});
@@ -213,6 +242,7 @@ async function stop() {
 async function pause() {
   if (!state.recording || state.paused) return;
   state.paused = true; // appendTimeline + rrweb ingest drop while paused
+  stopFrameTimer();
   chrome.runtime.sendMessage({ type: "offscreen-pause" }).catch(() => {});
   setBadge("REC", "#f39c12"); // amber = paused
   broadcastOverlay();
@@ -221,6 +251,7 @@ async function pause() {
 async function resume() {
   if (!state.recording || !state.paused) return;
   state.paused = false;
+  startFrameTimer();
   chrome.runtime.sendMessage({ type: "offscreen-resume" }).catch(() => {});
   setBadge("REC");
   broadcastOverlay();
@@ -241,6 +272,7 @@ async function restart() {
   // Reseed the URL set from the still-instrumented tabs' current pages.
   state.urls = new Set();
   for (const info of state.tabs.values()) if (info.url) state.urls.add(info.url);
+  startFrameTimer(); // reset the cadence onto the new t0
   chrome.runtime.sendMessage({ type: "offscreen-restart" }).catch(() => {});
   // Tell each still-attached tab to re-emit its rrweb full snapshot against the
   // new t0 — the cleared events.jsonl has no base snapshot to replay from otherwise.
@@ -256,6 +288,7 @@ async function cancel() {
   if (!state.recording) return;
   state.recording = false;
   state.paused = false;
+  stopFrameTimer();
   for (const tabId of state.tabIds) {
     chrome.tabs.sendMessage(tabId, { type: "stop" }).catch(() => {}); // removes overlay + listeners
     try {
@@ -296,16 +329,46 @@ function broadcastOverlay() {
 
 // Follow the user across tabs: instrument any tab that starts loading a real URL
 // while we're recording (covers brand-new tabs and navigations to eligible pages),
-// and drop tabs as they close.
+// re-arm the content script after each navigation, and drop tabs as they close.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (!state.recording) return;
-  if (changeInfo.status === "loading" && isEligible(tab)) instrumentTab(tabId);
+  const actions = navActions(changeInfo, {
+    recording: state.recording,
+    eligible: isEligible(tab),
+    tracked: state.tabIds.has(tabId),
+  });
+  // "instrument": first sight of an eligible tab — attach debugger + content
+  // script (idempotent for an already-tracked tab).
+  if (actions.includes("instrument")) instrumentTab(tabId);
+  // "reattach": a tracked tab finished (re)loading / changed URL — re-arm the
+  // content-script capture a navigation tears down. The debugger is left
+  // attached. This is the fix for capture dying after the first navigation on
+  // server-rendered apps (see nav-policy.js / learnings.md).
+  if (actions.includes("reattach")) reattachTab(tabId, tab);
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (state.recording) uninstrumentTab(tabId);
 });
 
 // ---- frames --------------------------------------------------------------
+
+// Grab a screenshot on a fixed cadence (not only on clicks/navs). Frame capture
+// used to be triggered solely by content-script events, so when the content
+// script died on a navigation the visual record died with it — leaving the
+// "interesting" later states (error toasts, filtered views) with no frames even
+// though the page was plainly visible. A timer makes visual coverage independent
+// of the DOM event stream. The full-screen video is still the ground truth; this
+// keeps the timeline navigable. 3s × ~6 min ≈ 120 frames ≈ ~16 MB (PNG).
+const FRAME_INTERVAL_MS = 3000;
+let frameTimer = null;
+
+function startFrameTimer() {
+  stopFrameTimer();
+  frameTimer = setInterval(() => captureFrame("interval"), FRAME_INTERVAL_MS);
+}
+function stopFrameTimer() {
+  if (frameTimer) clearInterval(frameTimer);
+  frameTimer = null;
+}
 
 async function captureFrame(reason = "") {
   if (!state.recording || state.paused) return;
@@ -315,7 +378,8 @@ async function captureFrame(reason = "") {
     const file = `frames/${String(t).padStart(10, "0")}.png`;
     state.frames.push({ t, file, dataUrl });
   } catch (e) {
-    // captureVisibleTab can fail on chrome:// pages etc. — non-fatal.
+    // captureVisibleTab can fail on chrome:// pages etc., or hit Chrome's
+    // ~2/sec quota when an event frame lands next to a timer frame — non-fatal.
     console.debug("frame capture skipped:", reason, e?.message);
   }
 }
@@ -417,10 +481,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const info = state.tabs.get(tabId);
       if (info) info.url = navUrl; // keep the tab legend current as the user navigates
     }
-    // Grab a frame on clicks, navigations, and pointer dwells — the moments
-    // worth seeing. captureVisibleTab is rate-limited by Chrome (~1/s) and
-    // hovers are deduped per element, so dwell frames can't flood the bundle.
-    if (e.kind === "click" || e.kind === "nav" || e.kind === "hover") {
+    // Grab a frame at the precise moment of a click or navigation. The periodic
+    // frame timer covers everything in between (including idle dwell), so we no
+    // longer take a frame on every hover — that just competed with the timer for
+    // Chrome's ~2/sec captureVisibleTab quota.
+    if (e.kind === "click" || e.kind === "nav") {
       captureFrame(e.kind);
     }
   }
