@@ -4,6 +4,27 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (P4 — rendering the annotation events on the analyze side)
+
+Wired the P2 `annotation:select` / `annotation:draw` events through `pack.py` so they're
+legible to the analyzing agent (before this they fell through to the raw-JSON `else` branch):
+- **Three places, one signal.** A dedicated `## ✦ Annotations` section up top in `context.md`
+  (the high-signal "user explicitly means THIS" list), plus inline rendering in the Steps
+  procedure and the raw Timeline. Selector reuses `action_label()` so it reads
+  `button "Issue refund" in "Order actions"` like a click; Draw shows its bbox as
+  `@(x%,y%) w×h%` via the new `_draw_region()` helper.
+- **`frames-annotated.html`:** refactored the card builder into `_point_card()` (click / hover /
+  `annotation:select`) and `_draw_card()` (freeform). A selection is drawn in **blue** (the
+  in-extension Select tool's colour, `#0a84ff`, via a `.sel` CSS class on the existing box/dot)
+  to distinguish a deliberate mark from an incidental click. The freeform stroke is an **SVG
+  polyline** with `viewBox="0 0 100 100"` + `preserveAspectRatio="none"` — because the points are
+  already viewport-% (`drawGeom`), they map straight onto the screenshot at any size with no
+  per-point arithmetic, and `vector-effect:non-scaling-stroke` keeps the line a constant pixel
+  width. Pure HTML/CSS/SVG, no image library (consistent with the v1 "draw on screen without
+  Pillow" lesson).
+- The events flow without any extension/worker change — they're plain timeline events tagged
+  with `tab`, so the multi-tab markers and step segmentation already disambiguate them.
+
 ## 2026-06-17 (P2 — Selector + Draw annotation tools; three non-obvious gotchas)
 
 Built the two on-overlay annotation tools (`annotate` IIFE in `content.js`), both usable

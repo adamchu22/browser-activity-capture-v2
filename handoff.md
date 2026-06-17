@@ -1,8 +1,19 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-17 (P2 annotations built + unit-tested; NEXT: live-verify P2, then build P3 popup/Settings; Adam live-re-verifies the tab-scope change too)_
+_Last updated: 2026-06-17 (P2 annotations built + unit-tested; P4 annotation-rendering done + unit-tested; NEXT: live-verify P2, then build P3 popup/Settings; Adam live-re-verifies the tab-scope change too)_
 
 ## ▶ NEXT — live-Chrome verify P2 (Selector + Draw), then build P3 (popup → dropdown + Settings). Adam still live-re-verifies the tab-scope change.
+
+## ✅ P4 (analyze-side annotation rendering) — DONE + unit-tested (2026-06-17)
+
+`pack.py` now renders the P2 `annotation:select` / `annotation:draw` events (before this they
+were raw-JSON dumped). A dedicated `## ✦ Annotations` section in `context.md` surfaces them up
+top; both also render in the Steps procedure and the raw Timeline. `frames-annotated.html` draws
+the selected element's box+ring in blue and traces the freeform stroke as an SVG polyline (points
+are already viewport-%, so they map straight onto the screenshot). Unit-tested:
+`tests/test_annotations.py` (13). Details in `learnings.md`. The remaining P4 item (auto-run
+`transcribe.py` at pack/export) is unrelated and still open. Possible small follow-up: mention the
+`annotation:*` events in the in-zip `bundle-docs.js` self-driving docs (raw-zip path).
 
 ## ✅ P2 (Selector + Draw annotations) — CODE DONE + unit-tested (2026-06-17)
 
@@ -173,9 +184,11 @@ Analyze side: 70 python tests + 6 node redact tests, all green.
 
 ## Tests
 
-`python3 -m unittest discover -s tests` — 80 tests (glossary, network-noise collapse,
+`python3 -m unittest discover -s tests` — 93 tests (glossary, network-noise collapse,
 multi-tab rendering, semantic labels + step segmentation + frame annotation, purpose steer,
-bundled skills incl. competitive-research, coverage diagnostic). Stdlib only, all green.
+bundled skills incl. competitive-research, coverage diagnostic, and `test_annotations.py` (13):
+annotation:select/draw in the timeline, steps, the `## ✦ Annotations` section, and the
+frames-annotated.html marks). Stdlib only, all green.
 `node --test tests/test_*.mjs` — 37 tests: redact (URL/value), nav-policy, bundle-docs, and
 the new `test_annotate.mjs` (7, the Draw `drawGeom` %-coord/bbox math). The content.js
 unique-selector AND semantic-context (`describe()`) logic is verified in real Chromium via
@@ -188,10 +201,13 @@ so their live behavior has no unit test (needs a load-unpacked run — see P2 ve
 P1 + P1b are live-verified (see top). P2 (Selector + Draw) is built + unit-tested — its
 live-Chrome sign-off is the next step (P2 block in `to-do-current.md`). The tab-scope change is
 implemented + unit-tested and can be re-verified on the same run. Files touched this session
-(P2):
+(P2 + P4):
 - **P2 (annotations):** `content.js` (`annotate` IIFE + mirrored `drawGeom`; two overlay
   buttons + `syncTools`; `onClick`/`emitDwell` guards), `extension/src/annotate-geom.js` (new,
   pure), `background.js` (annotation kinds added to the frame trigger), `tests/test_annotate.mjs` (new).
+- **P4 (analyze-side rendering):** `analyze/pack.py` (`_draw_region`; timeline + steps cases;
+  `_point_card`/`_draw_card` split in `build_annotated_frames_html` with blue `.sel` + SVG ink;
+  `## ✦ Annotations` section in `build_context`), `tests/test_annotations.py` (new, 13).
 
 Prior sessions:
 - **Tab-scope change:** `background.js` (`start()` active-tab-only, `onActivated` lazy

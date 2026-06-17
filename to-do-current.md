@@ -215,8 +215,14 @@ grabs a frame at emit time so the annotated screen is in `frames/`. See `learnin
 - [ ] **Countdown** before recording starts.
 
 **P4 — Analyze side renders the new signals:**
-- [ ] `pack.py` renders `annotation:draw` / `annotation:select` in `context.md` and marks
-      them on `frames-annotated.html` (extend the existing click-point/element-box drawing).
+- [x] ~~`pack.py` renders `annotation:draw` / `annotation:select` in `context.md` and marks
+      them on `frames-annotated.html`~~ (done 2026-06-17). A dedicated `## ✦ Annotations`
+      section surfaces the marks up top; both kinds also render in the Steps procedure and the
+      raw Timeline (no longer raw-JSON). `frames-annotated.html` draws the selected element's
+      box + ring in blue and traces the freeform stroke as an SVG polyline. Unit-tested:
+      `tests/test_annotations.py` (13). Note: the in-zip self-driving docs (`bundle-docs.js`)
+      don't yet mention the `annotation:*` events — small follow-up if we want the raw-zip path
+      to call them out (the events are in `timeline.json` regardless).
 - [ ] **Auto-transcribe**: have `pack.py` (or export) run `transcribe.py` when it sees the
       stub `transcript.vtt`, so narration isn't a manual step. (This is why this run's
       transcript was a stub — transcription was never wired to auto-run; it's a separate
