@@ -112,7 +112,14 @@ can recover the narration itself. Two new files go *inside every exported zip*:
       exported zip contains `CLAUDE.md` + `AGENTS.md` (identical bodies, correct content);
       `validate_bundle.py` PASS. Proved the audio fallback end-to-end: transcript was a stub
       but, following the embedded instructions (`ffmpeg` extract → local ASR), the narration
-      was recovered from `video.webm`. P0 contract works without us. **P0 DONE.**
+      was recovered from `video.webm`. P0 contract works without us.
+- [x] ~~**Refinement: default to Parakeet, not Whisper**~~ — the audio-recovery step now tells
+      the agent to default to Parakeet (best accuracy here) with a runnable mlx-audio command;
+      Whisper is framed only as a fallback.
+- [x] ~~**Refinement: general capture = `notes.md` only + ask the user**~~ — for General
+      capture (or no purpose), the docs now say produce only `notes.md` by default (no auto
+      SOP/skill/suggestions) and **ask the user which other outputs they want**. A specific
+      purpose still auto-produces its deliverable. Locked by `test_bundle_docs.mjs` (now 15). **P0 DONE.**
 - [ ] **Convenience (not required, optional):** auto-run `transcribe.py` at pack/export so the
       transcript is usually already populated — but the zip MUST still work as a stub (it does now).
 
