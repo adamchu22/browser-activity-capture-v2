@@ -108,9 +108,11 @@ can recover the narration itself. Two new files go *inside every exported zip*:
       shared body, audio-in-`video.webm` fallback, self-driving claim, redaction rule, one-clock,
       purpose rendering, task surfacing, narration_error path, README no longer requires pack.py.
       All green; python (70) + redact (7) still green.
-- [ ] **▶ LIVE-VERIFY (Adam):** reload the extension, record a short capture, and confirm the
-      exported zip actually contains `CLAUDE.md` + `AGENTS.md` with the right content. (Code +
-      unit tests pass; this confirms the `background.js` export wiring in real Chrome.)
+- [x] ~~**LIVE-VERIFIED** (2026-06-17, `~/Downloads/capture-2026-06-17T16-07-30-128Z`)~~ —
+      exported zip contains `CLAUDE.md` + `AGENTS.md` (identical bodies, correct content);
+      `validate_bundle.py` PASS. Proved the audio fallback end-to-end: transcript was a stub
+      but, following the embedded instructions (`ffmpeg` extract → local ASR), the narration
+      was recovered from `video.webm`. P0 contract works without us. **P0 DONE.**
 - [ ] **Convenience (not required, optional):** auto-run `transcribe.py` at pack/export so the
       transcript is usually already populated — but the zip MUST still work as a stub (it does now).
 

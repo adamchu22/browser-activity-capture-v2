@@ -2,19 +2,20 @@
 
 _Last updated: 2026-06-17 (entire-screen run verified + feedback captured; next: P0 self-driving zip)_
 
-## ▶ NEXT — live-verify P0, then start P1 (overlay)
+## ▶ NEXT — start P1 (on-screen overlay)
 
-**P0 (self-driving zip + audio fix) is BUILT and unit-tested.** Every export now embeds
+**P0 (self-driving zip + audio fix) is DONE and live-verified.** Every export embeds
 `CLAUDE.md` + `AGENTS.md` (from `extension/src/bundle-docs.js`) telling any receiving agent
 how to read the bundle, the analysis procedure, and — the core fix — that if
 `transcript.vtt` is a stub the narration is an Opus track in `video.webm`, recoverable with
-ffmpeg + any local ASR. The bundle README now says the zip is self-driving (pack.py optional).
-Tests: `tests/test_bundle_docs.mjs` (13) green; python (70) + redact (7) still green.
+ffmpeg + any local ASR. Verified 2026-06-17 on a real export
+(`~/Downloads/capture-2026-06-17T16-07-30-128Z`): both files present, `validate_bundle.py`
+PASS, and the audio fallback actually recovered narration from a stub-transcript bundle.
+Tests: `tests/test_bundle_docs.mjs` (13) + python (70) + redact (7) all green.
 
-**▶ NEXT ACTION (Adam): live-verify.** Reload the extension, record a short capture, and
-confirm the exported zip actually contains `CLAUDE.md` + `AGENTS.md` with sensible content
-(the code + unit tests pass; this just confirms the `background.js` export wiring in real
-Chrome). Then proceed to **P1 — on-screen overlay** (see `to-do-current.md`).
+**▶ NEXT ACTION: build P1 — the on-screen recording overlay** (Finish/Pause/Restart/Cancel,
+worker-synced across tabs). See the P1 block in `to-do-current.md`. After P1: P2 Selector +
+Draw, then P3 popup redesign, then P4 analyze-side rendering.
 
 Why P0 was needed (verified): the raw zip's README pointed at `../analyze/pack.py` (a path a
 recipient won't have); the self-driving layer only existed in the *pack*, not the zip; and
