@@ -15,10 +15,12 @@ tab legend + tab-switch markers.
 
 **Self-driving pack** — the analysis pack now ships the skills a receiving agent
 uses, in `agent-skills/`: `analyze-capture` (the consumption procedure — read it
-first) always, plus activity skills mapped to the recording's purpose. The seed
-`ui-improvement` skill turns friction into concrete UI changes and *implements* them
-when the app's source is present. Extend by adding a skill to `analyze/skills/<name>/`
-and a `SKILLS_FOR_PURPOSE` mapping in `pack.py`.
+first) always, plus activity skills mapped to the recording's purpose. Seed skills: `ui-improvement` (friction → concrete UI changes, *implemented* when the
+app's source is present) and `competitive-research` (teardown of another product — UX
+patterns + architecture from the network → `research.md`). Extend by adding a skill to
+`analyze/skills/<name>/` and a `SKILLS_FOR_PURPOSE` mapping in `pack.py`.
+
+Purposes available: skill, docs, ux, ui, improve, research, general.
 
 **Intent capture** — to make the bundle 10x more legible to the analyzing model:
 a stated **task goal**; a required **purpose** (skill / docs / ux / improve / general)
@@ -57,9 +59,9 @@ v2, run `LIVE-TEST.md`. Two highest-risk unknowns it checks:
 
 ## Tests
 
-`python3 -m unittest discover -s tests` — 68 tests (glossary, network-noise collapse,
+`python3 -m unittest discover -s tests` — 70 tests (glossary, network-noise collapse,
 multi-tab rendering, semantic labels + step segmentation + frame annotation, purpose
-steer, bundled skills). Stdlib only. The content.js unique-selector AND semantic-context (`describe()`) logic is
+steer, bundled skills incl. competitive-research). Stdlib only. The content.js unique-selector AND semantic-context (`describe()`) logic is
 verified in real Chromium via `tests/browser/selector-harness.html` (browser, not
 unittest) — `allUnique`, `allIdentify`, and `allCtxPass` all true.
 

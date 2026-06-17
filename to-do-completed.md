@@ -29,6 +29,16 @@ Asked "what would make this 10x better at conveying user intent?", built the bin
 - Updated `analyze/BRIEF.md` so the consuming agent uses the task/steps/tabs/annotated
   frames. 61 unit tests green (+ harness for the DOM capture).
 
+## 2026-06-17 — competitive-research purpose + skill
+
+- **Research / competitive-research.** New "Competitive / product research" purpose +
+  bundled `competitive-research` skill. A capture of another product is a black-box
+  teardown — the skill extracts UX patterns (frames), the architecture/data model
+  inferred from the network (HAR), what they do well, and gaps to differentiate on →
+  `research.md` with "for your version" takeaways. Ground rule baked in: learn
+  patterns/principles, never copy proprietary assets / scrape / bypass ToS. Wired via
+  the same mechanism (PURPOSES, SKILLS_FOR_PURPOSE, popup, BRIEF).
+
 ## 2026-06-17 — self-driving pack: bundled skills + UI-change capability
 
 - **Post-transfer consumption skill.** Each pack now ships
