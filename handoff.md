@@ -2,7 +2,23 @@
 
 _Last updated: 2026-06-17 (P1 overlay + P1b capture-on-nav bug fix CODE DONE, tests green; next: one live run to verify both, then P2)_
 
-## ⚠ P1b — capture died on navigation (FIXED in code; live-verify is the sign-off)
+## ✅ P1 + P1b live-verified (2026-06-17, `outputs/capture-…18-23-37-835Z.zip`)
+
+Clean run: `validate_bundle.py` **PASS, 0 warnings, "capture coverage OK"**. 18 navs across
+16 tabs; on the active tab content capture continued past the mid-session navs (1.25, 1.54min)
+to the end (1.74min) — the nav bug is fixed. Frames regular (~2.5–3.6s, the 3s timer). Adam
+confirmed the on-screen overlay (4-button pill) looked good. narration_in_video true.
+
+## ⚙ SCOPE CHANGE done (capture only tabs the user enters) — needs a live re-verify
+
+That same run exposed that v2 captured **all 16 open tabs**, not just the 3 used (incl. a
+1Password signin + Telegram). Adam's call: capture only tabs the user **enters**. Implemented
+(see `learnings.md`): `start()` instruments just the active tab; `tabs.onActivated` lazily
+instruments tabs as you switch in; `is-recording` is now per-tab so untouched tabs stay inert.
+**Live re-verify:** record a 3-tab task with other sensitive tabs open → the bundle's
+`manifest.tabs` + `urls_visited` should list only the tabs you actually used.
+
+## ⚠ P1b — capture died on navigation (FIXED + live-verified above)
 
 A real 6-min session lost ~4.5 min of DOM + visual capture: on a server-rendered app, the
 first full-page navigation tore down the content script while the CDP debugger kept network

@@ -4,6 +4,29 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (SCOPE CHANGE — capture only tabs the user enters, not every open tab)
+
+A clean live run revealed v2's "all-tabs instrumentation" captured **every open tab**, not
+just the ones used. A 3-tab task produced a 16-tab bundle: URLs+titles of all open tabs
+(incl. a **1Password signin** and **Telegram**) plus background network from Calendar/Notion/
+Hermes. That's a privacy problem — bundles get handed to other agents.
+
+- **Decision (Adam):** instrument only the tab recording starts in, then lazily instrument
+  each tab **as the user focuses it** (`tabs.onActivated`). Tabs never entered are left
+  completely alone.
+- **Why it doesn't weaken capture:** the content script reads the **live DOM in place** at
+  click/hover time and rrweb snapshots on entry — no reload, no heavy fetch. Selectors,
+  semantic context, and rrweb all work identically from the moment you enter a tab. The only
+  thing given up is pre-focus activity in a tab (e.g. background network before you looked at
+  it) — exactly what "record what I'm doing" should drop.
+- **How:** `start()` instruments only the active tab (was `chrome.tabs.query({})` over all).
+  `tabs.onActivated` → `instrumentTab` (idempotent). `is-recording` (content→worker) now
+  answers **per tab** (`state.recording && tabIds.has(senderTabId)`), so a never-entered tab's
+  manifest-injected content script stays inert — no DOM snapshot of a password-manager page.
+  `nav-policy.js` updated: only reattach tracked tabs; instrument only the *active* untracked
+  tab on load (covers the recording tab leaving a chrome:// page). The cross-tab use case is
+  intact — switching into a tab instruments it.
+
 ## 2026-06-17 (CAPTURE BUG — content script dies on navigation; only network survives)
 
 **The most serious capture bug found so far.** A real session
