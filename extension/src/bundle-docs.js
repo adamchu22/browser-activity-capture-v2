@@ -94,9 +94,13 @@ narration was recorded they live as an **Opus audio track inside video.webm**, a
 Recover them yourself, no external help needed:
 1. Extract audio: \`ffmpeg -i video.webm -ac 1 -ar 16000 audio.wav\`
 2. Transcribe locally. **Default to Parakeet** (Parakeet-TDT via mlx-audio on Apple Silicon) —
-   it was the most accurate engine for this audio, so prefer it:
-   \`python -m mlx_audio.stt.generate --model mlx-community/parakeet-tdt-0.6b-v3 --audio audio.wav --format vtt\`
-   Only fall back to Whisper if Parakeet isn't available: \`whisper audio.wav --model small.en\`.
+   it was the most accurate engine for this audio, so prefer it. If \`mlx-audio\` isn't
+   installed yet, set up a throwaway env first (the model weights download on first run, or
+   load from the local Hugging Face cache if already present — no path needed, just the repo id):
+   \`uv venv .venv-asr && uv pip install --python .venv-asr mlx-audio\`
+   then transcribe:
+   \`.venv-asr/bin/python -m mlx_audio.stt.generate --model mlx-community/parakeet-tdt-0.6b-v3 --audio audio.wav --format vtt\`
+   (writes \`audio.wav.vtt\`). Only fall back to Whisper if Parakeet isn't available: \`whisper audio.wav --model small.en\`.
 3. The audio starts within ~1s of t0 — treat the cue times as t0-aligned.
 Then use the transcript as the user's account of intent.
 
