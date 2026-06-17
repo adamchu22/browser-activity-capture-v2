@@ -101,6 +101,36 @@ def parse_vtt_cues(text: str) -> list[dict]:
     return cues
 
 
+def short_url(url: str) -> str:
+    """Host + path, query stripped — readable in a procedure line."""
+    base = url.split("?", 1)[0]
+    return base or url
+
+
+def action_label(e: dict) -> str:
+    """Human phrase for an action, preferring the captured semantic context (ctx)
+    over a raw selector: `button "Issue refund" in "Order actions"`. Falls back to
+    the legacy label/selector (unquoted) when no ctx was captured (v1 bundles)."""
+    ctx = e.get("ctx") or {}
+    name, role, section = ctx.get("name"), ctx.get("role"), ctx.get("section")
+    if name and role:
+        s = f'{role} "{name}"'
+    elif name:
+        s = f'"{name}"'
+    elif role:
+        s = role
+    else:
+        return e.get("label") or e.get("selector", "")
+    if section:
+        s += f' in "{section}"'
+    return s
+
+
+def input_label(e: dict) -> str:
+    ctx = e.get("ctx") or {}
+    return f'"{ctx["name"]}"' if ctx.get("name") else e.get("selector", "")
+
+
 def _collapsed_line(run: list[dict]) -> str:
     """One summary line standing in for a run of collapsed low-signal requests."""
     t = ms(run[0].get("t", 0))
@@ -152,11 +182,11 @@ def render_timeline(events: list[dict], blocklist: list[str] | None = None,
         elif kind == "speech":
             body = f'🗣  "{e.get("text","")}"'
         elif kind == "click":
-            body = f"click {e.get('label') or e.get('selector','')}  [{e.get('selector','')}]" + pos(e)
+            body = f"click {action_label(e)}  [{e.get('selector','')}]" + pos(e)
         elif kind == "hover":
-            body = f"👆 hover {e.get('label') or e.get('selector','')}  [{e.get('selector','')}]" + pos(e)
+            body = f"👆 hover {action_label(e)}  [{e.get('selector','')}]" + pos(e)
         elif kind == "input":
-            body = f"type into {e.get('selector','')} = {e.get('value','')}"
+            body = f"type into {input_label(e)} = {e.get('value','')}"
         elif kind == "key":
             body = f"key {e.get('key','')}"
         elif kind == "network":
@@ -169,6 +199,106 @@ def render_timeline(events: list[dict], blocklist: list[str] | None = None,
         lines.append(f"- `{t}`  {body}{frame}")
     flush()  # trailing run of low-signal events
     return "\n".join(lines)
+
+
+# ---- step segmentation (the narrated procedure) --------------------------
+
+def _effective_tabs(events: list[dict]) -> list:
+    """A speech cue has no tab, but it narrates the action that FOLLOWS it — so for
+    segmentation it should belong to the next action's tab. Forward-fill each speech
+    event's tab from the next event that has one."""
+    eff = [e.get("tab") for e in events]
+    next_tab = None
+    for i in range(len(events) - 1, -1, -1):
+        if events[i].get("tab") is not None:
+            next_tab = events[i]["tab"]
+        elif events[i].get("kind") == "speech":
+            eff[i] = next_tab
+    return eff
+
+
+def segment_steps(events: list[dict], gap_ms: int = 2500) -> list[dict]:
+    """Group the flat event stream into intent-bearing steps. A new step starts at a
+    navigation, a tab switch, or a >gap_ms pause — the natural seams in a task.
+    Narration forward-binds to the action it introduces (a big pause before a cue
+    starts a new step with that cue), so what the user SAID sits with what they DID."""
+    steps: list[dict] = []
+    eff = _effective_tabs(events)
+    cur = None
+    last_t = None
+    last_tab = None
+    for i, e in enumerate(events):
+        kind, t, tab = e.get("kind"), e.get("t", 0), eff[i]
+        boundary = (
+            cur is None
+            or kind == "nav"
+            or (tab is not None and last_tab is not None and tab != last_tab)
+            or (last_t is not None and t - last_t >= gap_ms)
+        )
+        if boundary:
+            cur = {"t": t, "tab": tab, "events": []}
+            steps.append(cur)
+        cur["events"].append(e)
+        last_t = t
+        if tab is not None:
+            last_tab = tab
+    return steps
+
+
+def render_steps(events: list[dict], blocklist: list[str] | None = None,
+                 tab_labels: dict | None = None, tab_urls: dict | None = None) -> str:
+    """A draft narrated procedure: each step's narration (the intent) above the
+    actions that carried it out. Hovers and low-signal network are dropped here to
+    keep it SOP-shaped — the full detail stays in the raw timeline below."""
+    blocklist = blocklist or []
+    tab_labels = tab_labels or {}
+    tab_urls = tab_urls or {}
+    multi_tab = len(tab_labels) > 1
+    steps = segment_steps(events)
+    out: list[str] = []
+    cur_url = ""
+    for i, step in enumerate(steps, 1):
+        evs = step["events"]
+        nav = next((e for e in evs if e.get("kind") == "nav"), None)
+        if nav:
+            cur_url = nav.get("url", "")  # an explicit navigation in this step
+        # The step's URL: its own nav if any, else the tab it ran in, else carry over.
+        step_url = (nav.get("url", "") if nav else "") or tab_urls.get(step["tab"], "") or cur_url
+
+        head = f"### Step {i} · `{ms(step['t'])}`"
+        if multi_tab and step["tab"] in tab_labels:
+            head += f" · tab {tab_labels[step['tab']]}"
+        if step_url:
+            head += f" · {short_url(step_url)}"
+        out.append(head)
+
+        narration = " ".join(e.get("text", "").strip() for e in evs if e.get("kind") == "speech").strip()
+        if narration:
+            out.append(f'🗣 "{narration}"')
+
+        net_shown, net_collapsed = [], 0
+        for e in evs:
+            k = e.get("kind")
+            if k == "nav":
+                out.append(f"- → navigate {short_url(e.get('url', ''))}")
+            elif k == "click":
+                out.append(f"- click {action_label(e)}")
+            elif k == "input":
+                out.append(f"- type into {input_label(e)} = {e.get('value', '')}")
+            elif k == "key":
+                out.append(f"- press {e.get('key', '')}")
+            elif k == "network":
+                if blocklist and is_low_signal(e.get("url", ""), blocklist):
+                    net_collapsed += 1
+                else:
+                    net_shown.append(e)
+            # hover/speech intentionally omitted from the procedure view
+        for e in net_shown:
+            out.append(f"- {e.get('method', '')} {short_url(e.get('url', ''))} → {e.get('status', '')}")
+        if net_collapsed:
+            out.append(f"- _({net_collapsed} low-signal request(s))_")
+        out.append("")
+    return "\n".join(out).strip()
 
 
 def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
@@ -217,6 +347,7 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     # used both here and as the timeline's tab-switch markers.
     tabs = manifest.get("tabs", [])
     tab_labels = {t["id"]: f"#{i + 1}" for i, t in enumerate(tabs) if "id" in t}
+    tab_urls = {t["id"]: t.get("url", "") for t in tabs if "id" in t}
     tabs_block = ""
     if len(tabs) > 1:
         rows = [f"- **#{i + 1}** {t.get('url', '')}" + (f" — {t['title']}" if t.get("title") else "")
@@ -247,6 +378,12 @@ sync mode `{manifest.get('sync_mode','?')}`. Secrets redacted as `‹redacted›
 {issues_block}{tabs_block}
 ## URLs visited
 {urls_block}
+
+## Steps (narrated procedure)
+_Auto-segmented from the recording; the user's narration is the intent, the bullets
+are what they did. See the raw timeline below for full detail (hovers, every request)._
+
+{render_steps(timeline, blocklist, tab_labels, tab_urls)}
 
 ## Timeline (one clock, ms since t0)
 {render_timeline(timeline, blocklist, tab_labels)}
