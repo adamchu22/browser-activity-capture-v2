@@ -1,21 +1,32 @@
 // What to do with a tab on a chrome.tabs.onUpdated event while recording.
 //
-// Pure + unit-tested on purpose. The post-navigation re-attach contract is what
-// broke once: a full-page navigation (every click in a server-rendered app)
-// tears down the content script but leaves the CDP debugger attached, so network
-// kept recording while clicks/rrweb/frames silently died for the rest of the
-// session. The fix is to re-arm the content script on every navigation. Keeping
-// the decision here, separate from the chrome.* plumbing, means that contract
-// can't regress without a test failing. See learnings.md 2026-06-17.
+// Pure + unit-tested on purpose. Two contracts live here:
 //
-// Returns an array (a tab can both be first-seen and complete on the same event):
-//   "instrument" — first sight of an eligible tab: attach debugger + content script.
-//   "reattach"   — a tracked tab finished (re)loading or changed URL in place:
-//                  re-arm the content-script capture (debugger is left alone).
-export function navActions(changeInfo, { recording, eligible, tracked }) {
+//  1. Re-attach on navigation. A full-page navigation (every click in a
+//     server-rendered app) tears down the content script but leaves the CDP
+//     debugger attached — so without a re-arm, network keeps recording while
+//     clicks/rrweb/frames silently die. Any TRACKED tab that finishes loading or
+//     changes URL in place gets "reattach".
+//
+//  2. Capture only tabs the user actually enters. We do NOT instrument every
+//     open tab — that swept up background tabs (a password manager, chat,
+//     calendar) the user never touched. Instead the worker instruments the tab
+//     recording starts in, plus each tab as the user focuses it
+//     (tabs.onActivated). The only onUpdated-driven instrumentation is the
+//     ACTIVE tab finishing a load while still untracked — which covers the
+//     recording tab navigating from a restricted page (chrome://) to a real one.
+//
+// See learnings.md 2026-06-17. Returns an array (actions are independent):
+//   "reattach"   — tracked tab (re)loaded / changed URL: re-arm content capture.
+//   "instrument" — active, untracked tab finished loading: start capturing it.
+export function navActions(changeInfo, { recording, eligible, tracked, active }) {
   const actions = [];
   if (!recording || !eligible) return actions;
-  if (changeInfo.status === "loading") actions.push("instrument");
-  if ((changeInfo.status === "complete" || changeInfo.url) && tracked) actions.push("reattach");
+  if (tracked && (changeInfo.status === "complete" || changeInfo.url)) {
+    actions.push("reattach");
+  }
+  if (!tracked && active && changeInfo.status === "complete") {
+    actions.push("instrument");
+  }
   return actions;
 }

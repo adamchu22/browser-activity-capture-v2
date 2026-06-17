@@ -187,12 +187,17 @@ async function start(triggerTabId, task, purposes) {
   // across tabs). If the user cancels the picker, keep going data-only.
   const hasVideo = await startVideo(micEnabled);
 
-  // Instrument every eligible tab across all windows. New tabs opened during the
-  // recording are picked up by the tabs.onUpdated listener below.
-  const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (isEligible(tab)) await instrumentTab(tab.id);
+  // Instrument ONLY the tab the user is recording in. Other tabs are
+  // instrumented lazily, the moment the user switches into them
+  // (tabs.onActivated below) — so we capture what they're actually doing, not
+  // every tab that happens to be open (a password manager, chat, calendar…).
+  // See nav-policy.js / learnings.md 2026-06-17.
+  let activeTabId = triggerTabId;
+  if (activeTabId == null) {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    activeTabId = active?.id;
   }
+  if (activeTabId != null) await instrumentTab(activeTabId);
 
   await captureFrame("recording started");
   startFrameTimer();
@@ -335,24 +340,29 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     recording: state.recording,
     eligible: isEligible(tab),
     tracked: state.tabIds.has(tabId),
+    active: !!tab?.active,
   });
-  // "instrument": first sight of an eligible tab — attach debugger + content
-  // script (idempotent for an already-tracked tab).
-  if (actions.includes("instrument")) instrumentTab(tabId);
   // "reattach": a tracked tab finished (re)loading / changed URL — re-arm the
   // content-script capture a navigation tears down. The debugger is left
-  // attached. This is the fix for capture dying after the first navigation on
-  // server-rendered apps (see nav-policy.js / learnings.md).
+  // attached. Fix for capture dying after the first navigation on server-
+  // rendered apps (see nav-policy.js / learnings.md).
   if (actions.includes("reattach")) reattachTab(tabId, tab);
+  // "instrument": the active tab finished loading and isn't tracked yet (e.g. the
+  // recording tab navigated off a chrome:// page). Tabs the user switches into
+  // are instrumented in onActivated below.
+  if (actions.includes("instrument")) instrumentTab(tabId);
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (state.recording) uninstrumentTab(tabId);
 });
-// Grab a frame the moment the user switches tabs — captureVisibleTab always
-// shoots the active tab, so this guarantees a screenshot of the tab they just
+// Lazily instrument the tab the user switches INTO — this is how capture follows
+// them across tabs while leaving untouched tabs alone. Also grab a frame:
+// captureVisibleTab shoots the active tab, so we get a shot of the tab they just
 // moved to (the periodic timer would otherwise miss the switch instant).
-chrome.tabs.onActivated.addListener(() => {
-  if (state.recording) captureFrame("tab-activated");
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  if (!state.recording) return;
+  instrumentTab(tabId); // idempotent — no-op if already tracked
+  captureFrame("tab-activated");
 });
 
 // ---- frames --------------------------------------------------------------
@@ -468,10 +478,14 @@ async function appendTimeline(event) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "is-recording") {
-    // A content script asking on load whether to attach + show its overlay.
-    // Report the full state (incl. paused + t0) so a tab that loads mid-recording
-    // renders the overlay correctly; capture still drops events while paused.
-    sendResponse({ recording: state.recording, paused: state.paused, t0: state.t0 });
+    // A content script asking on load whether it should be capturing. Answer
+    // PER TAB: only tabs we've instrumented (the recording tab + ones the user
+    // has entered) record. A tab the user never switched into stays inert — so
+    // we don't snapshot the DOM of a password-manager / chat tab just because
+    // it was open. paused + t0 ride along for the overlay clock.
+    const tabId = sender.tab?.id;
+    const tracked = tabId != null && state.tabIds.has(tabId);
+    sendResponse({ recording: state.recording && tracked, paused: state.paused, t0: state.t0 });
     return true;
   }
   if (msg.type === "timeline-event") {
