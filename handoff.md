@@ -1,21 +1,34 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-17 (entire-screen run verified + feedback captured; next: P0 self-driving zip)_
+_Last updated: 2026-06-17 (P1 overlay CODE DONE, tests green; next: live-verify P1, then P2 annotations)_
 
-## ▶ NEXT — start P1 (on-screen overlay)
+## ▶ NEXT — live-verify P1, then start P2 (Selector + Draw annotations)
 
-**P0 (self-driving zip + audio fix) is DONE and live-verified.** Every export embeds
-`CLAUDE.md` + `AGENTS.md` (from `extension/src/bundle-docs.js`) telling any receiving agent
-how to read the bundle, the analysis procedure, and — the core fix — that if
-`transcript.vtt` is a stub the narration is an Opus track in `video.webm`, recoverable with
-ffmpeg + any local ASR. Verified 2026-06-17 on a real export
-(`~/Downloads/capture-2026-06-17T16-07-30-128Z`): both files present, `validate_bundle.py`
-PASS, and the audio fallback actually recovered narration from a stub-transcript bundle.
-Tests: `tests/test_bundle_docs.mjs` (13) + python (70) + redact (7) all green.
+**P1 (on-screen recording overlay) is CODE-COMPLETE and unit-tests pass; it has NOT been
+live-verified in Chrome yet.** A shadow-DOM pill (the `overlay` IIFE in `content.js`) shows
+Finish / Pause / Restart / Cancel during recording, in every instrumented tab, kept in sync
+by the worker (`broadcastOverlay()` pushes `{recording, paused, t0}`). Worker-side semantics
+live in `background.js` (`pause/resume/restart/cancel`) and are mirrored onto the offscreen
+MediaRecorder (`offscreen-pause/-resume/-restart/-cancel`). Restart reuses the live
+getDisplayMedia tracks (no re-prompt) and re-inits rrweb per tab so the new take keeps a base
+snapshot — see `learnings.md` for the two gotchas. Restart/Cancel take a 2-click confirm.
 
-**▶ NEXT ACTION: build P1 — the on-screen recording overlay** (Finish/Pause/Restart/Cancel,
-worker-synced across tabs). See the P1 block in `to-do-current.md`. After P1: P2 Selector +
-Draw, then P3 popup redesign, then P4 analyze-side rendering.
+**▶ NEXT ACTION (do this first): live-verify P1.** Load unpacked, record across ≥2 tabs and:
+the pill appears on each tab; Pause freezes the timer + turns the dot amber and stops the
+MediaRecorder; Restart resets the clock to 00:00 and the exported bundle still validates +
+replays (rrweb snapshot present); Cancel exports nothing and clears the badge; Finish exports
+a PASS bundle. See the live-verify checkbox in the P1 block of `to-do-current.md`.
+
+**Then P2** — the two annotation tools (Selector: snaps to DOM via the existing
+`selectorFor()`+`describe()`, emits `annotation:select`; Draw: freeform region, emits
+`annotation:draw`). Both mid-recording, both on the overlay. Then P3 popup→dropdown +
+Settings, then P4 analyze-side rendering of the annotation events.
+
+**P0 (self-driving zip + audio fix) remains DONE + live-verified.** Every export embeds
+`CLAUDE.md` + `AGENTS.md` (from `extension/src/bundle-docs.js`) with the read order, analysis
+procedure, and the audio-recovery fallback (stub transcript → Opus track in `video.webm`,
+recover with ffmpeg + local ASR; the docs now also include the `uv pip install mlx-audio`
+setup step). Tests: `tests/test_bundle_docs.mjs` (15) + python (70) + redact (7) all green.
 
 Why P0 was needed (verified): the raw zip's README pointed at `../analyze/pack.py` (a path a
 recipient won't have); the self-driving layer only existed in the *pack*, not the zip; and
@@ -125,18 +138,17 @@ steer, bundled skills incl. competitive-research). Stdlib only.
 `tests/browser/selector-harness.html` (browser, not unittest) — `allUnique`,
 `allIdentify`, and `allCtxPass` all true.
 
-## Exact next step — build P0 (self-driving zip + audio fix)
+## Exact next step — live-verify P1, then build P2
 
-See the **▶ NEXT — P0** section at the top and the **P0** task block in `to-do-current.md`.
-In short: generate `CLAUDE.md` + `AGENTS.md` into every exported zip (in `background.js`,
-next to `README.md`), covering how to read the bundle, the analysis procedure, and the
-audio-in-`video.webm` fallback when `transcript.vtt` is a stub. Add export/zip tests that
-assert both files are present and reference the audio fallback.
+**P1 (overlay) is code-complete; unit tests pass; live-Chrome verify is the next action**
+(see the top section + the P1 live-verify checkbox in `to-do-current.md`). Files touched:
+`content.js` (the `overlay` IIFE + `restartCapture`/`startRrweb`), `background.js`
+(`broadcastOverlay` + `pause/resume/restart/cancel` + routing for `overlay-command`),
+`offscreen.js` (MediaRecorder pause/resume/restart/cancel, retained `activeTracks`).
 
-The live capture pipeline is already verified (run 3 + the entire-screen run both PASS), so
-no live re-run is required before P0 — P0 is editing the export + adding tests, verifiable
-by re-exporting and re-validating a bundle. The UX work (overlay → Selector/Draw → popup
-redesign, P1–P3) follows P0.
+After verifying P1, build **P2** (Selector + Draw annotations on the overlay), then P3
+popup→dropdown + Settings, then P4 analyze-side rendering. The live capture pipeline itself
+is already verified (run 3 + entire-screen run both PASS).
 
 ## Known caveats
 

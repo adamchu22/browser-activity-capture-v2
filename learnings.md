@@ -4,6 +4,32 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (P1 — on-screen overlay; two non-obvious gotchas)
+
+Built the injected recording overlay (Finish/Pause/Restart/Cancel), worker-synced across
+tabs. Two things that aren't obvious and would bite a re-implementation:
+
+- **Restart must re-init rrweb, not just clear the buffers.** `rrweb.record()` emits a full
+  DOM snapshot *once* at start, then only incremental mutations. So wiping `events.jsonl`
+  mid-stream (what Restart does) leaves the new take with mutations but no base snapshot —
+  unreplayable. Fix: on Restart the worker sends each tab a `restart` message; `content.js`
+  stops and re-starts rrweb so a fresh full snapshot lands against the new t0. (Reset t0 in
+  the worker *before* messaging tabs, so the snapshot stamps correctly.)
+- **Restart reuses the live getDisplayMedia tracks — don't release them.** To restart the
+  video without a second "Choose what to share" prompt, `offscreen.js` keeps the screen+mic
+  tracks live (`activeTracks`) and just swaps in a new `MediaRecorder`. Clearing the old
+  recorder's `onstop` first prevents the discarded take from shipping bytes back as a finished
+  video. Cancel is the opposite: stop recorder, `releaseStreams()`, send nothing back.
+- **Overlay sync model:** the worker is the source of truth. `broadcastOverlay()` pushes
+  `{recording, paused, t0}` to every instrumented tab so the pill is correct regardless of
+  focus; pause/resume route through the worker (which also pauses the MediaRecorder), not just
+  a local popup flag. The overlay is shadow-DOM isolated and styled deliberately unlike
+  Chrome's "is debugging this browser" bar (whose Cancel detaches the debugger).
+- Also patched the embedded audio-recovery docs (`bundle-docs.js`): they now tell the agent to
+  `uv pip install mlx-audio` first — Parakeet *weights* are cached locally
+  (`~/.cache/huggingface/hub/models--mlx-community--parakeet-tdt-0.6b-v3`) but the *runner*
+  isn't installed by default.
+
 ## 2026-06-17 (P0 — the raw zip was NOT self-driving; the audio never reached the pack)
 
 Reviewing the entire-screen run revealed the handoff story was weaker than assumed:

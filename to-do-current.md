@@ -126,14 +126,26 @@ can recover the narration itself. Two new files go *inside every exported zip*:
 ---
 
 **P1 — On-screen recording overlay** (injected, visible during recording, worker-synced
-across tabs so it shows regardless of which tab is focused):
-- [ ] Inject a single overlay via `content.js`; the worker keeps it in sync across tabs.
-- [ ] Controls: **Finish** (stop + save + export), **Pause**, **Restart**, **Cancel**.
-      No rewind, no trim.
-- [ ] Keep it visually + functionally distinct from Chrome's "this tab is being debugged"
-      bar — that bar's "Cancel" detaches the debugger and kills network capture.
-- [ ] Pause/Restart/Cancel semantics on the worker side (what happens to the
-      MediaRecorder, the event streams, and the partial bundle for each).
+across tabs so it shows regardless of which tab is focused) — **CODE DONE; needs live-Chrome verify.**
+- [x] ~~Inject a single overlay via `content.js`~~ — shadow-DOM pill (`overlay` IIFE in
+      `content.js`), mounted on capture start, removed on stop. Worker keeps every tab's
+      overlay in sync via `broadcastOverlay()` (`{recording, paused, t0}`).
+- [x] ~~Controls: **Finish** / **Pause** / **Restart** / **Cancel**~~ — wired to
+      `overlay-command` → worker. Finish = stop+export; Pause/Resume toggles; Restart and
+      Cancel are destructive so they take a 2-click confirm ("Sure?"). No rewind/trim.
+- [x] ~~Visually + functionally distinct from Chrome's "is debugging this browser" bar~~ —
+      separate shadow-DOM pill bottom-center; our Cancel discards via the worker (does NOT
+      touch the debugger). Chrome's bar Cancel still detaches — left alone.
+- [x] ~~Pause/Restart/Cancel semantics on the worker side~~ — `pause/resume/restart/cancel`
+      in `background.js`, mirrored onto the offscreen MediaRecorder (`offscreen-pause/-resume/
+      -restart/-cancel`). **Pause:** event+rrweb ingest drop (`state.paused`) and recorder
+      `.pause()`. **Restart:** wipe DB + buffers, reset t0, reuse the LIVE screen/mic tracks
+      (no re-prompt), and re-init rrweb per tab so a fresh full snapshot lands (see
+      `learnings.md`). **Cancel:** stop+discard, detach debuggers, release streams, no export.
+- [ ] **Live-Chrome verify** (no unit test — overlay is shadow-DOM + chrome.* dependent):
+      load unpacked, record across ≥2 tabs, confirm the pill shows on each tab, Pause freezes
+      the timer + amber dot, Restart resets the clock and yields a replayable bundle, Cancel
+      exports nothing, Finish exports a PASS bundle.
 
 **P2 — Annotation tools on the overlay** (the headline ask; Selector and Draw are SEPARATE):
 - [ ] **Draw** — freeform canvas highlight of an area/region (not element-bound). Emit a
