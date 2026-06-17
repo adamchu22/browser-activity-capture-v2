@@ -133,6 +133,24 @@ class TestBuildContextIntent(unittest.TestCase):
         self.assertIn('button "Save" in "Footer"', ctx)            # steps view
         self.assertIn('click button "Save" in "Footer"  [#s]', ctx)  # timeline view keeps selector
 
+    def test_task_goal_rendered_at_top(self):
+        d = Path(tempfile.mkdtemp())
+        manifest = {"capture_id": "c", "t0_wall": "now", "duration_ms": 10, "sync_mode": "self_record",
+                    "task": "Issue a refund for a damaged order"}
+        (d / "manifest.json").write_text(json.dumps(manifest))
+        (d / "timeline.json").write_text(json.dumps([ev(0, "click", selector="#x")]))
+        ctx = pack.build_context(d)
+        self.assertIn("**Task (stated by the user):** Issue a refund for a damaged order", ctx)
+        # And it sits above the timeline.
+        self.assertLess(ctx.index("Task (stated"), ctx.index("## Steps"))
+
+    def test_no_task_block_when_absent(self):
+        d = Path(tempfile.mkdtemp())
+        manifest = {"capture_id": "c", "t0_wall": "now", "duration_ms": 10, "sync_mode": "self_record"}
+        (d / "manifest.json").write_text(json.dumps(manifest))
+        (d / "timeline.json").write_text(json.dumps([ev(0, "click", selector="#x")]))
+        self.assertNotIn("Task (stated", pack.build_context(d))
+
 
 if __name__ == "__main__":
     unittest.main()

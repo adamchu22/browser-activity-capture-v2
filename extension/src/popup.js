@@ -47,7 +47,8 @@ $("rec").addEventListener("click", async () => {
   // popup — that's fine, the worker runs start() independently. `res` is only seen
   // if the popup survives. Pick a screen/window in the picker to record video.
   $("status").textContent = "Pick a screen/window in the picker to record…";
-  const res = await send("start", { tabId: await activeTabId() });
+  const task = $("task").value.trim();
+  const res = await send("start", { tabId: await activeTabId(), task });
   if (res && !res.ok) {
     $("status").textContent = res.error || "Couldn't start.";
     return;

@@ -19,8 +19,10 @@
     </style>
   </head>
   <body>
-    <h1>Browser Activity Capture</h1>
-    <button id="rec">● Start recording this tab</button>
+    <h1>Browser Activity Capture v2</h1>
+    <label for="task">What are you doing in this recording? (one line)</label>
+    <textarea id="task" rows="2" placeholder="e.g. Issue a refund for a damaged order in Distru"></textarea>
+    <button id="rec">● Start recording (all tabs)</button>
     <label class="check"><input type="checkbox" id="mic" checked /> Record microphone (narration)</label>
     <div id="micState" class="hint"></div>
     <button id="enableMic" hidden>Enable microphone…</button>

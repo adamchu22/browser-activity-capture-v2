@@ -371,8 +371,12 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
         issue_lines.insert(0, f"- **narration**: {manifest['narration_error']} (no voice in video.webm)")
     issues_block = ("\n## ⚠ Capture issues\n" + "\n".join(issue_lines) + "\n") if issue_lines else ""
 
-    return f"""# Analysis context — {manifest.get('capture_id', bundle.name)}
+    # The user's stated goal, up top — the single best anchor for what follows.
+    task = (manifest.get("task") or "").strip()
+    task_block = f"\n> **Task (stated by the user):** {task}\n" if task else ""
 
+    return f"""# Analysis context — {manifest.get('capture_id', bundle.name)}
+{task_block}
 Captured {manifest.get('t0_wall','?')} · duration {manifest.get('duration_ms','?')} ms ·
 sync mode `{manifest.get('sync_mode','?')}`. Secrets redacted as `‹redacted›`.
 {issues_block}{tabs_block}

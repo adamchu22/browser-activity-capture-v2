@@ -129,7 +129,7 @@ async function uninstrumentTab(tabId) {
   } catch {}
 }
 
-async function start(triggerTabId) {
+async function start(triggerTabId, task) {
   if (state.recording) return { ok: false, error: "Already recording." };
 
   const { blocklist, micEnabled } = await getSettings();
@@ -138,6 +138,7 @@ async function start(triggerTabId) {
     recording: true,
     paused: false,
     t0: Date.now(),
+    task: (task || "").slice(0, 500), // the user's stated goal — anchors the analysis
     tabIds: new Set(),
     tabs: new Map(),
     blocklist,
@@ -328,7 +329,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "popup-command") {
     if (msg.command === "start") {
-      start(msg.tabId).then(sendResponse);
+      start(msg.tabId, msg.task).then(sendResponse);
       return true; // async response
     }
     if (msg.command === "stop") {
@@ -424,6 +425,8 @@ async function assembleBundle(video) {
     t0_wall: new Date(state.t0).toISOString(),
     duration_ms: duration,
     sync_mode: "self_record",
+    // The user's stated goal for this recording — the single best anchor for intent.
+    task: state.task || null,
     // v2: video is a full screen/window recording that spans every tab; events
     // carry a `tab` id and this legend maps each id to its page.
     capture_scope: "all_tabs",
