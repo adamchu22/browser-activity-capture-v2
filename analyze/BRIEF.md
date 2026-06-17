@@ -9,10 +9,23 @@ or LLM can follow it.
 
 All aligned on one millisecond clock (`t`):
 
-- **timeline** — the merged event stream (`nav`, `speech`, `click`, `input`, `key`, `network`)
-- **transcript** — the person narrating what they're doing and why
-- **network** — the HTTP requests their actions triggered (HAR)
-- **frames** — screenshots at key moments (in `frames/`, filename = ms offset)
+- **Task** — a one-line goal the user stated at the start (top of `context.md`), when
+  present. This is the strongest signal of intent; let it frame everything.
+- **Steps (narrated procedure)** — the recording auto-segmented into steps, each with
+  the narration spoken during it bound to it. Read this first: it's the draft of your
+  SOP. The raw timeline below it has the full detail.
+- **Tabs** — if the capture spans multiple tabs, a legend (`#1`, `#2`, …) and
+  `━━━ tab #N ━━━` markers in the timeline show when the user moved between them.
+- **timeline** — the merged event stream (`nav`, `speech`, `click`, `input`, `key`,
+  `network`). Actions are described semantically — `click button "Issue refund" in
+  "Order actions"` — with the unique CSS selector in `[...]` for replay.
+- **transcript** — the person narrating what they're doing and why.
+- **network** — the HTTP requests their actions triggered (HAR). Analytics/ad/tracking
+  noise is collapsed in `context.md`; the full HAR is in `bundle/`.
+- **frames** — screenshots at key moments (in `frames/`, filename = ms offset). Each
+  click in the steps view links to its frame (`→ frames/x.png @(x%,y%)`). Open
+  **`frames-annotated.html`** to see the click point and target element drawn on each
+  screenshot.
 
 Sensitive values are already redacted (shown as `‹redacted›`). Never invent the
 underlying secret, and never suggest bypassing redaction.

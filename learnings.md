@@ -4,6 +4,34 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (intent capture — bind and structure, don't add raw signal)
+
+- **The 10x for the analyzing model isn't more raw data — it's binding + structure.**
+  The capture already had clicks, narration, network, frames. What made it legible was
+  (1) tagging actions with semantic element context (accessible name / role / section)
+  so "click div:nth-of-type(3)" became "click button 'Issue refund' in 'Order
+  actions'"; (2) segmenting the flat stream into steps and binding the narration spoken
+  in each to it (draft SOP); (3) a stated task goal at the top; (4) linking each action
+  to its frame and drawing the click marker on it. None of these needed new sensors —
+  just joining signals already on the one clock.
+
+- **Narration forward-binds to the action it introduces.** A speech cue narrates what
+  comes next, not what just happened. In step segmentation, give each speech event the
+  *next* action's tab (forward-fill) and let a pre-action pause start a new step that
+  opens with the cue — otherwise narration sticks to the previous step and detaches
+  from the action it explains. _(Cross-project candidate for the LLM Wiki.)_
+
+- **Semantic capture must never read `el.value`.** Accessible name from aria-label /
+  aria-labelledby / associated `<label>` / text / placeholder is safe and intent-rich;
+  `el.value` would leak a typed secret. Skip `textContent` for `<select>` (it's the
+  concatenated option text) — use the chosen option instead.
+
+- **"Draw on screen" without an image library.** Don't rasterize onto the PNG (needs
+  Pillow). Generate an HTML view that layers a CSS-positioned marker over the frame
+  `<img>` using the captured `%` coords + the element rect as `%` of the viewport —
+  resolution-independent, pure stdlib, and it renders a real annotated view in a
+  browser. _(Cross-project candidate for the LLM Wiki.)_
+
 ## 2026-06-17 (v2 capture rework — architecture, pending live verification)
 
 - **Full-screen video uses `desktopCapture`, not `getDisplayMedia`.** For an MV3

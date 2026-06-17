@@ -1,5 +1,28 @@
 # To-do (completed) — v2
 
+## 2026-06-17 — intent-capture upgrades (make the bundle 10x for the analyzing model)
+
+Asked "what would make this 10x better at conveying user intent?", built the binding
++ structuring layer over the already-captured raw material:
+
+- **Semantic element context.** `content.js describe()` attaches accessible name,
+  ARIA role, enclosing section/landmark, and input/link/select specifics to
+  click/hover/input events (never reads `el.value`, so safe on secret fields).
+  `pack.py` renders `click button "Issue refund" in "Order actions"` instead of a
+  bare selector. Verified in real Chromium via the extended selector harness.
+- **Narrated procedure (step segmentation).** `pack.py` groups the flat timeline into
+  steps at navigations / tab switches / >2.5s pauses and binds the narration spoken in
+  each step to it. Narration forward-binds to the action it introduces. New
+  `## Steps (narrated procedure)` section reads like a draft SOP.
+- **Stated task goal.** Popup field → `manifest.task` → bold callout at the top of
+  `context.md`. The single best intent anchor.
+- **Frame linking + "draw on screen".** Each click links to its nearest frame
+  (`→ frames/x.png @(x%,y%)`); `build_pack` writes `frames-annotated.html` drawing a
+  ring at the click point + the element's box on each screenshot. Verified end-to-end
+  on the real ESPN recording and visually in a browser.
+- Updated `analyze/BRIEF.md` so the consuming agent uses the task/steps/tabs/annotated
+  frames. 61 unit tests green (+ harness for the DOM capture).
+
 ## 2026-06-17 — v2 capture rework (built, pending live verification)
 
 - **Forked v1 as the v2 baseline.** Verbatim copy of the working v1 tool into this

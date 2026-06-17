@@ -25,7 +25,8 @@ unknowns are marked **⚠ RISK**.
 
 1. Open **two or three normal website tabs** (not `chrome://`). Optionally a second
    window.
-2. Extension popup → **Start**.
+2. In the popup, type a one-line **task goal** ("What are you doing in this
+   recording?"), then **Start**.
    - **⚠ RISK 1 — the screen picker.** A Chrome "Choose what to share" picker should
      appear. Pick a **screen** (or a window). If no picker appears, `desktopCapture`
      wasn't triggered from the worker — see "If the picker never shows" below.
@@ -51,11 +52,19 @@ python3 analyze/pack.py <bundle-dir> --out ./pack
 ```
 
 In `pack/context.md` confirm the v2 signal:
-- a **## Tabs (recorded in parallel)** section listing every tab you used;
-- **`━━━ tab #N ━━━`** switch markers in the timeline where you moved between tabs;
+- your typed **Task** appears as a callout at the very top;
+- a **## Steps (narrated procedure)** section that reads like a draft SOP, with your
+  narration bound to each step and clicks described semantically (e.g. `click button
+  "…" in "…"`, not a bare selector);
+- a **## Tabs (recorded in parallel)** section + **`━━━ tab #N ━━━`** switch markers
+  where you moved between tabs;
 - clicks/network from **all** the tabs (not just the one you started on);
 - `video.webm` plays back your **whole screen** following you across tabs;
 - the narration you spoke is interleaved as `🗣` lines on the same clock.
+
+Then open **`pack/frames-annotated.html`** in a browser: each click/hover frame should
+show a red ring on the spot you clicked and a box around the element. (Confirms the
+captured coordinates + element rect line up with what was on screen.)
 
 ## If the picker never shows (RISK 1 fallback)
 

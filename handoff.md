@@ -5,12 +5,20 @@ _Last updated: 2026-06-17 (v2 capture rework built, not yet live-verified)_
 ## What this is
 
 v2 of `browser-activity-capture`, forked from the working v1 tool (which lives in
-its own repo, untouched). v2 changes the capture model from **one pinned tab** to
-**full-screen video + all-tabs instrumentation**: it records the whole screen
-(follows you across tabs/windows) and attaches the CDP debugger + content script to
-every eligible tab, including tabs opened mid-recording. Every event is tagged with
-its source tab; the bundle carries a tab legend and `pack.py` renders tab-switch
-markers.
+its own repo, untouched). Two things changed in v2:
+
+**Capture model** — from **one pinned tab** to **full-screen video + all-tabs
+instrumentation**: records the whole screen (follows you across tabs/windows) and
+attaches the CDP debugger + content script to every eligible tab, including tabs
+opened mid-recording. Events are tagged with their source tab; `pack.py` renders a
+tab legend + tab-switch markers.
+
+**Intent capture** — to make the bundle 10x more legible to the analyzing model:
+a stated **task goal** (popup → manifest → top of context.md); **semantic element
+context** (accessible name / role / section, so "click button 'Issue refund' in
+'Order actions'" not a selector); a **narrated procedure** (`## Steps`, segmenting
+the timeline and binding the narration to each step); and **frame linking + a
+`frames-annotated.html`** that draws the click point + element box on each screenshot.
 
 The `analyze/` pipeline (validate → transcribe → glossary → pack) is inherited from
 v1 and works the same; it now also renders the multi-tab data.
@@ -39,9 +47,11 @@ v2, run `LIVE-TEST.md`. Two highest-risk unknowns it checks:
 
 ## Tests
 
-`python3 -m unittest discover -s tests` — 37 tests (glossary, network-noise collapse,
-multi-tab rendering). Stdlib only. The content.js unique-selector logic is verified
-separately via `tests/browser/selector-harness.html` (browser, not unittest).
+`python3 -m unittest discover -s tests` — 61 tests (glossary, network-noise collapse,
+multi-tab rendering, semantic labels + step segmentation + frame annotation). Stdlib
+only. The content.js unique-selector AND semantic-context (`describe()`) logic is
+verified in real Chromium via `tests/browser/selector-harness.html` (browser, not
+unittest) — `allUnique`, `allIdentify`, and `allCtxPass` all true.
 
 ## Exact next step
 

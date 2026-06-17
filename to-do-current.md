@@ -1,17 +1,20 @@
 # To-do (current) — v2
 
-v2 reworks capture to **full-screen video + all-tabs instrumentation**. Code is
-built and unit-tested; the extension still needs a live-Chrome run. Completed v2
-work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
+v2 reworks capture to **full-screen video + all-tabs instrumentation** and adds an
+**intent-capture layer** (stated task goal, semantic element context, narrated-step
+segmentation, frame annotation / "draw on screen"). Code is built and unit-tested
+(61 tests; DOM capture also harness-verified); the extension still needs a live-Chrome
+run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
 ## Now (in order)
 
-- [ ] **Live-verify v2 in real Chrome** — run `LIVE-TEST.md` end to end. The two
-      risk items: (1) the `desktopCapture` screen picker actually opens when Start is
-      pressed from the popup→worker path; (2) tabs opened mid-recording get the CDP
-      debugger via `tabs.onUpdated`. Confirm `context.md` shows the `## Tabs` legend
-      and `━━━ tab #N ━━━` switch markers across all tabs you used. Record the
-      outcome (and which picker-trigger path worked) in `learnings.md`.
+- [ ] **Live-verify v2 in real Chrome** — run `LIVE-TEST.md` end to end. Risk items:
+      (1) the `desktopCapture` screen picker opens from the popup→worker path; (2) tabs
+      opened mid-recording get the CDP debugger via `tabs.onUpdated`. Also confirm the
+      intent layer in `context.md`: the Task callout, the narrated `## Steps`, semantic
+      click labels, the `## Tabs` legend + `━━━ tab #N ━━━` markers, and that
+      `frames-annotated.html` draws markers on the right elements. Record the outcome
+      (and which picker-trigger path worked) in `learnings.md`.
 
 - [ ] **On-screen control overlay** (injected, visible during recording):
       **Pause, Cancel, Restart, Finish (stop & export)**. In v2 it must work
