@@ -1,31 +1,45 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-17 (v2 live-verified end-to-end; entire-screen + app-switch run in progress)_
+_Last updated: 2026-06-17 (entire-screen run verified + feedback captured; next: P0 self-driving zip)_
 
-## ⏳ In progress — read first (chat was cleared after this was written)
+## ▶ NEXT — live-verify P0, then start P1 (overlay)
 
-Adam reloaded the extension and is running a **new live test**: capture the **Entire
-Screen** (not a window) and **switch to a different application** (outside the browser)
-mid-recording. He will then **give feedback on the browser tool itself** — that
-feedback is NOT yet recorded here; capture it when he gives it (placeholder in
-`to-do-current.md`).
+**P0 (self-driving zip + audio fix) is BUILT and unit-tested.** Every export now embeds
+`CLAUDE.md` + `AGENTS.md` (from `extension/src/bundle-docs.js`) telling any receiving agent
+how to read the bundle, the analysis procedure, and — the core fix — that if
+`transcript.vtt` is a stub the narration is an Opus track in `video.webm`, recoverable with
+ffmpeg + any local ASR. The bundle README now says the zip is self-driving (pack.py optional).
+Tests: `tests/test_bundle_docs.mjs` (13) green; python (70) + redact (7) still green.
 
-**What to expect from this run (so you can interpret the bundle correctly):**
-- A **new bundle in `outputs/`** to validate. With the redaction fixes now committed
-  (commits `8aa428c`/`25ae868`), it should be the second clean **`validate_bundle.py`
-  PASS** — confirm it, and confirm `video.webm` is present.
-- **Video (`video.webm`) will show the WHOLE screen, including the other application**
-  — entire-screen `getDisplayMedia` records everything on the monitor, browser or not.
-- **Structured capture only covers browser tabs.** DOM (rrweb), clicks, and CDP
-  network exist ONLY for instrumented browser tabs. While Adam is in the other app,
-  expect a **gap** in `timeline.json`/`events.jsonl` (little/no events) — that's
-  expected, not a bug. The video is the only record of the non-browser app.
-- **Frames during the app-switch may be stale/absent:** `captureVisibleTab` grabs the
-  active *browser* tab; with another app focused it can fail or return the last tab.
-  Again, the video covers that window; the frames don't.
-- **Privacy note:** video pixels are NOT redacted (only the structured DOM/network is).
-  An entire-screen recording can capture other apps, notifications, secrets on screen.
-  This is inherent to screen recording — flag it if Adam's feedback touches on it.
+**▶ NEXT ACTION (Adam): live-verify.** Reload the extension, record a short capture, and
+confirm the exported zip actually contains `CLAUDE.md` + `AGENTS.md` with sensible content
+(the code + unit tests pass; this just confirms the `background.js` export wiring in real
+Chrome). Then proceed to **P1 — on-screen overlay** (see `to-do-current.md`).
+
+Why P0 was needed (verified): the raw zip's README pointed at `../analyze/pack.py` (a path a
+recipient won't have); the self-driving layer only existed in the *pack*, not the zip; and
+`pack.py` doesn't copy `video.webm` into the pack (`RAW_FILES`, line 35), so a pack built from
+a stub-transcript bundle lost the narration entirely. See `learnings.md` and P4b.
+
+## ✅ Done — entire-screen + app-switch run verified, feedback captured
+
+The entire-screen + app-switch test is **done and confirmed**: `outputs/capture-2026-06-17T14-36-28-587Z.zip`
+**validates PASS** (263 events, `video.webm` 48 MB with an Opus mic-narration audio track,
+`errors.json` empty). Frames confirm the video captured the **whole screen across both
+Chrome and Comet** (a second browser without the extension). The app-switch is visible
+in the video only — structured DOM/click/network capture covers instrumented browser
+tabs, as designed.
+
+**Adam's feedback on the tool is now captured** in `to-do-current.md` (the "🎯 ADAM'S
+FEEDBACK" block) — transcribed from his narration. Headline asks: compact dropdown popup;
+move blocklist + download-folder into Settings; countdown; face-cam bubble; an on-screen
+overlay (Finish/Pause/Restart/Cancel, no rewind/trim); and — the big one — **two separate
+annotation tools, Selector (element-snapping, for user↔agent alignment) and Draw (freeform
+region highlight)**, plus an element-aware Blur. Reference UI he likes: the Loom extension.
+
+_Transcription note: the v2 `.venv` was absent on this machine, so the narration was read
+with a throwaway faster-whisper env. The product's `transcribe.py` (parakeet/qwen default)
+is unchanged; it reuses model weights already on disk and does not depend on TypeWhisper running._
 
 ## What this is
 
@@ -110,26 +124,18 @@ steer, bundled skills incl. competitive-research). Stdlib only.
 `tests/browser/selector-harness.html` (browser, not unittest) — `allUnique`,
 `allIdentify`, and `allCtxPass` all true.
 
-## Exact next step — RE-RUN LIVE TEST (picker fix needs verifying)
+## Exact next step — build P0 (self-driving zip + audio fix)
 
-**▶ NEXT ACTION: re-run `LIVE-TEST.md` in real Chrome.** Run 1 (2026-06-17) confirmed
-multi-tab capture works but the screen picker failed and a URL token leaked. Both are
-now fixed in code (recorder-page picker + `redactUrl`). The re-run must confirm:
-1. Chrome's "Choose what to share" dialog opens after **Start in the popup** (via
-   getDisplayMedia in the offscreen doc) and a `video.webm` lands in the bundle;
-2. `validate_bundle.py` returns **PASS** (run 1 failed on the leaked `?jwt=` token);
-3. the rest still holds — `## Tabs` + `━━━ tab #N ━━━` markers, narrated `## Steps`,
-   semantic click labels, and `frames-annotated.html` markers on the right elements.
+See the **▶ NEXT — P0** section at the top and the **P0** task block in `to-do-current.md`.
+In short: generate `CLAUDE.md` + `AGENTS.md` into every exported zip (in `background.js`,
+next to `README.md`), covering how to read the bundle, the analysis procedure, and the
+audio-in-`video.webm` fallback when `transcript.vtt` is a stub. Add export/zip tests that
+assert both files are present and reference the audio fallback.
 
-**Record the outcome in `learnings.md`** — especially whether the recorder-page picker
-worked, and anything else that broke.
-
-After it passes: build the **on-screen control overlay** (Pause/Cancel/Restart/Finish).
-
-After the live test passes: build the **on-screen control overlay**
-(Pause/Cancel/Restart/Finish) — in v2 a single overlay visible regardless of which tab
-is focused. (Deferred until now because its cross-tab design depends on confirming the
-live multi-tab behavior first.)
+The live capture pipeline is already verified (run 3 + the entire-screen run both PASS), so
+no live re-run is required before P0 — P0 is editing the export + adding tests, verifiable
+by re-exporting and re-validating a bundle. The UX work (overlay → Selector/Draw → popup
+redesign, P1–P3) follows P0.
 
 ## Known caveats
 
