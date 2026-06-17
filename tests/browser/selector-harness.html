@@ -43,6 +43,23 @@
     <article><ul><li><span data-pick="deep-span">deep</span></li></ul></article>
   </main>
 
+  <!-- ctx (semantic context) fixtures: name / role / section / input / select -->
+  <section aria-label="Order actions">
+    <button data-ctx="refund-btn">Issue refund</button>
+  </section>
+  <div>
+    <label for="reason">Reason for refund</label>
+    <input id="reason" type="text" data-ctx="reason-input" />
+  </div>
+  <section>
+    <h2>Shipping</h2>
+    <div><a href="/track/123" data-ctx="track-link">Track package</a></div>
+  </section>
+  <select data-ctx="state-select">
+    <option>Draft</option>
+    <option selected>Submitted</option>
+  </select>
+
   <script>
     // --- chrome.runtime stub: collect timeline events, auto-start recording ---
     window.__events = [];
@@ -64,6 +81,9 @@
   <script>
     // --- 3. drive clicks and self-check the emitted selectors ----------------
     function run() {
+      // Stop real navigation/submit so clicking the <a> doesn't leave the page
+      // (content.js still sees the event — both listeners are capture-phase).
+      document.addEventListener("click", (e) => e.preventDefault(), true);
       const targets = [
         document.querySelector("#save-btn"),
         document.querySelector('[data-testid="user-card"]'),
@@ -90,11 +110,40 @@
           identifiesTarget: matches.length === 1 && matches[0] === el,
         });
       }
+      // --- 4. drive clicks on the ctx fixtures and capture describe() output ---
+      function clickCtx(sel) {
+        const el = document.querySelector(sel);
+        const before = window.__events.length;
+        el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        return window.__events[before]?.ctx || {};
+      }
+      const ctx = {
+        refund: clickCtx('[data-ctx="refund-btn"]'),
+        reason: clickCtx('[data-ctx="reason-input"]'),
+        link: clickCtx('[data-ctx="track-link"]'),
+        select: clickCtx('[data-ctx="state-select"]'),
+      };
+      const ctxChecks = {
+        button_role: ctx.refund.role === "button",
+        button_name: ctx.refund.name === "Issue refund",
+        button_section: ctx.refund.section === "Order actions",
+        input_role: ctx.reason.role === "textbox",
+        input_name_from_label: ctx.reason.name === "Reason for refund",
+        link_role: ctx.link.role === "link",
+        link_href: ctx.link.href === "/track/123",
+        link_section_from_heading: ctx.link.section === "Shipping",
+        select_role: ctx.select.role === "combobox",
+        select_selected: ctx.select.selected === "Submitted",
+      };
+
       window.__results = {
         clicks: window.__events.filter((e) => e.kind === "click").length,
         results,
         allUnique: results.every((r) => r.unique),
         allIdentify: results.every((r) => r.identifiesTarget),
+        ctx,
+        ctxChecks,
+        allCtxPass: Object.values(ctxChecks).every(Boolean),
       };
       // Render for eyeballing too.
       const pre = document.createElement("pre");

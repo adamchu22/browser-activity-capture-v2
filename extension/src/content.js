@@ -151,6 +151,107 @@
     );
   }
 
+  // --- semantic context (what the element IS, for intent) -------------------
+  //
+  // A selector is for replay; this is for understanding. We capture the
+  // accessible name, ARIA role, the section/landmark the element sits in, and
+  // input/link/select specifics — so the analyst reads "click the 'Issue refund'
+  // button in 'Order actions'" instead of "click div:nth-of-type(3)". Never reads
+  // el.value, so it can't leak a typed secret.
+
+  function accessibleName(el) {
+    if (!el) return "";
+    const aria = el.getAttribute?.("aria-label");
+    if (aria) return aria.trim().slice(0, 80);
+    const labelledby = el.getAttribute?.("aria-labelledby");
+    if (labelledby) {
+      const txt = labelledby
+        .split(/\s+/)
+        .map((id) => document.getElementById(id)?.textContent?.trim())
+        .filter(Boolean)
+        .join(" ");
+      if (txt) return txt.slice(0, 80);
+    }
+    if (el.id) {
+      const lab = document.querySelector(`label[for="${cssEsc(el.id)}"]`);
+      if (lab?.textContent?.trim()) return lab.textContent.trim().slice(0, 80);
+    }
+    const closestLabel = el.closest?.("label");
+    if (closestLabel?.textContent?.trim()) return closestLabel.textContent.trim().slice(0, 80);
+    // textContent is a good name for buttons/links, but for a <select> it's just the
+    // concatenated <option> text — skip it (the chosen option is in `selected`).
+    if ((el.tagName || "").toLowerCase() !== "select") {
+      const text = el.textContent?.trim();
+      if (text) return text.slice(0, 80);
+    }
+    return (el.getAttribute?.("placeholder") || el.getAttribute?.("title") || el.getAttribute?.("alt") || "").slice(0, 80);
+  }
+
+  function roleOf(el) {
+    const explicit = el.getAttribute?.("role");
+    if (explicit) return explicit;
+    const tag = (el.tagName || "").toLowerCase();
+    if (tag === "input") {
+      const t = (el.getAttribute?.("type") || "text").toLowerCase();
+      return { checkbox: "checkbox", radio: "radio", submit: "button", button: "button", range: "slider" }[t] || "textbox";
+    }
+    const map = {
+      a: el.getAttribute?.("href") ? "link" : "",
+      button: "button", select: "combobox", textarea: "textbox",
+      h1: "heading", h2: "heading", h3: "heading", h4: "heading", h5: "heading", h6: "heading",
+      nav: "navigation", main: "main",
+    };
+    return map[tag] || "";
+  }
+
+  // The section the element lives in: a labelled enclosing landmark, else the
+  // nearest heading that precedes it in document order.
+  function sectionFor(el) {
+    const landmark = el.closest?.("[role], main, nav, header, footer, aside, section, form, dialog");
+    if (landmark) {
+      let label = landmark.getAttribute?.("aria-label") || "";
+      if (!label) {
+        const lid = landmark.getAttribute?.("aria-labelledby");
+        if (lid) label = document.getElementById(lid)?.textContent?.trim() || "";
+      }
+      if (label) return label.slice(0, 80);
+    }
+    let node = el;
+    for (let depth = 0; node && depth < 12; depth++) {
+      for (let sib = node.previousElementSibling; sib; sib = sib.previousElementSibling) {
+        const h = sib.matches?.("h1,h2,h3,h4,h5,h6") ? sib : sib.querySelector?.("h1,h2,h3,h4,h5,h6");
+        if (h?.textContent?.trim()) return h.textContent.trim().slice(0, 80);
+      }
+      node = node.parentElement;
+    }
+    return "";
+  }
+
+  function describe(el) {
+    if (!el || el.nodeType !== 1) return {};
+    const tag = (el.tagName || "").toLowerCase();
+    const d = { tag };
+    const role = roleOf(el);
+    if (role) d.role = role;
+    const name = accessibleName(el);
+    if (name) d.name = name;
+    if (tag === "input" || tag === "textarea" || tag === "select") {
+      const t = el.getAttribute?.("type");
+      if (t) d.inputType = t;
+    }
+    if (tag === "a") {
+      const href = el.getAttribute?.("href");
+      if (href) d.href = href;
+    }
+    if (tag === "select" && el.options) {
+      const opt = el.options[el.selectedIndex];
+      if (opt?.textContent) d.selected = opt.textContent.trim().slice(0, 80);
+    }
+    const section = sectionFor(el);
+    if (section) d.section = section;
+    return d;
+  }
+
   // Where on the page the pointer is — viewport pixel coords, a
   // resolution-independent percent, the viewport size, and the target's bounding
   // box. This is what lets an agent resolve "in this area" even when you click or
@@ -182,7 +283,7 @@
   function onClick(e) {
     const el = e.target;
     lastHoverSelector = null; // let a re-hover on the same element log again
-    emit("click", { selector: selectorFor(el), label: labelFor(el), ...positionFor(e.clientX, e.clientY, el) });
+    emit("click", { selector: selectorFor(el), label: labelFor(el), ctx: describe(el), ...positionFor(e.clientX, e.clientY, el) });
   }
 
   // Pointer dwell → `hover`. When the cursor rests on an element for DWELL_MS we
@@ -208,16 +309,19 @@
     const selector = selectorFor(el);
     if (selector === lastHoverSelector) return;
     lastHoverSelector = selector;
-    emit("hover", { selector, label: labelFor(el), ...positionFor(lastMove.x, lastMove.y, el) });
+    emit("hover", { selector, label: labelFor(el), ctx: describe(el), ...positionFor(lastMove.x, lastMove.y, el) });
   }
 
   function onChange(e) {
     const el = e.target;
     if (!("value" in el)) return;
+    // describe() never reads el.value, so it's safe even for secret fields — it
+    // gives the field's label/role so "type into the 'Reason' box" is legible.
+    const ctx = describe(el);
     if (isSecretInput(el)) {
-      emit("input", { selector: selectorFor(el), value: "‹redacted:secret›" });
+      emit("input", { selector: selectorFor(el), value: "‹redacted:secret›", ctx });
     } else {
-      emit("input", { selector: selectorFor(el), value: maskValue(el.name || el.id, el.value) });
+      emit("input", { selector: selectorFor(el), value: maskValue(el.name || el.id, el.value), ctx });
     }
   }
 
