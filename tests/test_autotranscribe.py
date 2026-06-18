@@ -104,6 +104,23 @@ class TestMaybeTranscribe(unittest.TestCase):
                 with mock.patch.object(transcribe, "transcribe", side_effect=RuntimeError("boom")):
                     pack.maybe_transcribe(b, True)  # must not raise
 
+    def test_malformed_manifest_is_not_fatal(self):
+        # A corrupt manifest.json must not crash the pack build (reads are inside try).
+        with tempfile.TemporaryDirectory() as tmp:
+            b = Path(tmp)
+            (b / "transcript.vtt").write_text("WEBVTT\n\nNOTE No narration captured.\n")
+            (b / "manifest.json").write_text("{ not json ")
+            (b / "video.webm").write_bytes(b"\x00")
+            pack.maybe_transcribe(b, True)  # must not raise
+
+    def test_non_utf8_transcript_is_not_fatal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            b = Path(tmp)
+            (b / "transcript.vtt").write_bytes(b"\xff\xfe not utf8")
+            (b / "manifest.json").write_text(json.dumps({"video": "video.webm"}))
+            (b / "video.webm").write_bytes(b"\x00")
+            pack.maybe_transcribe(b, True)  # must not raise
+
 
 if __name__ == "__main__":
     unittest.main()

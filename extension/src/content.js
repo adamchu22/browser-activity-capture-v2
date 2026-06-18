@@ -710,7 +710,9 @@
       // Don't let the pick double as a real page click / navigation.
       e.preventDefault();
       e.stopPropagation();
-      const el = hovered || pageElAt(e.clientX, e.clientY);
+      // Resolve from the click point, not the cached hover — the wheel handler scrolls
+      // without firing onMove, so `hovered` can be stale after a scroll.
+      const el = pageElAt(e.clientX, e.clientY) || hovered;
       if (!el || el.nodeType !== 1) return;
       const r = el.getBoundingClientRect();
       emit("annotation:select", {

@@ -100,6 +100,20 @@ class TestAnnotatedFramesHtml(unittest.TestCase):
         far = [{"t": 99999, "file": "frames/x.png"}]
         self.assertEqual(pack.build_annotated_frames_html([SELECT, DRAW], far), "")
 
+    def test_coords_cannot_inject_markup(self):
+        # A tampered bundle with a non-numeric coordinate must not smuggle HTML/SVG
+        # into the generated file — coords are coerced to numbers.
+        evil_draw = ev(2000, "annotation:draw", points=[
+            {"xpct": '5"></svg><script>alert(1)</script>', "ypct": 5},
+            {"xpct": 10, "ypct": 10},
+        ])
+        evil_sel = ev(1000, "annotation:select", selector="#a",
+                      xpct='1"><script>x</script>', ypct=2,
+                      viewport={"w": 100, "h": 100}, rect={"x": 0, "y": 0, "w": 1, "h": 1})
+        html = pack.build_annotated_frames_html([evil_draw, evil_sel], self.FRAMES)
+        self.assertNotIn("<script>", html)
+        self.assertIn("0,5 10,10", html)  # the bad point became 0
+
     def test_click_still_red(self):
         # Regression: a normal click keeps the plain (red) box/dot, no 'sel' class.
         click = ev(1000, "click", selector="#a", ctx={"name": "A"}, xpct=5, ypct=5,

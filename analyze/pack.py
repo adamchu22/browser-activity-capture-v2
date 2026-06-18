@@ -237,11 +237,21 @@ def input_label(e: dict) -> str:
     return f'"{ctx["name"]}"' if ctx.get("name") else e.get("selector", "")
 
 
+def _num(v, default=0.0):
+    """Coerce a value to float, falling back to `default`. Used to sanitise
+    coordinate fields before they go into generated HTML/SVG — a non-numeric value
+    (tampered bundle) becomes a number instead of injecting markup."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def _draw_region(e: dict) -> str:
     """A short '@(x%,y%) w×h%' summary of a freeform Draw annotation's bounding box,
     so the region the user highlighted reads at a glance. Empty if no bbox."""
     b = e.get("bbox") or {}
-    if not b or b.get("xpct") is None:
+    if not b or b.get("xpct") is None or b.get("wpct") is None:
         return ""
     return f"@({b.get('xpct')}%,{b.get('ypct')}%) {b.get('wpct')}×{b.get('hpct')}%"
 
@@ -454,14 +464,17 @@ def _point_card(e: dict, frames: list[dict], kind: str) -> str:
     ctx = e.get("ctx") or {}
     label = ctx.get("name") or e.get("label") or e.get("selector", "")
     role = ctx.get("role", "")
-    x, y = e["xpct"], e["ypct"]
+    # Coords go straight into HTML style/SVG, so coerce to numbers — a tampered bundle
+    # can't smuggle markup through xpct/ypct/rect.
+    x, y = _num(e.get("xpct")), _num(e.get("ypct"))
     sel = kind == "annotation:select"
     cls = " sel" if sel else ""  # blue, to match the in-extension Select tool
     box = ""
     rect, vp = e.get("rect"), e.get("viewport")
-    if rect and vp and vp.get("w") and vp.get("h"):
-        bx, by = rect["x"] / vp["w"] * 100, rect["y"] / vp["h"] * 100
-        bw, bh = rect["w"] / vp["w"] * 100, rect["h"] / vp["h"] * 100
+    if rect and vp and _num(vp.get("w")) and _num(vp.get("h")):
+        vw, vh = _num(vp.get("w")), _num(vp.get("h"))
+        bx, by = _num(rect.get("x")) / vw * 100, _num(rect.get("y")) / vh * 100
+        bw, bh = _num(rect.get("w")) / vw * 100, _num(rect.get("h")) / vh * 100
         box = f'<div class="box{cls}" style="left:{bx:.1f}%;top:{by:.1f}%;width:{bw:.1f}%;height:{bh:.1f}%"></div>'
     caption_kind = "✦ marked" if sel else _esc(kind)
     return (
@@ -471,7 +484,7 @@ def _point_card(e: dict, frames: list[dict], kind: str) -> str:
         f'  <div class="shot">\n'
         f'    <img src="{_esc(f)}" loading="lazy" alt="{_esc(label)}">\n'
         f'    {box}\n'
-        f'    <div class="dot{cls}" style="left:{x}%;top:{y}%"></div>\n'
+        f'    <div class="dot{cls}" style="left:{x:g}%;top:{y:g}%"></div>\n'
         f'  </div>\n'
         f'</figure>'
     )
@@ -487,7 +500,9 @@ def _draw_card(e: dict, frames: list[dict]) -> str:
     f = nearest_frame(e.get("t", 0), frames)
     if not f:
         return ""
-    poly = " ".join(f'{p.get("xpct", 0)},{p.get("ypct", 0)}' for p in pts)
+    # Coerce each coord to a number — these go straight into the SVG points attribute,
+    # so a non-numeric value in a tampered bundle becomes 0, never injected markup.
+    poly = " ".join(f"{_num(p.get('xpct')):g},{_num(p.get('ypct')):g}" for p in pts)
     region = _draw_region(e)
     svg = (
         '<svg class="ink" viewBox="0 0 100 100" preserveAspectRatio="none">'
@@ -603,7 +618,9 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
         tabs_block = "\n## Tabs (recorded in parallel)\n" + "\n".join(rows) + "\n"
 
     frames = manifest.get("frames", [])
-    frame_index = "\n".join(f"- `{ms(f['t'])}` → `frames/{Path(f['file']).name}`" for f in frames)
+    frame_index = "\n".join(
+        f"- `{ms(f.get('t', 0))}` → `frames/{Path(f.get('file', '')).name}`" for f in frames
+    )
 
     # Surface capture problems up top: anything in errors.json plus the specific
     # narration failure reason, so a bad run is obvious without digging.
@@ -712,21 +729,27 @@ def maybe_transcribe(bundle: Path, enabled: bool = True) -> None:
     machine; only runs when ffmpeg is present, and reuses cached model weights."""
     if not enabled:
         return
-    tpath = bundle / "transcript.vtt"
-    text = tpath.read_text(encoding="utf-8") if tpath.exists() else ""
-    if not _transcript_is_stub(text):
-        return  # a real transcript is already here — don't touch it
-    manifest = json.loads((bundle / "manifest.json").read_text()) if (bundle / "manifest.json").exists() else {}
-    if manifest.get("narration_in_video") is False:
-        return  # the manifest says the video has no mic audio
-    video = bundle / (manifest.get("video") or "video.webm")
-    if not video.exists():
-        return  # no audio to recover
-    if not shutil.which("ffmpeg"):
-        print("note: skipping auto-transcribe — ffmpeg not found. Run "
-              "`analyze/transcribe.py <bundle>` in the .venv to add narration.", file=sys.stderr)
-        return
+    # Everything is inside the try: a malformed manifest.json or a non-UTF-8
+    # transcript.vtt must NOT crash the pack build (the contract is "never fatal").
     try:
+        tpath = bundle / "transcript.vtt"
+        # errors="replace": a stray non-UTF-8 byte shouldn't raise here.
+        text = tpath.read_text(encoding="utf-8", errors="replace") if tpath.exists() else ""
+        if not _transcript_is_stub(text):
+            return  # a real transcript is already here — don't touch it
+        manifest = {}
+        mpath = bundle / "manifest.json"
+        if mpath.exists():
+            manifest = json.loads(mpath.read_text(encoding="utf-8"))
+        if manifest.get("narration_in_video") is False:
+            return  # the manifest says the video has no mic audio
+        video = bundle / (manifest.get("video") or "video.webm")
+        if not video.exists():
+            return  # no audio to recover
+        if not shutil.which("ffmpeg"):
+            print("note: skipping auto-transcribe — ffmpeg not found. Run "
+                  "`analyze/transcribe.py <bundle>` in the .venv to add narration.", file=sys.stderr)
+            return
         import transcribe as _transcribe  # lazy: keeps the rest of pack.py engine-free
         print("transcribing narration locally (parakeet)… first run may load a model.", file=sys.stderr)
         _transcribe.transcribe(bundle, "parakeet", "", 8.0, None)
