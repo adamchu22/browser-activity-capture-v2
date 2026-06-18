@@ -12,11 +12,15 @@ cd "$(dirname "$0")/.."  # repo root (one up from analyze/)
 
 echo "→ Setting up the transcription venv (.venv)…"
 
-# ffmpeg is required to extract the audio track from video.webm.
+# ffmpeg is required to extract the audio track from video.webm. It's the one
+# dependency pip can't install, and a missing ffmpeg makes every transcription
+# silently skip — so HARD-GATE on it here rather than warn and "succeed" anyway.
 if ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "⚠  ffmpeg not found on PATH. Install it, then re-run:"
-  echo "     macOS:  brew install ffmpeg"
-  echo "     Linux:  sudo apt-get install ffmpeg   (or your distro's package manager)"
+  echo "✗ ffmpeg not found on PATH — transcription won't work without it." >&2
+  echo "  Install it, then re-run this setup:" >&2
+  echo "     macOS:  brew install ffmpeg" >&2
+  echo "     Linux:  sudo apt-get install ffmpeg   (or your distro's package manager)" >&2
+  exit 1
 fi
 
 is_apple_silicon() { [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; }
@@ -39,5 +43,11 @@ else
   fi
 fi
 
-echo "✓ Done. pack.py will now auto-transcribe narration. Test it directly with:"
+# Verify the whole chain works on THIS machine before claiming success — and
+# pre-warm the model (first engine run downloads weights) so the first real
+# capture transcribes fast and offline. selftest exits non-zero if anything's off.
+echo "→ Verifying transcription end-to-end (this also downloads the model once)…"
+.venv/bin/python analyze/transcribe.py --selftest
+
+echo "✓ Done. pack.py will now auto-transcribe every future capture. Test it directly with:"
 echo "    .venv/bin/python analyze/transcribe.py /path/to/bundle"

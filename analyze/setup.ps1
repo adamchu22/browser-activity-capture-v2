@@ -11,10 +11,14 @@ Set-Location (Join-Path $PSScriptRoot "..")  # repo root (one up from analyze\)
 
 Write-Host "-> Setting up the transcription venv (.venv)..."
 
-# ffmpeg is required to extract the audio track from video.webm.
+# ffmpeg is required to extract the audio track from video.webm. It's the one
+# dependency pip can't install, and a missing ffmpeg makes every transcription
+# silently skip — so HARD-GATE on it here rather than warn and "succeed" anyway.
 if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
-  Write-Warning "ffmpeg not found on PATH. Install it, then re-run:"
+  Write-Host "x ffmpeg not found on PATH - transcription won't work without it." -ForegroundColor Red
+  Write-Host "  Install it, then re-run this setup:"
   Write-Host "     winget install Gyan.FFmpeg     (or: choco install ffmpeg)"
+  exit 1
 }
 
 if (Get-Command uv -ErrorAction SilentlyContinue) {
@@ -27,5 +31,12 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
   & .venv\Scripts\python.exe -m pip install -r analyze\requirements.txt
 }
 
-Write-Host "Done. pack.py will now auto-transcribe narration. Test it directly with:"
+# Verify the whole chain works on THIS machine before claiming success — and
+# pre-warm the model (first engine run downloads weights) so the first real
+# capture transcribes fast and offline. selftest exits non-zero if anything's off.
+Write-Host "-> Verifying transcription end-to-end (this also downloads the model once)..."
+& .venv\Scripts\python.exe analyze\transcribe.py --selftest
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Host "Done. pack.py will now auto-transcribe every future capture. Test it directly with:"
 Write-Host "    .venv\Scripts\python.exe analyze\transcribe.py C:\path\to\bundle"
