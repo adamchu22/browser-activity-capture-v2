@@ -21,12 +21,19 @@ import { makeZip } from "./zip.js";
 import * as db from "./db.js";
 import { bundleReadme, bundleClaudeMd, bundleAgentsMd } from "./bundle-docs.js";
 import { navActions } from "./nav-policy.js";
+import { hostOnBlocklist } from "./blocklist.js";
+import { recordingElapsed } from "./clock.js";
 
 const state = {
   recording: false,
   arming: false, // picker open / countdown running, before capture goes live
   activeTabId: null, // the tab Start was pressed in — instrumented when we go live
-  paused: false,
+  paused: false, // EFFECTIVE pause (manual || auto) — what the recorder/overlay see
+  manualPaused: false, // user pressed Pause
+  autoPaused: false, // active tab is blocklisted → capture suspended automatically
+  pauseReason: null, // "manual" | "blocklist" — drives the overlay copy
+  pausedAccum: 0, // total ms spent paused so far (completed pauses)
+  pauseStartedAt: 0, // wall-clock ms the current pause began (0 if not paused)
   t0: 0,
   tabIds: new Set(), // every tab we've attached the debugger + content script to
   tabs: new Map(), // tabId -> { id, url, title } legend for the bundle
@@ -37,7 +44,11 @@ const state = {
   errors: [], // { t, where, message, stack } — surfaced into the bundle
 };
 
-const now = () => Date.now() - state.t0;
+// The recording clock: ms since t0 with all PAUSED time removed, so event/frame
+// timestamps stay aligned to video.webm (the MediaRecorder also excludes paused
+// time). Before t0 is set (arming/countdown) it reads 0. Pure math lives in
+// clock.js (unit-tested); this just feeds it the live state.
+const now = () => recordingElapsed(Date.now(), state);
 
 // Collect a runtime error into the bundle so failures are diagnosable from the
 // exported zip (errors.json) instead of being trapped in a console we can't see —
@@ -76,13 +87,10 @@ function cleanSubfolder(v) {
     .join("/");
 }
 
-function hostBlocked(url) {
-  try {
-    return state.blocklist.includes(new URL(url).hostname);
-  } catch {
-    return false;
-  }
-}
+// Suffix-aware host match (so `1password.com` blocks `my.1password.com`) — see
+// blocklist.js. The old exact-string check silently failed and let a sensitive
+// tab through.
+const hostBlocked = (url) => hostOnBlocklist(url, state.blocklist);
 
 // ---- lifecycle -----------------------------------------------------------
 
@@ -141,12 +149,10 @@ async function instrumentTab(tabId) {
   }
 
   const injected = await ensureContentScript(tabId);
-  // Carry t0 + paused so a tab that joins mid-recording renders its overlay in
-  // the correct state (right elapsed clock, paused or live).
+  // Carry the full clock so a tab that joins mid-recording renders its overlay in
+  // the correct state (paused-aware elapsed clock, paused or live).
   if (injected)
-    chrome.tabs
-      .sendMessage(tabId, { type: "start", t0: state.t0, paused: state.paused })
-      .catch(() => {});
+    chrome.tabs.sendMessage(tabId, { type: "start", ...overlayClock() }).catch(() => {});
 }
 
 // Re-arm a tab AFTER A NAVIGATION. A full-page navigation (every click in a
@@ -170,9 +176,7 @@ async function reattachTab(tabId, tab) {
   }
   const present = await ensureContentScript(tabId);
   if (present)
-    chrome.tabs
-      .sendMessage(tabId, { type: "start", t0: state.t0, paused: state.paused })
-      .catch(() => {});
+    chrome.tabs.sendMessage(tabId, { type: "start", ...overlayClock() }).catch(() => {});
 }
 
 async function uninstrumentTab(tabId) {
@@ -216,6 +220,11 @@ async function start(triggerTabId, task, purposes) {
     arming: true,
     activeTabId,
     paused: false,
+    manualPaused: false,
+    autoPaused: false,
+    pauseReason: null,
+    pausedAccum: 0,
+    pauseStartedAt: 0,
     t0: 0,
     task: (task || "").slice(0, 500), // the user's stated goal — anchors the analysis
     purposes: Array.isArray(purposes) ? purposes.slice(0, 8) : [], // why they recorded — steers analysis
@@ -268,6 +277,11 @@ async function goLive() {
   state.arming = false;
   state.recording = true;
   state.paused = false;
+  state.manualPaused = false;
+  state.autoPaused = false;
+  state.pauseReason = null;
+  state.pausedAccum = 0;
+  state.pauseStartedAt = 0;
   state.t0 = Date.now();
   // Re-resolve the active tab: the user may have closed or switched away from the
   // Start tab during the picker/countdown. Instrument the tab they're actually on
@@ -285,6 +299,8 @@ async function goLive() {
   await captureFrame("recording started");
   startFrameTimer();
   setBadge("REC");
+  // If they happened to go live while looking at a blocklisted tab, suspend at once.
+  updateAutoPause();
 }
 
 async function stop() {
@@ -330,22 +346,75 @@ async function stop() {
 // worker owns the semantics; the offscreen MediaRecorder is told to match so the
 // video and the event/network streams pause, restart, and discard together.
 
-async function pause() {
-  if (!state.recording || state.paused) return;
-  state.paused = true; // appendTimeline + rrweb ingest drop while paused
-  stopFrameTimer();
-  chrome.runtime.sendMessage({ type: "offscreen-pause" }).catch(() => {});
-  setBadge("REC", "#f39c12"); // amber = paused
+// One pause engine. The effective pause is (manual OR auto-on-blocklisted-tab);
+// when it flips we pause/resume the MediaRecorder, the frame timer, and the
+// event/rrweb intake in lockstep, and book the paused duration into pausedAccum so
+// the recording clock excludes it. Manual and auto are independent inputs: leaving
+// a blocklisted tab clears the AUTO pause but never overrides a manual one.
+function applyPause() {
+  if (!state.recording) return;
+  const effective = state.manualPaused || state.autoPaused;
+  if (effective === state.paused) {
+    // No transition, but the REASON may have changed (e.g. user hit Pause while
+    // already auto-paused on a blocklisted tab) — keep the overlay copy honest.
+    const reason = state.manualPaused ? "manual" : state.autoPaused ? "blocklist" : null;
+    if (reason !== state.pauseReason) {
+      state.pauseReason = reason;
+      broadcastOverlay();
+    }
+    return;
+  }
+  state.paused = effective;
+  if (effective) {
+    state.pauseStartedAt = Date.now(); // start metering paused time
+    state.pauseReason = state.manualPaused ? "manual" : "blocklist";
+    stopFrameTimer();
+    chrome.runtime.sendMessage({ type: "offscreen-pause" }).catch(() => {});
+    setBadge("❚❚", "#f39c12"); // amber = paused
+    // A blocklist auto-pause happens on a tab with NO overlay (it's uninstrumented),
+    // so the on-page pill can't say why. The icon tooltip carries the reason.
+    chrome.action.setTitle({
+      title: state.autoPaused ? "Paused — on a blocklisted site (not recording)" : "Recording paused",
+    });
+  } else {
+    state.pausedAccum += Date.now() - state.pauseStartedAt; // bank this pause
+    state.pauseStartedAt = 0;
+    state.pauseReason = null;
+    startFrameTimer();
+    chrome.runtime.sendMessage({ type: "offscreen-resume" }).catch(() => {});
+    setBadge("REC");
+    chrome.action.setTitle({ title: "Recording" });
+  }
   broadcastOverlay();
 }
 
-async function resume() {
-  if (!state.recording || !state.paused) return;
-  state.paused = false;
-  startFrameTimer();
-  chrome.runtime.sendMessage({ type: "offscreen-resume" }).catch(() => {});
-  setBadge("REC");
-  broadcastOverlay();
+function pause() {
+  if (!state.recording) return;
+  state.manualPaused = true;
+  applyPause();
+}
+
+function resume() {
+  if (!state.recording) return;
+  state.manualPaused = false;
+  applyPause();
+}
+
+// Auto-pause when the user is looking at a blocklisted tab, auto-resume when they
+// leave. Called on tab switch / window focus / navigation. The active tab of the
+// last-focused window is the one the screen video is showing, so that's what
+// gates capture.
+async function updateAutoPause() {
+  if (!state.recording) return;
+  let blocked = false;
+  try {
+    const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    blocked = !!(active && active.url && hostBlocked(active.url));
+  } catch {}
+  if (blocked !== state.autoPaused) {
+    state.autoPaused = blocked;
+    applyPause();
+  }
 }
 
 // Restart: throw away everything captured so far and begin a fresh take WITHOUT
@@ -357,6 +426,11 @@ async function restart() {
   await db.clearAll();
   state.t0 = Date.now();
   state.paused = false;
+  state.manualPaused = false;
+  state.autoPaused = false;
+  state.pauseReason = null;
+  state.pausedAccum = 0; // fresh take → fresh clock, no banked pause time
+  state.pauseStartedAt = 0;
   state.har = new Map();
   state.frames = [];
   state.errors = [];
@@ -385,6 +459,10 @@ async function cancel() {
   state.recording = false;
   state.arming = false;
   state.paused = false;
+  state.manualPaused = false;
+  state.autoPaused = false;
+  state.pauseReason = null;
+  state.pauseStartedAt = 0;
   stopFrameTimer();
   for (const tabId of state.tabIds) {
     chrome.tabs.sendMessage(tabId, { type: "stop" }).catch(() => {}); // removes overlay + listeners
@@ -417,17 +495,32 @@ function setBadge(text, color = "#c0392b") {
 // stays in sync regardless of which one is focused (worker is the source of
 // truth). t0 lets each overlay run the same elapsed-time clock.
 function broadcastOverlay() {
-  const payload = {
-    type: "overlay-state",
-    state: { recording: state.recording, paused: state.paused, t0: state.t0 },
-  };
+  const payload = { type: "overlay-state", state: overlayClock() };
   for (const tabId of state.tabIds) chrome.tabs.sendMessage(tabId, payload).catch(() => {});
+}
+
+// The clock snapshot every overlay needs to render the same paused-aware elapsed
+// time locally: t0 + banked pause time + (if paused) when this pause began. The
+// overlay computes elapsed = now - t0 - pausedAccum - ongoingPause, matching now()
+// here and the video's own timeline.
+function overlayClock() {
+  return {
+    recording: state.recording,
+    paused: state.paused,
+    pauseReason: state.pauseReason,
+    t0: state.t0,
+    pausedAccum: state.pausedAccum,
+    pauseStartedAt: state.pauseStartedAt,
+  };
 }
 
 // Follow the user across tabs: instrument any tab that starts loading a real URL
 // while we're recording (covers brand-new tabs and navigations to eligible pages),
 // re-arm the content script after each navigation, and drop tabs as they close.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // The active tab navigating to/from a blocklisted URL flips the auto-pause (the
+  // user typed a sensitive URL into the tab they're already on, or navigated away).
+  if (state.recording && changeInfo.url && tab?.active) updateAutoPause();
   // A tracked tab that navigates INTO a blocklisted host must be torn down — detach
   // the debugger and stop the content script so nothing more is captured there.
   if (state.recording && state.tabIds.has(tabId) && tab?.url && hostBlocked(tab.url)) {
@@ -459,8 +552,16 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // moved to (the periodic timer would otherwise miss the switch instant).
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   if (!state.recording) return;
-  instrumentTab(tabId); // idempotent — no-op if already tracked
+  // Switching INTO a blocklisted tab auto-pauses everything (and out auto-resumes)
+  // BEFORE we instrument or shoot a frame, so nothing from it is captured.
+  updateAutoPause();
+  instrumentTab(tabId); // idempotent — no-op if already tracked (and skips blocklisted)
   captureFrame("tab-activated");
+});
+// Switching browser windows (or to a window whose active tab is blocklisted) must
+// re-evaluate the auto-pause too — the screen video follows the focused window.
+chrome.windows.onFocusChanged.addListener(() => {
+  if (state.recording) updateAutoPause();
 });
 
 // ---- frames --------------------------------------------------------------
@@ -593,7 +694,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // it was open. paused + t0 ride along for the overlay clock.
     const tabId = sender.tab?.id;
     const tracked = tabId != null && state.tabIds.has(tabId);
-    sendResponse({ recording: state.recording && tracked, paused: state.paused, t0: state.t0 });
+    sendResponse({ ...overlayClock(), recording: state.recording && tracked });
     return true;
   }
   if (msg.type === "timeline-event") {
