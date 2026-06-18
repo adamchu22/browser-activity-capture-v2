@@ -126,7 +126,7 @@ The outputs you can offer (write them into this bundle's folder):
 
 ## Ground rules
 - One clock: every \`t\` is ms since t0.
-- Secrets are already redacted (shown as \`‹redacted›\`). Never invent the underlying value, and never suggest bypassing redaction.
+- Secrets are already redacted (shown as \`‹redacted›\`) in the structured streams (timeline, network.har, the DOM stream, URLs). Never invent the underlying value, and never suggest bypassing redaction. NOTE: \`video.webm\` and \`frames/*.png\` are NOT pixel-redacted — a secret visible on screen during recording is visible there. Don't surface or transcribe an on-screen secret you happen to see in the video/frames.
 - Ground every claim in the bundle; prefer \`(inferred)\` over confident invention.
 - Your output is a starting point a human will review — be honest about gaps.`;
 }

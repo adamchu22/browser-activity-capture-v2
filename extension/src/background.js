@@ -127,7 +127,9 @@ async function instrumentTab(tabId) {
   if (!isEligible(tab)) return;
   state.tabIds.add(tabId);
   const tabUrl = redactUrl(tab.url);
-  state.tabs.set(tabId, { id: tabId, url: tabUrl, title: tab.title || "" });
+  // A page title can carry a token (e.g. a "Reset password: <token>" page) and the
+  // legend is exported, so scrub it before it lands in the manifest.
+  state.tabs.set(tabId, { id: tabId, url: tabUrl, title: scrubTokens(tab.title || "") });
   state.urls.add(tabUrl);
 
   // CDP network capture (shows the per-tab "is being debugged" banner — by design).
@@ -576,6 +578,9 @@ async function appendTimeline(event) {
   // Single chokepoint: any event carrying a URL gets it scrubbed before disk, so a
   // token in a query string can't ride into the timeline (nav + network events).
   if (event.url) event = { ...event, url: redactUrl(event.url) };
+  // describe() copies a link's raw href into ctx — redact it too, else a secret in
+  // an <a href="…?token=…"> (clicked/hovered/annotated) leaks into timeline.json.
+  if (event.ctx?.href) event = { ...event, ctx: { ...event.ctx, href: redactUrl(event.ctx.href) } };
   await db.append("timeline", { t: now(), ...event });
 }
 
@@ -754,6 +759,9 @@ async function assembleBundle(video) {
       password_fields_masked: true,
       redacted_headers: ["Authorization", "Cookie", "Set-Cookie"],
       redacted_value_token: "‹redacted›",
+      // Redaction covers the STRUCTURED streams (timeline, network.har, DOM, URLs),
+      // not the pixels: a secret visible on screen is visible in video.webm/frames.
+      visual_streams_redacted: false,
     },
     frames: state.frames.map((f) => ({ t: f.t, file: f.file })),
     counts: {
