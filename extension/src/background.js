@@ -761,6 +761,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "capture-error") {
     logError(msg.where || "unknown", { message: msg.message, stack: msg.stack });
   }
+  // Heartbeat from the offscreen document so the MV3 service worker isn't torn down
+  // mid-recording (especially while paused, when nothing else wakes it). Receiving
+  // the message is the point — it resets the worker's idle timer; no work needed.
+  if (msg.type === "keepalive") {
+    return; // handled — keeps the worker warm
+  }
+  // The captured screen/window share ended on its own (user closed the window or hit
+  // Chrome's "Stop sharing"). Record it; the rest of the capture (events, mic) keeps
+  // going, but the manifest should reflect that video stopped early.
+  if (msg.type === "video-track-ended") {
+    state.videoEndedEarly = true;
+    logError("offscreen-video", { message: "screen share ended mid-recording" });
+  }
   // The offscreen doc finished the screen picker (the user picked, or cancelled →
   // video:false). Run the countdown, then go live. Sent once per recording.
   if (msg.type === "offscreen-armed") {

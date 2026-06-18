@@ -38,6 +38,30 @@ let micRecorded = false; // did the final recording actually include the mic?
 let micError = null; // why the mic was absent (surfaced into the bundle manifest)
 let audioCtx = null; // Web Audio graph that taps the mic for the overlay level meter
 let levelTimer = null; // interval pushing mic loudness to the worker
+let keepAliveTimer = null; // pings the worker so the MV3 service worker can't be torn down mid-recording
+
+// MV3 service workers are killed after ~30s with no incoming events. During a
+// recording that's mostly fine (network + frame events keep it warm) — EXCEPT
+// while paused, when the frame timer is stopped and event ingest is dropped, so
+// nothing wakes the worker and Chrome terminates it. That wipes the worker's
+// in-memory recording state (t0, frames, the tab list) and leaves the overlay
+// dead — the user can no longer pause or finish, and the recording is lost. This
+// offscreen document stays alive for the whole recording (it owns the live media
+// stream), so it's the reliable place to hold the worker open: a periodic ping
+// resets the worker's idle timer. (Persistence in the worker is the safety net
+// for the rare case this still fails — see background.js rehydrate.)
+function startKeepAlive() {
+  stopKeepAlive();
+  keepAliveTimer = setInterval(() => {
+    chrome.runtime.sendMessage({ type: "keepalive" }).catch(() => {});
+  }, 20000);
+}
+function stopKeepAlive() {
+  if (keepAliveTimer) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+  }
+}
 
 // Report a failure to the worker so it lands in the bundle's errors.json.
 function reportError(message, stack) {
@@ -126,7 +150,20 @@ async function startRecording(withMic) {
   try {
     const videoStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
     streams.push(videoStream);
-    tracks.push(...videoStream.getVideoTracks());
+    const vTracks = videoStream.getVideoTracks();
+    tracks.push(...vTracks);
+    // If the captured screen/window share ends on its own — the user closes the
+    // shared window, or clicks Chrome's "Stop sharing" bar — the video track fires
+    // `ended` and the recorder silently stops producing video while everything else
+    // keeps going. Surface it so it lands in the bundle's errors.json AND tell the
+    // worker, which marks the recording as having lost its video instead of failing
+    // mute. (Audio/mic, if present, keeps recording.)
+    vTracks.forEach((t) => {
+      t.addEventListener("ended", () => {
+        reportError("screen share ended mid-recording (video track stopped)");
+        chrome.runtime.sendMessage({ type: "video-track-ended" }).catch(() => {});
+      });
+    });
   } catch (e) {
     console.warn("offscreen video capture failed:", e);
     reportError("video capture failed: " + (e?.message || e), e?.stack);
@@ -170,6 +207,9 @@ async function startRecording(withMic) {
     chrome.runtime.sendMessage({ type: "offscreen-armed", video: false, mic: false });
     return;
   }
+  // Keep the worker alive from here on — the recording is live (or about to be),
+  // and the pause window is exactly when the worker would otherwise be torn down.
+  startKeepAlive();
   // Picker done and recorder armed — tell the worker to run the countdown + go live.
   // `mic` lets the overlay know whether to show the live level meter.
   chrome.runtime.sendMessage({ type: "offscreen-armed", video: true, mic: micRecorded });
@@ -276,6 +316,7 @@ function cancelRecording() {
 
 function releaseStreams() {
   stopMicMeter();
+  stopKeepAlive(); // recording is over — let the worker idle out normally
   streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
   streams = [];
 }
