@@ -64,18 +64,23 @@
       </div>
     </div>
 
-    <!-- Settings, collapsed by default (out of the main flow, Loom-style). -->
+    <!-- Settings, collapsed by default (out of the main flow, Loom-style).
+         Changes save the moment you make them (no separate Save button). -->
     <details id="settings">
       <summary>Settings</summary>
       <div class="field">
         <label for="blocklist">Never record on (one host per line)</label>
-        <textarea id="blocklist" rows="3" placeholder="mail.google.com&#10;bank.example.com"></textarea>
+        <textarea id="blocklist" rows="3" placeholder="my.1password.com&#10;mail.google.com&#10;bank.example.com"></textarea>
+        <div class="hint">Switching to one of these tabs auto-pauses the whole recording (video too) until you leave it. A parent domain (e.g. <code>1password.com</code>) also covers its subdomains.</div>
       </div>
       <div class="field">
-        <label for="folder">Save exports to (subfolder of Downloads, optional)</label>
-        <input type="text" id="folder" placeholder="captures" />
+        <label>When a recording finishes</label>
+        <label class="check" style="margin-top:2px"><input type="radio" name="savemode" value="auto" checked /> Auto-save to a folder</label>
+        <input type="text" id="folder" placeholder="subfolder of Downloads (optional)" style="margin-top:4px" />
+        <label class="check" style="margin-top:6px"><input type="radio" name="savemode" value="ask" /> Ask me where to save &amp; name it each time</label>
+        <div class="hint">“Ask” opens your file explorer so you can pick any location and rename the file.</div>
       </div>
-      <label class="check" style="margin-top:8px"><input type="checkbox" id="askSave" /> Ask where to save each time</label>
+      <div id="saved" class="hint" style="color:#2e7d32;min-height:14px"></div>
     </details>
 
     <div id="status"></div>

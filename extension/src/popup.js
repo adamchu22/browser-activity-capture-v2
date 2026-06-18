@@ -50,13 +50,37 @@ function cleanFolder(v) {
     .join("/");
 }
 
+function saveMode() {
+  const el = document.querySelector('input[name="savemode"]:checked');
+  return el ? el.value : "auto"; // "auto" → drop into folder; "ask" → native Save dialog
+}
+
 function readSettings() {
   return {
     blocklist: $("blocklist").value.split("\n").map((s) => s.trim()).filter(Boolean),
     micEnabled: $("mic").checked,
     downloadSubfolder: cleanFolder($("folder").value),
-    askWhereToSave: $("askSave").checked,
+    askWhereToSave: saveMode() === "ask",
   };
+}
+
+// Settings persist the moment they change — the old popup only wrote them on
+// Start, so a blocklist typed and left unsubmitted was silently lost (which let a
+// sensitive tab get captured). Debounced so typing in the blocklist/folder fields
+// doesn't thrash storage, with a brief "Saved ✓" confirmation.
+let saveTimer = null;
+function saveSettings() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    await chrome.storage.local.set({ ...readSettings(), purposes: selectedPurposes() });
+    const s = $("saved");
+    if (s) {
+      s.textContent = "Saved ✓";
+      clearTimeout(saveSettings._clear);
+      saveSettings._clear = setTimeout(() => (s.textContent = ""), 1500);
+    }
+    $("folder").disabled = saveMode() !== "auto"; // folder only applies in auto-save mode
+  }, 250);
 }
 
 $("rec").addEventListener("click", async () => {
@@ -71,8 +95,8 @@ $("rec").addEventListener("click", async () => {
   // extension origin isn't granted yet, route through the grant page first. The
   // offscreen doc can't prompt, so starting now would just yield a silent video.
   if (settings.micEnabled && !(await micGranted())) {
-    chrome.tabs.create({ url: chrome.runtime.getURL("src/mic-permission.html") });
-    $("status").textContent = "Allow the mic in the tab that opened, then press Start again.";
+    openMicGrant();
+    $("status").textContent = "Allow the mic in the window that popped up, then press Start again.";
     return;
   }
   // The worker spins up the offscreen doc, which calls getDisplayMedia — Chrome's
@@ -119,10 +143,29 @@ async function refreshMicState() {
       : "Microphone not enabled — narration won't record.";
 }
 
-$("enableMic").addEventListener("click", () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL("src/mic-permission.html") });
+// Open the one-time mic-grant page as a small floating popup window on the
+// current screen instead of a full background tab — it pops up where the user is,
+// grants, and closes, rather than burying itself behind everything.
+function openMicGrant() {
+  chrome.windows.create({
+    url: chrome.runtime.getURL("src/mic-permission.html"),
+    type: "popup",
+    width: 440,
+    height: 320,
+  });
+}
+
+$("enableMic").addEventListener("click", openMicGrant);
+$("mic").addEventListener("change", () => {
+  refreshMicState();
+  saveSettings();
 });
-$("mic").addEventListener("change", refreshMicState);
+
+// Persist settings as they change (blocklist, save mode, folder, purposes).
+$("blocklist").addEventListener("input", saveSettings);
+$("folder").addEventListener("input", saveSettings);
+for (const el of document.querySelectorAll('input[name="savemode"]')) el.addEventListener("change", saveSettings);
+for (const el of document.querySelectorAll('input[name="purpose"]')) el.addEventListener("change", saveSettings);
 
 chrome.storage.local
   .get(["blocklist", "micEnabled", "purposes", "downloadSubfolder", "askWhereToSave"])
@@ -130,7 +173,10 @@ chrome.storage.local
     $("blocklist").value = blocklist.join("\n");
     $("mic").checked = micEnabled;
     $("folder").value = downloadSubfolder;
-    $("askSave").checked = askWhereToSave;
+    const mode = askWhereToSave ? "ask" : "auto";
+    const modeEl = document.querySelector(`input[name="savemode"][value="${mode}"]`);
+    if (modeEl) modeEl.checked = true;
+    $("folder").disabled = mode !== "auto";
     for (const el of document.querySelectorAll('input[name="purpose"]')) {
       el.checked = purposes.includes(el.value);
     }
