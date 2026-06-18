@@ -49,6 +49,32 @@ test("redactBody still redacts JSON + form bodies (unchanged contract)", () => {
   assert.ok(redactBody("user=bob&token=secretvalue").includes("‹redacted:secret›"));
 });
 
+test("form bodies: card/cvv/ssn/jwt/sig are redacted (was a leak)", () => {
+  // The non-JSON branch once used a narrower key set than the URL/JSON sinks, so a
+  // card number / SSN in a form POST leaked into network.har.
+  for (const pair of ["card=4111111111111111", "cvv=123", "ssn=123-45-6789", "sig=deadbeef", "jwt=abc.def"]) {
+    const out = redactBody(pair);
+    assert.ok(out.includes("‹redacted:secret›"), `${pair} must be redacted, got ${out}`);
+    assert.ok(!out.includes(pair.split("=")[1]), `${pair} value must not survive`);
+  }
+  // Multi-pair form body keeps the benign field, redacts the secret one.
+  const body = redactBody("name=bob&card=4111111111111111&page=2");
+  assert.ok(body.includes("page=2") && body.includes("name=bob"));
+  assert.ok(!body.includes("4111111111111111"));
+});
+
+test("bare `key` no longer over-redacts innocent names (monkey, turnkey)", () => {
+  assert.ok(redactBody("monkey=banana").includes("monkey=banana"));
+  assert.ok(redactBody("turnkey=yes").includes("turnkey=yes"));
+});
+
+test("lowercase + url-encoded bearer tokens are scrubbed (case/encoding gaps)", () => {
+  assert.ok(!hasToken(scrubTokens("authorization: bearer abcdef0123456789")));
+  assert.ok(!/abcdef0123456789/.test(scrubTokens("bearer abcdef0123456789")));
+  assert.ok(!/abcdef0123456789/.test(redactUrl("https://x.com/cb?state=Bearer%20abcdef0123456789")));
+  assert.ok(!/abcdef0123456789/.test(redactUrl("https://x.com/cb?next=Bearer+abcdef0123456789")));
+});
+
 test("scrubbing a serialized rrweb node clears a token in a DOM attribute", () => {
   // The 2026-06-17 run 2 leak: a JWT rode in an <img src> inside the rrweb DOM
   // stream (events.jsonl). The worker's scrubNode = JSON.parse(scrubTokens(JSON
