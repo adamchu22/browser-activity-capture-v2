@@ -54,9 +54,20 @@ async function refresh() {
   $("status").textContent = arming ? T("stStarting") : live ? (paused ? T("stPaused") : T("stRecording")) : "";
 }
 
-async function micGranted() {
+// Request the mic permission RIGHT HERE in the popup — the window the user is already
+// in — instead of spawning a separate grant window. Calling getUserMedia doubles as the
+// reliable "is it granted?" test: if the extension origin already holds the grant it
+// resolves with NO prompt, so a returning user is never asked again (the old
+// permissions.query gate was unreliable in a popup and re-opened the grant window every
+// single time — Adam's "asks every time" complaint). The first time, Chrome's prompt
+// appears over the popup; if the popup happens to close as it does, the grant still
+// persists, so the next Start succeeds silently. We only need the grant — release the
+// device immediately so no recording indicator lingers.
+async function ensureMic() {
   try {
-    return (await navigator.permissions.query({ name: "microphone" })).state === "granted";
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((t) => t.stop());
+    return true;
   } catch {
     return false;
   }
@@ -149,12 +160,13 @@ $("rec").addEventListener("click", async () => {
   const purposes = selectedPurposes();
   if (!purposes.length) purposes.push("general");
   await chrome.storage.local.set({ ...settings, purposes });
-  // Don't silently record without narration — if the mic is wanted but the
-  // extension origin isn't granted yet, route through the grant page first. The
-  // offscreen doc can't prompt, so starting now would just yield a silent video.
-  if (settings.micEnabled && !(await micGranted())) {
-    openMicGrant();
+  // Don't silently record without narration — if the mic is wanted, make sure the
+  // grant is in place first (the offscreen doc can't prompt, so starting ungranted
+  // would yield a silent video). ensureMic() requests it inline; if already granted it
+  // resolves instantly with no prompt and no window.
+  if (settings.micEnabled && !(await ensureMic())) {
     $("status").textContent = T("stMicPrompt");
+    refreshMicState();
     return;
   }
   // The worker spins up the offscreen doc, which calls getDisplayMedia — Chrome's
@@ -181,8 +193,8 @@ $("stop").addEventListener("click", async () => {
 });
 
 // Mic narration needs the extension origin to hold microphone permission. An
-// offscreen doc can't prompt for it, so we surface the state here and route the
-// grant through a dedicated page (mic-permission.html) that can.
+// offscreen doc can't prompt for it, so we surface the state here; the grant itself
+// is requested inline via ensureMic() (on Start or the Enable button) — no window.
 async function refreshMicState() {
   const micWanted = $("mic").checked;
   let granted = false;
@@ -197,20 +209,12 @@ async function refreshMicState() {
   $("micState").textContent = !micWanted ? "" : granted ? T("micOn") : T("micOff");
 }
 
-// Open the one-time mic-grant page as a small floating popup window on the
-// current screen instead of a full background tab — it pops up where the user is,
-// grants, and closes, rather than burying itself behind everything.
-function openMicGrant() {
-  chrome.windows.create({
-    url: chrome.runtime.getURL("src/mic-permission.html"),
-    type: "popup",
-    width: 440,
-    height: 320,
-  });
-}
-
 $("chooseFolder").addEventListener("click", chooseFolder);
-$("enableMic").addEventListener("click", openMicGrant);
+// Grant the mic inline (no separate window). Refresh the on/off hint after.
+$("enableMic").addEventListener("click", async () => {
+  await ensureMic();
+  refreshMicState();
+});
 $("mic").addEventListener("change", () => {
   refreshMicState();
   saveSettings();
