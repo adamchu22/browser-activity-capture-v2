@@ -75,10 +75,12 @@
       </div>
       <div class="field">
         <label>When a recording finishes</label>
-        <label class="check" style="margin-top:2px"><input type="radio" name="savemode" value="auto" checked /> Auto-save to a folder</label>
-        <input type="text" id="folder" placeholder="subfolder of Downloads (optional)" style="margin-top:4px" />
-        <label class="check" style="margin-top:6px"><input type="radio" name="savemode" value="ask" /> Ask me where to save &amp; name it each time</label>
-        <div class="hint">“Ask” opens your file explorer so you can pick any location and rename the file.</div>
+        <label class="check" style="margin-top:2px"><input type="radio" name="savemode" value="auto" checked /> Auto-save (no dialog)</label>
+        <div class="hint">Saves to your browser’s download folder (default: Downloads). Point that at any folder once and every recording lands there automatically.</div>
+        <button id="openDownloadSettings" type="button" style="width:100%;margin-top:5px">Change download folder…</button>
+        <input type="text" id="folder" placeholder="optional subfolder" style="margin-top:6px" />
+        <label class="check" style="margin-top:8px"><input type="radio" name="savemode" value="ask" /> Ask me where to save &amp; name it each time</label>
+        <div class="hint">“Ask” opens your file explorer to pick any location and rename — every time.</div>
       </div>
       <div id="saved" class="hint" style="color:#2e7d32;min-height:14px"></div>
     </details>

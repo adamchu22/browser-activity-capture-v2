@@ -155,6 +155,14 @@ function openMicGrant() {
   });
 }
 
+// Extensions can only auto-save into the browser's own download folder — they
+// can't write to an arbitrary path silently. But that folder is user-settable to
+// ANY location, so this opens the browser's download settings (where "Change"
+// brings up the native folder picker). Set it once and every auto-save lands there.
+$("openDownloadSettings").addEventListener("click", () => {
+  chrome.tabs.create({ url: "chrome://settings/downloads" });
+});
+
 $("enableMic").addEventListener("click", openMicGrant);
 $("mic").addEventListener("change", () => {
   refreshMicState();
