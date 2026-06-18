@@ -36,6 +36,8 @@ let streams = []; // every MediaStream we open, so stop() can release them all
 let activeTracks = []; // the live screen+mic tracks, reused by restart without re-prompting
 let micRecorded = false; // did the final recording actually include the mic?
 let micError = null; // why the mic was absent (surfaced into the bundle manifest)
+let audioCtx = null; // Web Audio graph that taps the mic for the overlay level meter
+let levelTimer = null; // interval pushing mic loudness to the worker
 
 // Report a failure to the worker so it lands in the bundle's errors.json.
 function reportError(message, stack) {
@@ -130,7 +132,7 @@ async function startRecording(withMic) {
     reportError("video capture failed: " + (e?.message || e), e?.stack);
     // Picker cancelled / failed — tell the worker to proceed data-only (it still
     // runs the countdown and goes live). The null video is reported at stop time.
-    chrome.runtime.sendMessage({ type: "offscreen-armed", video: false });
+    chrome.runtime.sendMessage({ type: "offscreen-armed", video: false, mic: false });
     return;
   }
 
@@ -144,6 +146,7 @@ async function startRecording(withMic) {
         streams.push(micStream);
         tracks.push(...micTracks);
         micRecorded = true;
+        startMicMeter(micStream); // feed the on-screen overlay's "is it hearing me?" meter
       } else {
         micError = "getUserMedia returned no audio tracks";
       }
@@ -164,11 +167,59 @@ async function startRecording(withMic) {
     reportError("MediaRecorder failed: " + (e?.message || e), e?.stack);
     releaseStreams();
     recorder = null;
-    chrome.runtime.sendMessage({ type: "offscreen-armed", video: false });
+    chrome.runtime.sendMessage({ type: "offscreen-armed", video: false, mic: false });
     return;
   }
   // Picker done and recorder armed — tell the worker to run the countdown + go live.
-  chrome.runtime.sendMessage({ type: "offscreen-armed", video: true });
+  // `mic` lets the overlay know whether to show the live level meter.
+  chrome.runtime.sendMessage({ type: "offscreen-armed", video: true, mic: micRecorded });
+}
+
+// Live mic loudness for the on-screen overlay meter. An AnalyserNode taps the mic
+// stream — NOT connected to any output, so there's no echo — and we sample RMS
+// ~12×/sec and post it to the worker, which fans it out to the overlay. This is
+// purely a UI signal; it never touches the recorded audio.
+function startMicMeter(micStream) {
+  try {
+    const Ctx = self.AudioContext || self.webkitAudioContext;
+    audioCtx = new Ctx();
+    const source = audioCtx.createMediaStreamSource(micStream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.75;
+    source.connect(analyser);
+    const buf = new Uint8Array(analyser.fftSize);
+    levelTimer = setInterval(() => {
+      // Rest the meter to 0 unless we're actively recording (pre-roll / paused → flat).
+      if (!recorder || recorder.state !== "recording") {
+        chrome.runtime.sendMessage({ type: "mic-level", level: 0 }).catch(() => {});
+        return;
+      }
+      analyser.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const x = (buf[i] - 128) / 128;
+        sum += x * x;
+      }
+      const rms = Math.sqrt(sum / buf.length);
+      // Speech RMS is small; scale so normal narration fills most of the meter, clamp 0..1.
+      const level = Math.min(1, rms * 3.6);
+      chrome.runtime.sendMessage({ type: "mic-level", level: Math.round(level * 100) / 100 }).catch(() => {});
+    }, 80);
+  } catch (e) {
+    reportError("mic meter failed: " + (e?.message || e), e?.stack);
+  }
+}
+
+function stopMicMeter() {
+  if (levelTimer) {
+    clearInterval(levelTimer);
+    levelTimer = null;
+  }
+  if (audioCtx) {
+    try { audioCtx.close(); } catch {}
+    audioCtx = null;
+  }
 }
 
 function stopRecording() {
@@ -224,6 +275,7 @@ function cancelRecording() {
 }
 
 function releaseStreams() {
+  stopMicMeter();
   streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
   streams = [];
 }

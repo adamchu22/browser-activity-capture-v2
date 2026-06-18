@@ -366,6 +366,7 @@
     let pauseReason = null; // "manual" | "blocklist"
     let pausedAccum = 0; // ms banked from completed pauses (from the worker)
     let pauseStartedAt = 0; // wall-clock ms the current pause began (0 if live)
+    let micActive = false; // is the mic live? drives the level meter vs the muted glyph
 
     const fmt = (ms) => {
       const s = Math.max(0, Math.floor(ms / 1000));
@@ -424,6 +425,7 @@
       pauseReason = meta?.pauseReason || null;
       pausedAccum = meta?.pausedAccum || 0;
       pauseStartedAt = meta?.pauseStartedAt || 0;
+      micActive = !!meta?.micActive;
 
       host = document.createElement("div");
       host.id = "__bac_overlay__";
@@ -445,6 +447,19 @@
             70%{box-shadow:0 0 0 7px rgba(255,59,48,0)}100%{box-shadow:0 0 0 0 rgba(255,59,48,0)}}
           .time{font-variant-numeric:tabular-nums;min-width:42px;text-align:center;opacity:.9;}
           .sep{width:1px;height:18px;background:rgba(255,255,255,.15);}
+          /* Mic level meter — confirms the mic is actually hearing you while recording. */
+          .mic{display:flex;align-items:center;gap:6px;}
+          .mic-ico{position:relative;width:13px;height:13px;display:inline-flex;opacity:.85;}
+          .mic-ico svg{width:13px;height:13px;}
+          .mic-bars{display:flex;align-items:flex-end;gap:2px;height:14px;}
+          .mic-bars i{width:3px;height:14px;border-radius:2px;background:#34c759;
+            transform:scaleY(.12);transform-origin:bottom;transition:transform 90ms linear;}
+          /* Mic off (narration not recorded): dim, slashed, no bars. */
+          .mic.off{opacity:.55;}
+          .mic.off .mic-bars{display:none;}
+          .mic.off .mic-ico{opacity:.6;}
+          .mic.off .mic-ico::after{content:"";position:absolute;left:-1px;top:5.5px;
+            width:16px;height:1.5px;background:#ff9f0a;transform:rotate(-45deg);border-radius:1px;}
           button{font:inherit;color:#fff;background:transparent;border:0;cursor:pointer;
             padding:5px 9px;border-radius:7px;white-space:nowrap;}
           button:hover{background:rgba(255,255,255,.12);}
@@ -459,6 +474,10 @@
         <div class="bar" part="bar">
           <span class="dot" id="dot"></span>
           <span class="time" id="time">00:00</span>
+          <span class="mic" id="mic" title="Microphone level">
+            <span class="mic-ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></span>
+            <span class="mic-bars" id="micBars"><i></i><i></i><i></i><i></i><i></i></span>
+          </span>
           <span class="sep"></span>
           <button id="select" title="Pick an element you mean">Select</button>
           <button id="draw" title="Draw on the screen">Draw</button>
@@ -473,6 +492,8 @@
       els = {
         dot: shadow.getElementById("dot"),
         time: shadow.getElementById("time"),
+        mic: shadow.getElementById("mic"),
+        micBars: shadow.getElementById("micBars"),
         select: shadow.getElementById("select"),
         draw: shadow.getElementById("draw"),
         pause: shadow.getElementById("pause"),
@@ -494,7 +515,28 @@
       annotate.onChange = syncTools;
 
       applyPaused();
+      applyMic();
       if (!paused) startTimer();
+    }
+
+    // Show the level meter when the mic is live; otherwise a dimmed, slashed glyph
+    // so the user can see at a glance that narration isn't being recorded.
+    function applyMic() {
+      if (els.mic) els.mic.classList.toggle("off", !micActive);
+    }
+
+    // Drive the equalizer bars from a 0..1 loudness value (worker → us, ~12/sec).
+    // Per-bar weights + a little jitter make it read as speech, not a flat block.
+    const BAR_WEIGHTS = [0.55, 0.9, 1, 0.8, 0.6];
+    function setMicLevel(level) {
+      if (!els.micBars || !micActive) return;
+      const lv = Math.max(0, Math.min(1, level || 0));
+      const bars = els.micBars.children;
+      for (let i = 0; i < bars.length; i++) {
+        const jitter = lv > 0.04 ? 0.82 + Math.random() * 0.36 : 1;
+        const h = Math.max(0.12, Math.min(1, lv * (BAR_WEIGHTS[i] || 0.7) * jitter));
+        bars[i].style.transform = `scaleY(${h.toFixed(3)})`;
+      }
     }
 
     // Reflect the active annotation mode on the tool buttons.
@@ -537,7 +579,9 @@
       pauseReason = s.pauseReason || null;
       pausedAccum = s.pausedAccum || 0;
       pauseStartedAt = s.pauseStartedAt || 0;
+      micActive = !!s.micActive;
       applyPaused();
+      applyMic();
       if (paused) {
         stopTimer();
         tick();
@@ -553,7 +597,7 @@
       els = {};
     }
 
-    return { mount, update, unmount };
+    return { mount, update, unmount, setMicLevel };
   })();
 
   // --- annotation geometry (mirror of src/annotate-geom.js) -----------------
@@ -836,6 +880,24 @@
   // goes live (the worker holds recording=false until it finishes, then sets t0).
   // Driven entirely by the worker via `countdown` messages: n>=1 shows the number,
   // n=0 clears it. Shadow-DOM isolated, non-interactive (pointer-events:none).
+  // Countdown caption strings, kept inline (content scripts don't load i18n.js).
+  // Mirrors cdBold/cdSmall in i18n.js — update both together. `uiLang` tracks the
+  // popup's language choice (chrome.storage `lang`), defaulting to English.
+  const CD_STRINGS = {
+    en: { bold: "Say out loud what you're about to do.", small: "Your narration gives the AI the most context." },
+    es: { bold: "Di en voz alta lo que vas a hacer.", small: "Tu narración le da a la IA el máximo contexto." },
+    pt: { bold: "Diga em voz alta o que você vai fazer.", small: "Sua narração dá à IA o máximo de contexto." },
+  };
+  let uiLang = "en";
+  try {
+    chrome.storage?.local?.get(["lang"], ({ lang }) => {
+      if (CD_STRINGS[lang]) uiLang = lang;
+    });
+    chrome.storage?.onChanged?.addListener((changes, area) => {
+      if (area === "local" && changes.lang && CD_STRINGS[changes.lang.newValue]) uiLang = changes.lang.newValue;
+    });
+  } catch {}
+
   const countdown = (() => {
     let host = null, numEl = null;
 
@@ -845,19 +907,32 @@
       host.id = "__bac_countdown__";
       host.style.cssText =
         "position:fixed;inset:0;z-index:2147483647;pointer-events:none;" +
-        "display:flex;align-items:center;justify-content:center;";
+        "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;";
       const sh = host.attachShadow({ mode: "open" });
+      // The caption nudges the user to speak their intent during the pre-roll —
+      // spoken narration is the richest context the AI gets, so we prompt for it
+      // here rather than relying on the (now optional) typed task field.
       sh.innerHTML = `
         <style>
-          .num{font:600 92px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-            color:#fff;width:168px;height:168px;border-radius:50%;display:flex;
-            align-items:center;justify-content:center;background:rgba(28,28,30,.82);
-            box-shadow:0 8px 40px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.12);}
-          .num.tick{animation:pop .9s ease;}
+          .num{font:560 92px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+            color:#fff;width:172px;height:172px;border-radius:50%;display:flex;
+            align-items:center;justify-content:center;background:rgba(10,10,11,.86);
+            box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 0 4px rgba(255,77,77,.14),
+            0 10px 50px rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.1);}
+          .num.tick{animation:pop .9s cubic-bezier(0.32,0.72,0,1);}
           @keyframes pop{0%{transform:scale(.6);opacity:0}
             30%{transform:scale(1);opacity:1}100%{transform:scale(1);opacity:1}}
+          .cap{max-width:420px;text-align:center;padding:12px 20px;border-radius:16px;
+            background:rgba(10,10,11,.86);border:1px solid rgba(255,255,255,.1);
+            box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 10px 40px rgba(0,0,0,.45);
+            font:500 15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+            color:rgba(255,255,255,.92);animation:rise .6s cubic-bezier(0.32,0.72,0,1) both;}
+          .cap b{font-weight:600;color:#ff7a7a;}
+          .cap small{display:block;margin-top:4px;font-size:12px;color:rgba(255,255,255,.5);font-weight:400;}
+          @keyframes rise{0%{transform:translateY(14px);opacity:0}100%{transform:translateY(0);opacity:1}}
         </style>
-        <div class="num" id="num"></div>`;
+        <div class="num" id="num"></div>
+        <div class="cap"><b>${(CD_STRINGS[uiLang] || CD_STRINGS.en).bold}</b><small>${(CD_STRINGS[uiLang] || CD_STRINGS.en).small}</small></div>`;
       (document.documentElement || document.body).appendChild(host);
       numEl = sh.getElementById("num");
     }
@@ -954,6 +1029,8 @@
     // Worker pushes live state to every tab so all overlays stay in sync
     // (pause/resume, Restart's new t0) regardless of which tab is focused.
     if (msg.type === "overlay-state") overlay.update(msg.state);
+    // Live mic loudness (~12/sec) → animate the overlay's level meter.
+    if (msg.type === "mic-level") overlay.setMicLevel(msg.level);
     // The worker pings this (via tabs.sendMessage) to check we're already here
     // before injecting a second copy. Answer so it skips re-injection.
     if (msg.type === "is-recording") {

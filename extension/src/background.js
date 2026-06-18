@@ -42,6 +42,7 @@ const state = {
   frames: [], // { t, file, dataUrl }
   urls: new Set(),
   errors: [], // { t, where, message, stack } — surfaced into the bundle
+  micActive: false, // is the mic actually being recorded? drives the overlay level meter
 };
 
 // The recording clock: ms since t0 with all PAUSED time removed, so event/frame
@@ -226,6 +227,7 @@ async function start(triggerTabId, task, purposes) {
     frames: [],
     urls: new Set(),
     errors: [],
+    micActive: false, // confirmed once the offscreen doc reports the mic track is live
   });
 
   setBadge("•••", "#f39c12"); // arming (amber) — distinct from REC
@@ -537,6 +539,7 @@ function overlayClock() {
     t0: state.t0,
     pausedAccum: state.pausedAccum,
     pauseStartedAt: state.pauseStartedAt,
+    micActive: state.micActive, // overlay shows the level meter only when the mic is live
   };
 }
 
@@ -761,7 +764,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // The offscreen doc finished the screen picker (the user picked, or cancelled →
   // video:false). Run the countdown, then go live. Sent once per recording.
   if (msg.type === "offscreen-armed") {
+    // Whether the mic track is actually live — set before goLive() sends the first
+    // overlay clock, so each overlay knows to show (or hide) the level meter.
+    state.micActive = !!msg.mic;
     runCountdownThenGo();
+  }
+  // Live microphone loudness from the offscreen recorder (~12/sec). Fan it out to
+  // every instrumented overlay so the focused tab's meter moves as the user talks.
+  // Tiny payload; only while recording. Dropped if the mic isn't live.
+  if (msg.type === "mic-level") {
+    if (state.recording && state.micActive) {
+      const payload = { type: "mic-level", level: msg.level };
+      for (const tabId of state.tabIds) chrome.tabs.sendMessage(tabId, payload).catch(() => {});
+    }
   }
   // Both the popup and the injected on-screen overlay drive the same verbs.
   if (msg.type === "popup-command" || msg.type === "overlay-command") {
