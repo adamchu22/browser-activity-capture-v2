@@ -128,10 +128,86 @@ def run_parakeet(wav: Path, model: str) -> tuple[str, int]:
     return run_mlx_audio(wav, repo, note, [])
 
 
+# ---- self-test -----------------------------------------------------------
+
+def _ffmpeg_ok() -> bool:
+    """True if ffmpeg is callable. The one external (non-pip) dependency, so the
+    installer and selftest check it explicitly rather than failing deep in a run."""
+    from shutil import which
+    return which("ffmpeg") is not None
+
+
+def _available_engine() -> str | None:
+    """The fastest speech engine importable in THIS interpreter: parakeet
+    (mlx-audio, Apple Silicon) → whisper (faster-whisper, cross-platform) → None."""
+    import importlib.util as u
+    if u.find_spec("mlx_audio"):
+        return "parakeet"
+    if u.find_spec("faster_whisper"):
+        return "whisper"
+    return None
+
+
+def selftest(engine: str, model: str, chunk: float, *, engine_explicit: bool = False) -> int:
+    """End-to-end check the install actually transcribes on THIS machine: synth a
+    short silent clip with ffmpeg, run the speech engine over it, report pass/fail.
+    Exits non-zero with the exact missing piece so `setup.sh` can gate on it. Also
+    pre-warms the model (first engine run downloads/loads weights), so the user's
+    first real capture transcribes fast and offline."""
+    if not _ffmpeg_ok():
+        print("✗ ffmpeg not found on PATH — transcription cannot run.\n"
+              "    macOS:   brew install ffmpeg\n"
+              "    Linux:   sudo apt-get install ffmpeg\n"
+              "    Windows: winget install Gyan.FFmpeg   (or: choco install ffmpeg)\n"
+              "  Install it, then re-run setup.", file=sys.stderr)
+        return 2
+    # Unless the caller forced --engine, verify whatever was actually installed
+    # (parakeet on Apple Silicon, faster-whisper elsewhere) so the check matches
+    # what pack.py will pick at run time.
+    if not engine_explicit:
+        detected = _available_engine()
+        if detected is None:
+            print("✗ no speech engine installed in this .venv — re-run analyze/setup.sh.",
+                  file=sys.stderr)
+            return 3
+        engine = detected
+    print(f"→ verifying transcription end-to-end (engine {engine}; first run loads the model)…",
+          file=sys.stderr)
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            wav = Path(td) / "selftest.wav"
+            # 1s of silence — proves ffmpeg runs and produces the 16kHz mono wav the
+            # engines expect. The transcript will be empty; we're checking the chain,
+            # not the words.
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                 "-i", "anullsrc=r=16000:cl=mono", "-t", "1", str(wav)],
+                check=True,
+            )
+            if engine == "whisper":
+                run_whisper(wav, model or "base")
+            elif engine == "qwen3-asr":
+                run_qwen(wav, model or "1.7b", chunk)
+            else:
+                run_parakeet(wav, model)
+    except SystemExit as e:  # run_whisper exits if the engine isn't importable
+        print(f"✗ transcription self-test failed: {e}", file=sys.stderr)
+        return 3
+    except Exception as e:  # noqa: BLE001 — any failure means it won't work for them
+        print(f"✗ transcription self-test failed ({type(e).__name__}: {e}).\n"
+              "  The .venv may be missing a speech engine — re-run analyze/setup.sh.",
+              file=sys.stderr)
+        return 3
+    print(f"✓ transcription works (ffmpeg + {engine}). Future captures auto-transcribe via pack.py.",
+          file=sys.stderr)
+    return 0
+
+
 # ---- driver --------------------------------------------------------------
 
 def transcribe(bundle: Path, engine: str, model: str, chunk: float,
                glossary_path: Path | None, use_glossary: bool = True) -> int:
+    engine = engine or "parakeet"  # None (no --engine given) → the default run engine
     manifest_path = bundle / "manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     # .name strips any directory so a hostile manifest can't point `video` at a file
@@ -171,9 +247,14 @@ def transcribe(bundle: Path, engine: str, model: str, chunk: float,
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Transcribe a Capture Bundle's narration locally.")
-    ap.add_argument("bundle", type=Path, help="path to a capture bundle directory")
-    ap.add_argument("--engine", choices=["parakeet", "qwen3-asr", "whisper"], default="parakeet",
-                    help="speech engine (default: parakeet — fast, fine timestamps)")
+    ap.add_argument("bundle", type=Path, nargs="?", default=None,
+                    help="path to a capture bundle directory (omit with --selftest)")
+    ap.add_argument("--selftest", action="store_true",
+                    help="verify ffmpeg + the speech engine work end-to-end (and pre-warm the "
+                         "model), then exit. Used by setup.sh/setup.ps1; needs no bundle.")
+    ap.add_argument("--engine", choices=["parakeet", "qwen3-asr", "whisper"], default=None,
+                    help="speech engine (default: parakeet for a run; --selftest auto-detects "
+                         "the installed engine unless this is set)")
     ap.add_argument("--model", default="",
                     help="parakeet: an HF repo id (default parakeet-tdt-0.6b-v3). "
                          "qwen3-asr: 1.7b (default) | 0.6b | repo id. "
@@ -186,6 +267,12 @@ def main() -> None:
                     help="skip the domain glossary post-pass")
     args = ap.parse_args()
 
+    if args.selftest:
+        sys.exit(selftest(args.engine or "parakeet", args.model, args.chunk,
+                          engine_explicit=args.engine is not None))
+
+    if args.bundle is None:
+        ap.error("a bundle directory is required (or pass --selftest)")
     if not (args.bundle / "manifest.json").exists() and not (args.bundle / "video.webm").exists():
         sys.exit(f"error: {args.bundle} doesn't look like a capture bundle (no manifest.json/video.webm)")
     sys.exit(transcribe(args.bundle, args.engine, args.model, args.chunk,
