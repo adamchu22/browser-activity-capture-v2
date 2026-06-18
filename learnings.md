@@ -4,6 +4,42 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-18 (live-run #2 findings + fixes — blocklist, pause clock, ASR, annotation fusion)
+
+A second live run (`outputs/capture-2026-06-18T12-45-56-384Z.zip`) surfaced four things:
+
+- **The blocklist silently failed and 1Password was fully captured** — the auth flow in
+  `network.har` (auth/start, confirm-key, complete; SRP/AES-GCM blobs, not the master password)
+  AND the vault wide open in a frame (card + every item name). Two root causes: (1) settings were
+  only written to storage **on Start**, so a blocklist typed and left unsubmitted never persisted;
+  (2) `hostBlocked` did an **exact** `blocklist.includes(hostname)`, so `1password.com` never
+  matched `my.1password.com`. Fixes: popup now **saves on edit** (debounced, "Saved ✓"); matching
+  moved to a pure, suffix-aware, input-tolerant `extension/src/blocklist.js` (tested).
+- **A host blocklist CANNOT protect the whole-screen video by itself** — even blocked for
+  instrumentation, a sensitive tab still shows up in `video.webm`/frames (the documented
+  "visual_streams_redacted: false"). Real fix per Adam: **auto-pause** the entire recording (video +
+  events + frames) the instant the active tab is blocklisted, auto-resume on leaving — driven from
+  `tabs.onActivated` / `windows.onFocusChanged` / `onUpdated`. The blocklisted tab has no overlay
+  (it's uninstrumented), so the icon tooltip carries the reason.
+- **Pause leaked time into the clock.** The overlay clock and event/frame stamps used
+  `Date.now() - t0`, which counts paused seconds — so on resume the timer **jumped forward** by the
+  pause length, and (worse) frames/events stamped after a pause drifted past the pause-excluding
+  `video.webm`. Fixed with a paused-aware clock (`extension/src/clock.js`, tested): worker banks
+  `pausedAccum` and the overlay subtracts it. This is load-bearing now that the blocklist auto-pauses
+  on every sensitive-tab visit.
+- **Auto-transcribe didn't "use what I have."** The machine had the weights cached
+  (parakeet + faster-whisper) and the packages in the uv cache, but no `.venv`, and `pack.py`
+  hardcoded the MLX-only `parakeet` engine via the *invoking* python — so it failed on bare
+  `python3`. `pack.py` now finds the repo `.venv` (or any interpreter with an engine), auto-selects
+  parakeet → faster-whisper, and runs `transcribe.py` as a subprocess; it transcribes on bare
+  `python3` now. Added `analyze/setup.sh` / `setup.ps1` / `requirements.txt` for Mac/Windows.
+- **Annotations now fuse all three modalities.** The `## ✦ Annotations` section binds each
+  Select/Draw mark to the narration spoken around its timestamp (🗣) and its frame, so a recipient
+  agent connects mark + words + frame at one timestamp instead of cross-referencing transcript.vtt.
+- Also: stale content scripts spewed "Extension context invalidated" after a reload — content.js
+  sends now go through a `safeSend` guard (`chrome.runtime?.id` check + try/catch). The CSP
+  `frame-ancestors`/`report-uri`-via-meta warnings are from recorded sites, not our code.
+
 ## 2026-06-17 (security scan — adversarial review of redaction + egress + injection)
 
 Two independent adversarial audits (redaction-bypass hunt; egress/permissions/injection). The

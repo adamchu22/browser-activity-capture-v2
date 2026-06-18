@@ -1,7 +1,18 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-17 (P2 + P3 + P4 + a hardening pass + a security scan all landed this
-session; NEXT: Adam runs ONE live-Chrome session to verify everything — full checklist below)_
+_Last updated: 2026-06-18 (live-run #2 fixes landed — see below; NEXT: a load-unpacked verify of
+the blocklist auto-pause, the pause clock, and auto-transcribe)_
+
+## ▶ NEXT (2026-06-18) — verify live-run #2 fixes
+
+Adam's 2nd run exposed that **1Password was fully captured** (blocklist never saved + exact-match
+miss) and the **pause timer jumped**. Both fixed, plus auto-transcribe now works on this machine and
+annotations fuse with narration. Built + unit-tested (node 55 / python 116 green); needs a
+load-unpacked sign-off. The exact live checks are the new **"✅ Done 2026-06-18"** block at the top of
+`to-do-current.md`; root causes + fixes are in `learnings.md` 2026-06-18. Set up transcription once
+with `bash analyze/setup.sh` (Mac) — the `.venv` already exists on this machine and works.
+
+---
 
 ---
 

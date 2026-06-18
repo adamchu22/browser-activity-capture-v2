@@ -6,6 +6,28 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (61 tests; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
+## ✅ Done 2026-06-18 — live-run #2 fixes (built + unit-tested; need a live verify)
+
+From Adam's second run (`outputs/capture-2026-06-18T12-45-56-384Z.zip`). All landed with tests
+(node 55, python 116, all green); the behaviors below are chrome.*/DOM-dependent so a load-unpacked
+run is the sign-off. Details in `learnings.md` 2026-06-18.
+
+- [x] **Blocklist now actually saves + matches.** Settings persist on edit ("Saved ✓"); host match
+      is suffix-aware + input-tolerant (`blocklist.js`). _Live check:_ add `1password.com`, confirm
+      it sticks after closing/reopening the popup.
+- [x] **Auto-pause on a blocklisted tab.** Switching into a blocklisted tab pauses the whole
+      recording (video too) + icon tooltip says why; leaving auto-resumes; a manual pause is never
+      overridden. _Live check:_ switch to 1Password mid-record → nothing from it in the bundle
+      (manifest tabs, HAR, AND no frame of it).
+- [x] **Pause clock fixed.** No forward jump on resume; frames/events stay aligned to the
+      pause-excluding video (`clock.js`). _Live check:_ pause 10s, resume → timer continues, doesn't jump.
+- [x] **Auto-transcribe uses the local engine.** `pack.py` finds `.venv`, auto-selects
+      parakeet→faster-whisper, works on bare `python3`. Setup: `analyze/setup.sh` / `setup.ps1`.
+- [x] **Annotations fuse mark + narration + frame** in `context.md`'s `## ✦ Annotations`.
+- [x] **Mic prompt** opens a small popup window, not a new tab. **Save UX:** explicit
+      auto-save-to-folder vs "ask where to save & name" (native dialog → any location + rename).
+- [x] **"Extension context invalidated"** errors guarded in content.js.
+
 ## Now (in order)
 
 - [x] ~~Validate the entire-screen + app-switch bundle~~ — `outputs/capture-2026-06-17T14-36-28-587Z.zip`
