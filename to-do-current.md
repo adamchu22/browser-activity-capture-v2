@@ -34,24 +34,20 @@ Three items came out of it — two from his narration, one I found reviewing the
 
 **Decisions captured from Adam 2026-06-18 — see each item.**
 
-- [ ] **Scope capture + overlay to the surface actually being recorded (headline).** **DECISION
-      (Adam):** _"it should only work in the place I'm recording. If it's 1 tab then 1 tab, 1 window
-      1 window, 1 screen just that screen."_ Today the overlay + Select/Draw + instrumentation mount in
-      EVERY tab the user enters (`onActivated`→`instrumentTab`), so the menu leaks onto a window that
-      isn't in `video.webm` (his complaint), and off-surface tabs get captured. **Approach:** read the
-      captured surface from the video track — `videoTrack.getSettings().displaySurface` is
-      `'browser'` (one tab) | `'window'` | `'monitor'` (whole screen) — report it from `offscreen.js`
-      in `offscreen-armed`, and gate `instrumentTab`/overlay on it:
-      - `browser` → only the shared tab (follow its navigations; don't instrument others).
-      - `window` → only tabs whose `windowId` matches the recording window.
-      - `monitor` → tabs on that display.
-      **Chrome limitation (note, don't pretend otherwise):** `getDisplayMedia` does NOT tell the
-      extension which tab/window/display was picked, so use the Start tab's tab/window as the proxy
-      (correct for tab + window shares, which you start from the thing you share). The `monitor` →
-      "all windows on that screen" case needs window-geometry↔display matching (likely the
-      `system.display` permission) — stage that as a refinement; v1 can scope a monitor share to the
-      Start window. Touches the just-stabilised capture lifecycle (`goLive`/`instrumentTab`/
-      `onActivated`/`isEligible`) — build carefully with the nav-policy tests.
+- [x] **Scope capture + overlay to the surface actually being recorded (headline)** — DONE
+      2026-06-18 (commit `a415aa2`), tab + window cases. **DECISION (Adam):** _"it should only work in
+      the place I'm recording. 1 tab then 1 tab, 1 window 1 window, 1 screen just that screen."_ The
+      offscreen doc reports the video track's `displaySurface`; `goLive` anchors `captureTabId` +
+      `captureWindowId`; pure `capture-scope.js` (5 tests) decides membership; `instrumentTab` +
+      `captureFrame` gate on it, so out-of-surface tabs/windows get no overlay, no debugger/DOM/network,
+      no frames. `browser` → only the start tab; `window` → only the start window's tabs;
+      `monitor`/unknown → everywhere. Persisted + rehydrated; surfaced as `manifest.capture_surface`.
+      Chrome doesn't reveal which surface was picked, so the start tab/window is the proxy (correct for
+      tab + window shares). **Live-verify:** window share → switch to another window → NO menu there,
+      nothing from it in the bundle; tab share → switch tabs → only the shared tab captured.
+  - [ ] **Staged refinement — multi-monitor screen share.** A `monitor` share currently scopes to
+        "everywhere" (correct on a single monitor). To exclude windows on OTHER monitors, match window
+        geometry to the captured display (likely the `system.display` permission). Low priority.
 - [x] **Pause now suspends network/HAR capture too** (DONE 2026-06-18, commit `e5d27cd`). The CDP
       handler gated only on `!state.recording`; added `state.paused`, so network stops in lockstep with
       events/frames/rrweb when paused. Fixes the privacy leak (paused = off-record) AND the false
@@ -61,19 +57,19 @@ Three items came out of it — two from his narration, one I found reviewing the
       changing the capture model (the bar is browser chrome; the only way to drop it is to abandon
       `getDisplayMedia` full-screen capture for a `tabCapture`/activeTab path). Closes the old "NEXT —
       hide the Stop sharing bar" item and the `activeTab`-vs-security reconciliation.
-- [ ] **Rebuild the mic-permission grant to happen in-window, and persist (don't ask every time).**
-      **DECISION (Adam):** _"I know Loom and other tools do it from the window I requested. If we need
-      to rebuild the permissions for the mic to work in the app, let's try that, because Loom doesn't
-      ask me all the time."_ So: kill the separate `type:"popup"` window (`popup.js` `openMicGrant()`)
-      and grant in-context — supersedes the earlier "sub-window, never a tab" note (`learnings.md`
-      2026-06-18). **Constraint:** an offscreen doc can't prompt, and an action popup can close when
-      Chrome's permission bubble takes focus (the reason the window existed). **Plan:** (1) request
-      `getUserMedia({audio:true})` directly from the popup on the Enable-mic click and verify the popup
-      holds through the prompt — if it does, no window at all (Loom-like); (2) the grant persists for
-      the extension origin, so subsequent recordings shouldn't re-prompt — verify the "asks every time"
-      complaint is the one-time grant not sticking and confirm `chrome://settings/content/microphone`
-      lists the extension as Allowed + macOS Privacy → Microphone → Chrome ON; (3) only if the popup
-      can't hold, fall back to a tab in the current window. Investigate, then build.
+- [x] **Mic-permission grant now happens inline in the popup, no separate window** — DONE 2026-06-18
+      (commit `41aba3a`). **Root cause of "asks every time":** the Start gate used
+      `navigator.permissions.query({name:"microphone"})`, unreliable in a popup — it returned
+      not-granted even though the grant had persisted (his recordings had narration), so the grant
+      window re-opened every Start. Now the popup calls `getUserMedia({audio:true})` via `ensureMic()`,
+      which doubles as the grant test: already-granted → resolves with NO prompt/window (returning users
+      never asked again); first time → Chrome's prompt appears over the popup and the grant persists.
+      Removed `openMicGrant()` + the dead `micGranted()`; `stMicPrompt` copy updated en/es/pt.
+      `mic-permission.html`/`.js` are now unused (left in place; safe to delete in a cleanup).
+  - [ ] **Live-verify:** first-time Start → prompt appears in-context (no separate window) → Allow →
+        records narration; subsequent Starts do NOT re-prompt. If a first-time grant is flaky because
+        the popup closes as the bubble appears, the grant still persists so the 2nd Start works — but
+        confirm the behavior. Also confirm macOS Privacy → Microphone → Chrome is ON (OS-level, separate).
 
 ## ⚖️ TODO 2026-06-18 — add license + third-party notices (audit done, files not written)
 

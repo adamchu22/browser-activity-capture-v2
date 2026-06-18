@@ -74,13 +74,19 @@ look. Decisions worth keeping:
   rules outrank the UA `[hidden]{display:none}` rule — so `popup.js` toggling `.hidden`
   silently no-ops without `[hidden]{display:none!important}` in the stylesheet. This was a
   latent bug on the live row even before the redesign.
-- **Mic grant currently opens a separate `type:"popup"` system sub-window** (`popup.js`
-  `openMicGrant()` → `chrome.windows.create` for `mic-permission.html`). **SUPERSEDED
-  2026-06-18:** Adam now wants the permission handled **inside the window/context he's already
-  in — no separate floating window** (the old "sub-window, never a tab" rule no longer holds).
-  See the to-do item; this is constrained by Chrome (an offscreen doc can't prompt, and an
-  action popup tends to close when the permission bubble steals focus — which is *why* the
-  dedicated window existed). Needs investigation, don't just swap the API.
+- **Mic grant now happens INLINE in the popup — no separate window (2026-06-18, supersedes the
+  old "sub-window, never a tab" preference).** The old flow opened a `type:"popup"`
+  `mic-permission.html` window on every Start. Root cause of Adam's "asks every time": the gate
+  used `navigator.permissions.query({name:"microphone"})`, which is **unreliable in an extension
+  popup** — it returned not-granted even though the grant had persisted (recordings DID get
+  narration), so the window re-opened each time. **Fix:** the popup calls
+  `getUserMedia({audio:true})` directly (`ensureMic()`), which is itself the reliable grant test —
+  already-granted resolves with NO prompt/window, so a returning user is never asked; first-time
+  shows Chrome's prompt over the popup and the grant persists for the extension origin regardless.
+  Lesson: **don't use `permissions.query` for mic in a popup — call `getUserMedia` and treat a
+  prompt-less resolve as "granted."** Caveat to verify live: if a popup closes as the first-time
+  bubble appears, that one Start may not proceed, but the persisted grant makes the next Start
+  silent. `mic-permission.html`/`.js` are now unused (left for now; safe to delete).
 - **Context is now narration-first.** The typed "What are you doing in this recording?" field
   is a collapsed `<details>` toggle (`#whatBox`), no longer prominent; `#task` still flows to
   the worker if filled. The primary intent capture is **spoken**: the pre-roll countdown

@@ -1,8 +1,24 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-18 (FIXED the lost-30-min-recording bug — MV3 worker died mid-pause and wiped
-in-memory state; added keepalive + persist/rehydrate + second-Start guard. NEXT: live-verify the
-recovery, then the still-open "Stop sharing" bar item.)_
+_Last updated: 2026-06-18 (lost-recording bug FIXED + live-verified; then a feedback round — capture/
+overlay now scoped to the shared surface, pause pauses network, mic permission granted inline. NEXT:
+live-verify scope + mic; the monitor-multi-display refinement is the only scoping leftover.)_
+
+## ✅ DONE (2026-06-18) — feedback round after the recovery verify (scope, pause-network, mic)
+
+From Adam's Test-1 narration + decisions. All built + tested (65 node / 125 python green); the new
+behaviors are chrome.*/DOM-dependent so they need a load-unpacked verify. Details in `learnings.md`.
+- **Capture + overlay scoped to the recorded surface** (commit `a415aa2`) — offscreen reports the
+  video `displaySurface`; `capture-scope.js` (pure, 5 tests) gates `instrumentTab`/`captureFrame`:
+  tab share → only that tab, window share → only that window, screen → everywhere (multi-monitor
+  display-scoping staged). Fixes the menu leaking onto windows that aren't in `video.webm`.
+- **Pause now suspends network too** (commit `e5d27cd`) — the CDP handler ignored `state.paused`;
+  network kept hitting `network.har` while paused (privacy + false CAPTURE-GAP warning). Fixed.
+- **Mic permission granted inline in the popup** (commit `41aba3a`) — no separate window; the old
+  `permissions.query` gate was unreliable and re-opened the window every Start. `mic-permission.*`
+  now unused.
+- **Decision: live with Chrome's "Stop sharing" bar** (can't hide browser chrome without dropping
+  full-screen capture).
 
 ## ✅ DONE (2026-06-18) — recording survives a service-worker restart (lost-capture bug)
 
