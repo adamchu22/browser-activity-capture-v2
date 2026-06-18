@@ -22,6 +22,37 @@ nothing keeps it warm. Fixed in 4 bisected commits (built + unit-tested):
 - [ ] **LIVE-VERIFY (sign-off):** record → Pause → idle several min (or kill the worker via
       `chrome://serviceworker-internals`) → return → overlay controllable, Resume + Finish → PASS bundle.
 
+## 🎯 ADAM'S FEEDBACK + a bug found, from the Test-1 run (2026-06-18, `capture-2026-06-18T17-45-27-904Z`)
+
+Test 1 (keepalive through a gap) **passed from Adam's side**: he paused, switched windows, resumed,
+waited a few minutes — "nothing has changed, still recording," overlay still said "stop and export,"
+"still hasn't broken." Bundle validates **PASS**, `errors.json` empty (no worker-restart), video +
+narration intact, mic meter confirmed working ("cute little sound bars… and they're sensitive").
+Three items came out of it — two from his narration, one I found reviewing the bundle:
+
+- [ ] **Overlay menu + Select/Draw appear on windows that AREN'T being recorded (headline).** Adam's
+      words: _"it should only be doing stuff on one specific screen, and I shouldn't have the menu
+      available on the other screen where I'm not recording."_ He shared the original screen, but when
+      he switched to another window the overlay + annotation tools mounted there too and he could
+      Select/Draw on a page that isn't in `video.webm` — "two different things, even though it's one
+      recording." Same symptom as the lost-recording report's "menu in another window." Cause: the
+      overlay/tools mount in EVERY tab the user enters (`onActivated`→`instrumentTab`), independent of
+      which screen/window `getDisplayMedia` is capturing. **Open question (don't assume):** the
+      extension can't directly map the captured display→tabs, so "only on the recorded screen" needs a
+      design call — e.g. remember the window Start was pressed in and only mount the overlay/tools in
+      that window's tabs, or detect the focused display. Scope before building.
+- [ ] **Pause does NOT suspend network/HAR capture (bug, found in review).** `chrome.debugger.onEvent`
+      (`background.js:763`) checks `!state.recording` but not `state.paused`, so while paused the
+      tracked tabs' requests keep landing in `network.har` (and IDB). Two harms: (1) privacy — Adam
+      paused specifically to do things off-record, but his recorded tabs' network was still captured;
+      (2) it produces the false **CAPTURE GAP** validator warning (network 1:46→2:41 with no content
+      events, because content capture *does* pause). Fix: gate the network handler on `!state.paused`
+      too; decide whether `check_coverage.py` should also treat paused spans as expected gaps.
+- [ ] **Default Chrome's "you're recording / sharing" bar to closed/collapsed.** Adam: _"I would
+      prefer… the [bar that shows] you're recording to just always be toggled closed."_ Reinforces the
+      already-open item below (hide/collapse Chrome's `getDisplayMedia` "Stop sharing" bar) — treat as
+      the same task.
+
 ## ⚖️ TODO 2026-06-18 — add license + third-party notices (audit done, files not written)
 
 Adam wants to license the project. Provenance audit is **done** (findings below); the
