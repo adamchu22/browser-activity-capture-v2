@@ -3,7 +3,10 @@
 The capture step produces a **Capture Bundle** (plain files). This step turns a
 bundle into an **analysis pack** you can hand to *any* agent, harness, or LLM.
 There is no provider lock-in: the core (`pack.py`) is stdlib-only and never calls
-a model. The model is whatever *you* point at the pack.
+a model. The model is whatever *you* point at the pack. (One optional, best-effort
+exception: if the bundle's `transcript.vtt` is still the stub, `pack.py` will run the
+**local** transcriber to fill it in — see §1b. It's skipped automatically if `ffmpeg`
+or a speech engine isn't installed, and `--no-transcribe` turns it off.)
 
 ```
 bundle/ ──► pack.py ──► analysis-pack/        ──►  [ any agent / harness / LLM ]
@@ -64,7 +67,10 @@ Engines:
 .venv/bin/python analyze/transcribe.py /path/to/bundle --engine whisper --model large-v3
 ```
 
-Run `transcribe.py` before `pack.py` so the pack picks up the real transcript.
+You don't have to run this by hand: `pack.py` auto-runs it (best-effort) when it sees
+a stub `transcript.vtt` and the bundle has narration audio. Run `transcribe.py`
+yourself first if you want a non-default engine/model (or use `--no-transcribe` on
+`pack.py` to skip the auto step).
 
 ## 1c. Glossary post-pass (domain terms ASR can't get)
 

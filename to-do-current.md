@@ -237,10 +237,15 @@ grabs a frame at emit time so the annotated screen is in `frames/`. See `learnin
       `tests/test_annotations.py` (13). Note: the in-zip self-driving docs (`bundle-docs.js`)
       don't yet mention the `annotation:*` events — small follow-up if we want the raw-zip path
       to call them out (the events are in `timeline.json` regardless).
-- [ ] **Auto-transcribe**: have `pack.py` (or export) run `transcribe.py` when it sees the
-      stub `transcript.vtt`, so narration isn't a manual step. (This is why this run's
-      transcript was a stub — transcription was never wired to auto-run; it's a separate
-      `analyze/` step the extension can't perform itself.)
+- [x] ~~**Auto-transcribe**: have `pack.py` run `transcribe.py` when it sees the stub
+      `transcript.vtt`~~ (done 2026-06-17). `pack.maybe_transcribe()` runs at the start of
+      `build_pack`: if the transcript is a stub and the bundle has narration audio, it calls the
+      local transcriber (parakeet) so the pack carries narration with no manual step. Best-effort
+      and **never fatal** — gated on `ffmpeg` being present, swallows a missing-engine `SystemExit`
+      / any error and leaves the stub (the zip is still self-driving). `--no-transcribe` skips it.
+      Unit-tested (`tests/test_autotranscribe.py`, 12; the transcriber is mocked so the suite needs
+      no ffmpeg/engine). On Adam's default `python3` (no mlx-audio) it'll warn + leave the stub;
+      run it from the `.venv` to actually transcribe.
 
 **P4b — `pack.py`-path handoff gaps** (verified 2026-06-17; the *zip*-path equivalents are
 now covered by **P0** — these are the analysis-pack path):

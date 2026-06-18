@@ -690,8 +690,64 @@ Raw structured files are in `bundle/` if you prefer them over this flattened vie
 """
 
 
-def build_pack(bundle: Path, out: Path, blocklist: list[str] | None = None) -> None:
+STUB_TRANSCRIPT_MARK = "No narration captured"
+
+
+def _transcript_is_stub(text: str) -> bool:
+    """True if transcript.vtt has no real narration — the export-time placeholder,
+    an empty file, or a WEBVTT header with no cue lines."""
+    if not text or not text.strip():
+        return True
+    if STUB_TRANSCRIPT_MARK in text:
+        return True
+    return "-->" not in text  # header only, no cues
+
+
+def maybe_transcribe(bundle: Path, enabled: bool = True) -> None:
+    """Best-effort: if transcript.vtt is still the stub and the bundle has narration
+    audio, run the LOCAL transcriber so the pack carries narration without a manual
+    step (the gap that left an earlier run's transcript empty). NEVER fatal — if
+    ffmpeg or a speech engine isn't installed, warn and leave the stub (the bundle is
+    still self-driving via CLAUDE.md/AGENTS.md). Stays local: audio never leaves the
+    machine; only runs when ffmpeg is present, and reuses cached model weights."""
+    if not enabled:
+        return
+    tpath = bundle / "transcript.vtt"
+    text = tpath.read_text(encoding="utf-8") if tpath.exists() else ""
+    if not _transcript_is_stub(text):
+        return  # a real transcript is already here — don't touch it
+    manifest = json.loads((bundle / "manifest.json").read_text()) if (bundle / "manifest.json").exists() else {}
+    if manifest.get("narration_in_video") is False:
+        return  # the manifest says the video has no mic audio
+    video = bundle / (manifest.get("video") or "video.webm")
+    if not video.exists():
+        return  # no audio to recover
+    if not shutil.which("ffmpeg"):
+        print("note: skipping auto-transcribe — ffmpeg not found. Run "
+              "`analyze/transcribe.py <bundle>` in the .venv to add narration.", file=sys.stderr)
+        return
+    try:
+        import transcribe as _transcribe  # lazy: keeps the rest of pack.py engine-free
+        print("transcribing narration locally (parakeet)… first run may load a model.", file=sys.stderr)
+        _transcribe.transcribe(bundle, "parakeet", "", 8.0, None)
+    except SystemExit as e:
+        # transcribe.py sys.exit()s when an engine is missing — don't let that kill the pack.
+        print(f"note: auto-transcribe skipped ({e}). Built with the stub transcript; run "
+              f"`analyze/transcribe.py <bundle>` in the .venv to add narration.", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 — best-effort; any failure must not break the pack
+        print(f"note: auto-transcribe failed ({type(e).__name__}: {e}). Built with the stub "
+              f"transcript; run `analyze/transcribe.py <bundle>` in the .venv to add narration.",
+              file=sys.stderr)
+
+
+def build_pack(bundle: Path, out: Path, blocklist: list[str] | None = None,
+               transcribe: bool = True) -> None:
     out.mkdir(parents=True, exist_ok=True)
+
+    # If the narration was never transcribed (stub transcript.vtt) but the audio is
+    # in video.webm, fill it in now — locally, best-effort — so the pack isn't missing
+    # the narration. Pass transcribe=False (CLI --no-transcribe) to skip.
+    maybe_transcribe(bundle, transcribe)
 
     # The neutral instructions and the flattened context — the two things every
     # agent reads.
@@ -755,13 +811,15 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=Path("./analysis-pack"), help="output pack directory")
     ap.add_argument("--no-net-filter", action="store_true",
                     help="render every network request verbatim (don't collapse analytics/tracking noise)")
+    ap.add_argument("--no-transcribe", action="store_true",
+                    help="don't auto-transcribe a stub transcript.vtt (skip the local ASR step)")
     args = ap.parse_args()
 
     if not (args.bundle / "timeline.json").exists():
         sys.exit(f"error: no timeline.json in {args.bundle} — is that a capture bundle?")
 
     blocklist = [] if args.no_net_filter else load_blocklist()
-    build_pack(args.bundle, args.out, blocklist)
+    build_pack(args.bundle, args.out, blocklist, transcribe=not args.no_transcribe)
     print(f"✓ analysis pack written to {args.out}")
     print(f"  hand it to any agent: it reads {args.out}/BRIEF.md + {args.out}/context.md + {args.out}/frames/")
 

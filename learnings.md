@@ -29,6 +29,19 @@ Three UX items. Two non-obvious things worth not relearning:
 - Popup: collapsible `<details>` is the cheapest "dropdown" — purpose stays open + prominent
   (it seeds the agent's context), blocklist + folder move into a collapsed Settings section.
 
+## 2026-06-17 (P4 — auto-transcribe at pack time, best-effort)
+
+`pack.maybe_transcribe()` runs at the start of `build_pack`: a stub `transcript.vtt` + narration
+audio → it calls the local transcriber so the pack has narration without a manual step (the gap
+that left an earlier run's transcript empty). The discipline that matters: it must **never break
+a pack build**. So it's gated on `shutil.which("ffmpeg")`, and the call is wrapped to swallow both
+`SystemExit` (transcribe.py `sys.exit()`s when an engine isn't installed) and any other exception —
+on failure it warns and leaves the stub (the zip is still self-driving via CLAUDE.md/AGENTS.md).
+Stays local: only runs with ffmpeg present, reuses cached weights. On Adam's default `python3`
+(no mlx-audio) it warns + leaves the stub; the `.venv` is where it actually transcribes. Mockable
+seam (`import transcribe` lazily inside the function), so `tests/test_autotranscribe.py` covers all
+the gates with no ffmpeg/engine. `--no-transcribe` opts out.
+
 ## 2026-06-17 (P4 — rendering the annotation events on the analyze side)
 
 Wired the P2 `annotation:select` / `annotation:draw` events through `pack.py` so they're

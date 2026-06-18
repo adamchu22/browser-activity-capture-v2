@@ -199,11 +199,12 @@ Analyze side: 70 python tests + 6 node redact tests, all green.
 
 ## Tests
 
-`python3 -m unittest discover -s tests` — 93 tests (glossary, network-noise collapse,
+`python3 -m unittest discover -s tests` — 105 tests (glossary, network-noise collapse,
 multi-tab rendering, semantic labels + step segmentation + frame annotation, purpose steer,
-bundled skills incl. competitive-research, coverage diagnostic, and `test_annotations.py` (13):
+bundled skills incl. competitive-research, coverage diagnostic, `test_annotations.py` (13):
 annotation:select/draw in the timeline, steps, the `## ✦ Annotations` section, and the
-frames-annotated.html marks). Stdlib only, all green.
+frames-annotated.html marks; and `test_autotranscribe.py` (12): the stub-detection + the
+best-effort auto-transcribe gates, transcriber mocked). Stdlib only, all green.
 `node --test tests/test_*.mjs` — 37 tests: redact (URL/value), nav-policy, bundle-docs, and
 the new `test_annotate.mjs` (7, the Draw `drawGeom` %-coord/bbox math). The content.js
 unique-selector AND semantic-context (`describe()`) logic is verified in real Chromium via
