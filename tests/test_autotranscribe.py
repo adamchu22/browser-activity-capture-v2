@@ -45,23 +45,33 @@ def _bundle(tmp, *, transcript="WEBVTT\n\nNOTE No narration captured.\n",
 
 
 class TestMaybeTranscribe(unittest.TestCase):
-    def _run(self, bundle, enabled=True, ffmpeg="/usr/bin/ffmpeg"):
-        """Call maybe_transcribe with the real transcriber mocked; return the mock."""
-        fake = mock.MagicMock()
-        with mock.patch.object(pack.shutil, "which", return_value=ffmpeg):
-            with mock.patch.dict(sys.modules):
-                import transcribe  # noqa: E402
-                with mock.patch.object(transcribe, "transcribe", fake):
-                    pack.maybe_transcribe(bundle, enabled)
-        return fake
+    def _run(self, bundle, enabled=True, ffmpeg="/usr/bin/ffmpeg", engine="parakeet", rc=0):
+        """Call maybe_transcribe with the engine probe + transcribe subprocess mocked
+        (no ffmpeg / speech engine needed); return the subprocess.run mock. `engine`
+        is what _engine_for would detect (None = nothing installed); `rc` is the
+        transcribe subprocess exit code."""
+        run_mock = mock.MagicMock(return_value=mock.Mock(returncode=rc, stdout="", stderr=""))
+        with mock.patch.object(pack.shutil, "which", return_value=ffmpeg), \
+                mock.patch.object(pack, "_venv_python", return_value=None), \
+                mock.patch.object(pack, "_engine_for", return_value=engine), \
+                mock.patch.object(pack.subprocess, "run", run_mock):
+            pack.maybe_transcribe(bundle, enabled)
+        return run_mock
 
     def test_runs_when_stub_and_audio_present(self):
         with tempfile.TemporaryDirectory() as tmp:
-            fake = self._run(_bundle(tmp))
-            fake.assert_called_once()
-            # called as transcribe(bundle, "parakeet", "", 8.0, None)
-            args = fake.call_args.args
-            self.assertEqual(args[1], "parakeet")
+            run_mock = self._run(_bundle(tmp))
+            run_mock.assert_called_once()
+            cmd = run_mock.call_args.args[0]  # [py, transcribe.py, bundle, --engine, parakeet]
+            self.assertIn("--engine", cmd)
+            self.assertEqual(cmd[cmd.index("--engine") + 1], "parakeet")
+            self.assertTrue(str(cmd[1]).endswith("transcribe.py"))
+
+    def test_uses_whisper_when_thats_what_is_installed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_mock = self._run(_bundle(tmp), engine="whisper")
+            cmd = run_mock.call_args.args[0]
+            self.assertEqual(cmd[cmd.index("--engine") + 1], "whisper")
 
     def test_disabled_does_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -86,23 +96,25 @@ class TestMaybeTranscribe(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self._run(_bundle(tmp), ffmpeg=None).assert_not_called()
 
-    def test_engine_missing_is_not_fatal(self):
-        # transcribe.py sys.exit()s when an engine isn't installed — maybe_transcribe
-        # must swallow it so the pack still builds.
+    def test_skips_when_no_engine_installed(self):
+        # _engine_for returns None when neither mlx-audio nor faster-whisper is
+        # importable — skip cleanly, never invoke transcribe, never raise.
         with tempfile.TemporaryDirectory() as tmp:
-            b = _bundle(tmp)
-            with mock.patch.object(pack.shutil, "which", return_value="/usr/bin/ffmpeg"):
-                import transcribe  # noqa: E402
-                with mock.patch.object(transcribe, "transcribe", side_effect=SystemExit("no engine")):
-                    pack.maybe_transcribe(b, True)  # must not raise
+            self._run(_bundle(tmp), engine=None).assert_not_called()
+
+    def test_transcribe_nonzero_exit_is_not_fatal(self):
+        # The transcribe subprocess failing (bad weights, OOM) must not break the pack.
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run(_bundle(tmp), rc=1)  # must not raise
 
     def test_unexpected_error_is_not_fatal(self):
         with tempfile.TemporaryDirectory() as tmp:
             b = _bundle(tmp)
-            with mock.patch.object(pack.shutil, "which", return_value="/usr/bin/ffmpeg"):
-                import transcribe  # noqa: E402
-                with mock.patch.object(transcribe, "transcribe", side_effect=RuntimeError("boom")):
-                    pack.maybe_transcribe(b, True)  # must not raise
+            with mock.patch.object(pack.shutil, "which", return_value="/usr/bin/ffmpeg"), \
+                    mock.patch.object(pack, "_venv_python", return_value=None), \
+                    mock.patch.object(pack, "_engine_for", return_value="parakeet"), \
+                    mock.patch.object(pack.subprocess, "run", side_effect=RuntimeError("boom")):
+                pack.maybe_transcribe(b, True)  # must not raise
 
     def test_malformed_manifest_is_not_fatal(self):
         # A corrupt manifest.json must not crash the pack build (reads are inside try).

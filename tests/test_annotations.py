@@ -160,5 +160,55 @@ class TestContextSection(unittest.TestCase):
         self.assertNotIn("## ✦ Annotations", ctx)
 
 
+class TestNarrationNear(unittest.TestCase):
+    CUES = [
+        {"t": 0, "kind": "speech", "text": "starting up"},
+        {"t": 900, "kind": "speech", "text": "this is the refund button"},
+        {"t": 5000, "kind": "speech", "text": "way later, unrelated"},
+    ]
+
+    def test_picks_speech_around_the_mark(self):
+        # mark at 1000ms → the 900ms cue (just before) is what they were saying
+        self.assertEqual(pack.narration_near(1000, self.CUES), "starting up this is the refund button")
+
+    def test_excludes_far_away_speech(self):
+        said = pack.narration_near(1000, self.CUES)
+        self.assertNotIn("way later", said)
+
+    def test_empty_when_silent(self):
+        self.assertEqual(pack.narration_near(60000, self.CUES), "")
+
+    def test_truncates_long_narration(self):
+        long = [{"t": 1000, "kind": "speech", "text": "word " * 200}]
+        out = pack.narration_near(1000, long, limit=40)
+        self.assertLessEqual(len(out), 40)
+        self.assertTrue(out.endswith("…"))
+
+
+class TestAnnotationNarrationFusion(unittest.TestCase):
+    """The user's ask: each annotation must connect mark + narration + frame so the
+    recipient agent reads all three together."""
+
+    def _bundle(self, tmp):
+        b = Path(tmp)
+        manifest = {"capture_id": "cap-1", "frames": [{"t": 1000, "file": "frames/sel.png"}]}
+        (b / "manifest.json").write_text(json.dumps(manifest))
+        (b / "timeline.json").write_text(json.dumps([SELECT]))  # SELECT is at t=1000
+        (b / "transcript.vtt").write_text(
+            "WEBVTT\n\n00:00:00.800 --> 00:00:02.000\nclick the issue refund button\n"
+        )
+        return b
+
+    def test_narration_bound_under_the_mark(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = pack.build_context(self._bundle(tmp))
+        self.assertIn("## ✦ Annotations", ctx)
+        # the mark, its frame, AND the words spoken around it all appear together
+        self.assertIn("selected button \"Issue refund\"", ctx)
+        self.assertIn("frames/sel.png", ctx)
+        self.assertIn("🗣 said around then:", ctx)
+        self.assertIn("click the issue refund button", ctx)
+
+
 if __name__ == "__main__":
     unittest.main()

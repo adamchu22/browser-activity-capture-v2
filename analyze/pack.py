@@ -23,6 +23,7 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -205,6 +206,20 @@ def nearest_frame(t: int, frames: list[dict], window_ms: int = 2000) -> str | No
         if dt < best_dt:
             best, best_dt = f, dt
     return (best.get("file") if best else None) if best_dt <= window_ms else None
+
+
+def narration_near(t: int, speech: list[dict], before_ms: int = 5000,
+                   after_ms: int = 3000, limit: int = 240) -> str:
+    """What the user was SAYING around time `t` — the speech cues overlapping a
+    window that leans earlier (people narrate just before they act). Used to bind a
+    Select/Draw annotation to its narration so the recipient agent connects the
+    three modalities (mark + words + frame) at one timestamp instead of having to
+    cross-reference transcript.vtt by hand. Returns "" if nothing was said then."""
+    lo, hi = t - before_ms, t + after_ms
+    texts = [c.get("text", "").strip() for c in speech
+             if c.get("text", "").strip() and lo <= c.get("t", 0) <= hi]
+    s = " ".join(texts).strip()
+    return (s[: limit - 1].rstrip() + "…") if len(s) > limit else s
 
 
 def short_url(url: str) -> str:
@@ -652,22 +667,30 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
         k = e.get("kind")
         if k not in ("annotation:select", "annotation:draw"):
             continue
-        fr = nearest_frame(e.get("t", 0), frames)
+        t = e.get("t", 0)
+        fr = nearest_frame(t, frames)
         frref = f" → `frames/{Path(fr).name}`" if fr else ""
         if k == "annotation:select":
             anno_lines.append(
-                f"- `{ms(e.get('t', 0))}` selected {action_label(e)}  "
+                f"- `{ms(t)}` selected {action_label(e)}  "
                 f"`[{e.get('selector', '')}]`{pos(e)}{frref}"
             )
         else:
             region = _draw_region(e)
             anno_lines.append(
-                f"- `{ms(e.get('t', 0))}` drew on screen{(' · ' + region) if region else ''}{frref}"
+                f"- `{ms(t)}` drew on screen{(' · ' + region) if region else ''}{frref}"
             )
+        # Bind the narration spoken around the mark so mark + words + frame are read
+        # together (the user asked for the three to be explicitly connected).
+        said = narration_near(t, speech)
+        if said:
+            anno_lines.append(f'    - 🗣 said around then: "{said}"')
     annotations_block = (
         "\n## ✦ Annotations (what the user explicitly marked)\n"
-        "_Selector = the exact element the user means (agree on this); Draw = a freeform "
-        "region they highlighted. See `frames-annotated.html` to view them drawn on the page._\n"
+        "_Each mark ties together THREE things at one timestamp: the element/region "
+        "marked, the narration spoken around then (🗣), and the frame it was captured "
+        "on. Selector = the exact element the user means (agree on this); Draw = a "
+        "freeform region. See `frames-annotated.html` to view the marks drawn on the page._\n"
         + "\n".join(anno_lines) + "\n"
     ) if anno_lines else ""
 
@@ -721,13 +744,46 @@ def _transcript_is_stub(text: str) -> bool:
     return "-->" not in text  # header only, no cues
 
 
+def _venv_python() -> Path | None:
+    """The repo's .venv interpreter, if present. Cross-platform (posix vs Windows
+    layout). This is what makes auto-transcribe "use what you have" even when pack.py
+    itself was launched on a bare python with no speech engine installed."""
+    root = Path(__file__).resolve().parent.parent
+    for rel in (".venv/bin/python", ".venv/Scripts/python.exe"):
+        p = root / rel
+        if p.exists():
+            return p
+    return None
+
+
+def _engine_for(py: str) -> str | None:
+    """Pick an installed ASR engine for interpreter `py`, preferring the faster
+    Apple-Silicon path: parakeet (mlx-audio) → whisper (faster-whisper, the
+    cross-platform / Windows fallback) → None if neither is importable."""
+    probe = (
+        "import importlib.util as u;"
+        "print('parakeet' if u.find_spec('mlx_audio') else "
+        "'whisper' if u.find_spec('faster_whisper') else 'none')"
+    )
+    try:
+        out = subprocess.run([py, "-c", probe], capture_output=True, text=True, timeout=30)
+        eng = out.stdout.strip()
+        return eng if eng in ("parakeet", "whisper") else None
+    except Exception:  # noqa: BLE001 — probing must never break the build
+        return None
+
+
 def maybe_transcribe(bundle: Path, enabled: bool = True) -> None:
     """Best-effort: if transcript.vtt is still the stub and the bundle has narration
     audio, run the LOCAL transcriber so the pack carries narration without a manual
     step (the gap that left an earlier run's transcript empty). NEVER fatal — if
     ffmpeg or a speech engine isn't installed, warn and leave the stub (the bundle is
     still self-driving via CLAUDE.md/AGENTS.md). Stays local: audio never leaves the
-    machine; only runs when ffmpeg is present, and reuses cached model weights."""
+    machine; only runs when ffmpeg is present, and reuses cached model weights.
+
+    Engine + interpreter are auto-selected: prefer the repo .venv (so it works even
+    when pack.py was run on a bare python), and within it parakeet on Apple Silicon
+    or faster-whisper elsewhere."""
     if not enabled:
         return
     # Everything is inside the try: a malformed manifest.json or a non-UTF-8
@@ -753,13 +809,26 @@ def maybe_transcribe(bundle: Path, enabled: bool = True) -> None:
             print("note: skipping auto-transcribe — ffmpeg not found. Run "
                   "`analyze/transcribe.py <bundle>` in the .venv to add narration.", file=sys.stderr)
             return
-        import transcribe as _transcribe  # lazy: keeps the rest of pack.py engine-free
-        print("transcribing narration locally (parakeet)… first run may load a model.", file=sys.stderr)
-        _transcribe.transcribe(bundle, "parakeet", "", 8.0, None)
-    except SystemExit as e:
-        # transcribe.py sys.exit()s when an engine is missing — don't let that kill the pack.
-        print(f"note: auto-transcribe skipped ({e}). Built with the stub transcript; run "
-              f"`analyze/transcribe.py <bundle>` in the .venv to add narration.", file=sys.stderr)
+        # Prefer the repo .venv (it has the engine + cached weights) over whatever
+        # python launched pack.py. Run transcribe.py as a SUBPROCESS with that
+        # interpreter so the heavy engine import can't pollute or crash this process.
+        py = str(_venv_python() or sys.executable)
+        engine = _engine_for(py)
+        if not engine:
+            print("note: skipping auto-transcribe — no speech engine installed. Set up the "
+                  ".venv (see analyze/README.md → 'Setup'), then it transcribes automatically.",
+                  file=sys.stderr)
+            return
+        script = str(Path(__file__).resolve().parent / "transcribe.py")
+        print(f"transcribing narration locally ({engine} via {Path(py).name})… first run may "
+              "load a model.", file=sys.stderr)
+        res = subprocess.run([py, script, str(bundle), "--engine", engine],
+                             capture_output=True, text=True)
+        if res.returncode != 0:
+            tail = (res.stderr or res.stdout or "").strip()[-300:]
+            print(f"note: auto-transcribe failed (engine {engine}). Built with the stub "
+                  f"transcript; run `analyze/transcribe.py <bundle>` in the .venv. {tail}",
+                  file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — best-effort; any failure must not break the pack
         print(f"note: auto-transcribe failed ({type(e).__name__}: {e}). Built with the stub "
               f"transcript; run `analyze/transcribe.py <bundle>` in the .venv to add narration.",
