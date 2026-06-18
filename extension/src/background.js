@@ -760,7 +760,12 @@ async function captureFrame(reason = "") {
 // ---- network (CDP -> HAR) ------------------------------------------------
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
-  if (!state.recording || !state.tabIds.has(source.tabId)) return;
+  // Pause suspends ALL capture, network included. Without the `state.paused` guard the
+  // tracked tabs' requests kept landing in network.har while the user had stepped
+  // off-record during a pause (a privacy leak), and that network-without-content
+  // signature also tripped check_coverage's false CAPTURE GAP warning. Now network
+  // stops in lockstep with events/frames/rrweb when paused.
+  if (!state.recording || state.paused || !state.tabIds.has(source.tabId)) return;
 
   if (method === "Network.requestWillBeSent") {
     const { request, requestId, timestamp } = params;
