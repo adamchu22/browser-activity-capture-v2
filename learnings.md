@@ -85,15 +85,23 @@ look. Decisions worth keeping:
      Lesson: **requesting `getUserMedia` straight from an action popup is not portable** (no prompt in
      some Chromium forks; the popup can also close when the bubble appears). Use a real extension PAGE
      to grant.
-  - **Final design (commit 34fd711):** `ensureMic()` is a **silent detector only** (resolves with no
-    prompt when already granted — never relied on to grant). A persisted **`micGrantedOnce`** flag
-    (set on ANY successful grant — inline or via `mic-permission.html`) is the browser-agnostic fast
-    path: once set, Start proceeds with no prompt/window, even in Comet where the probe can't run. The
-    dedicated `type:"popup"` grant page is the reliable fallback, opened only when the flag is unset
-    (first time). The worker clears the flag when a recording's mic fails (revoked) so it self-heals.
-    This supersedes the brief "inline, no window" note above and the old "sub-window, never a tab"
-    rule: it's "no window once granted; a real page the first time." `mic-permission.html`/`.js` are
-    IN USE (the fallback) — don't delete.
+  3. **A separate grant window is unwanted too.** Adam: it opened in its own window and didn't
+     dismiss after enabling ("you have to leave it open to record") — he wants the prompt IN the tab
+     he's on.
+  - **Final design (commit ba06356):** prompt for the mic via the MV3-standard **in-page iframe
+    pattern** — inject an invisible **extension-origin** iframe with `allow="microphone"`
+    (`request-mic.html`/`js`, web-accessible) into the ACTIVE TAB via `chrome.scripting.executeScript`;
+    its getUserMedia makes Chrome's prompt anchor to that tab, grants to the EXTENSION origin (so the
+    offscreen recorder can use the mic), and the iframe removes itself once the user chooses (nothing
+    lingers). It also doubles as a silent check (resolves with no prompt when already granted). A
+    persisted **`micGrantedOnce`** flag (set by the iframe or the fallback page) is the fast path so a
+    granted user is NEVER re-asked, in any browser. The old `type:"popup"` `mic-permission.html` window
+    is now only the fallback for when the tab can't host the iframe (a `chrome://` page —
+    `executeScript` throws). The worker clears the flag if a recording's mic fails (revoked) →
+    self-heals. **Lessons:** (a) don't `permissions.query` the mic in a popup; (b) don't request
+    getUserMedia from the action popup (closes / no-op in Comet); (c) the portable in-tab prompt is an
+    extension-origin iframe with `allow="microphone"` injected into the page. `mic-permission.*` and
+    `request-mic.*` are BOTH in use — don't delete.
 - **Context is now narration-first.** The typed "What are you doing in this recording?" field
   is a collapsed `<details>` toggle (`#whatBox`), no longer prominent; `#task` still flows to
   the worker if filled. The primary intent capture is **spoken**: the pre-roll countdown

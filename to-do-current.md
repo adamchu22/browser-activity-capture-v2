@@ -68,10 +68,15 @@ Three items came out of it — two from his narration, one I found reviewing the
       thereafter — even in Comet. The dedicated grant page (`openMicGrant`) is the reliable fallback,
       opened only the first time. The worker clears the flag if a recording's mic actually fails
       (revoked) so it self-heals.
-  - [ ] **Live-verify (Comet + Chrome):** first Enable-mic/Start → grant page opens (Comet) or inline
-        prompt (Chrome) → Allow → records narration; EVERY subsequent Start → no prompt, no window.
-        Revoke the mic mid-life → next Start re-prompts. Confirm macOS Privacy → Microphone → Chrome ON.
-        `mic-permission.html`/`.js` are still used (the fallback) — do NOT delete.
+  - Updated 2026-06-18 (commit `ba06356`): the prompt now appears **IN the current tab** (injected
+    extension-origin iframe with `allow="microphone"`, `request-mic.html/js`), not a separate window,
+    and the iframe auto-dismisses after the choice — Adam disliked the lingering window. The window
+    (`mic-permission.*`) is now only the fallback for restricted (`chrome://`) tabs.
+  - [ ] **Live-verify (Comet + Chrome):** on a normal web page, Enable-mic/Start → the mic prompt
+        appears **in that tab** (no separate window) and goes away after you choose → records narration;
+        EVERY subsequent Start → no prompt at all. On a `chrome://` tab it should fall back to the
+        window. Revoke the mic mid-life → next Start re-prompts. Confirm macOS Privacy → Microphone →
+        Chrome/Comet ON. `mic-permission.*` AND `request-mic.*` are both in use — do NOT delete.
 
 ## ⚖️ TODO 2026-06-18 — add license + third-party notices (audit done, files not written)
 
