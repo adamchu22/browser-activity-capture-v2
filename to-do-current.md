@@ -32,39 +32,48 @@ waited a few minutes — "nothing has changed, still recording," overlay still s
 narration intact, mic meter confirmed working ("cute little sound bars… and they're sensitive").
 Three items came out of it — two from his narration, one I found reviewing the bundle:
 
-- [ ] **Overlay menu + Select/Draw appear on windows that AREN'T being recorded (headline).** Adam's
-      words: _"it should only be doing stuff on one specific screen, and I shouldn't have the menu
-      available on the other screen where I'm not recording."_ He shared the original screen, but when
-      he switched to another window the overlay + annotation tools mounted there too and he could
-      Select/Draw on a page that isn't in `video.webm` — "two different things, even though it's one
-      recording." Same symptom as the lost-recording report's "menu in another window." Cause: the
-      overlay/tools mount in EVERY tab the user enters (`onActivated`→`instrumentTab`), independent of
-      which screen/window `getDisplayMedia` is capturing. **Open question (don't assume):** the
-      extension can't directly map the captured display→tabs, so "only on the recorded screen" needs a
-      design call — e.g. remember the window Start was pressed in and only mount the overlay/tools in
-      that window's tabs, or detect the focused display. Scope before building.
-- [ ] **Pause does NOT suspend network/HAR capture (bug, found in review).** `chrome.debugger.onEvent`
-      (`background.js:763`) checks `!state.recording` but not `state.paused`, so while paused the
-      tracked tabs' requests keep landing in `network.har` (and IDB). Two harms: (1) privacy — Adam
-      paused specifically to do things off-record, but his recorded tabs' network was still captured;
-      (2) it produces the false **CAPTURE GAP** validator warning (network 1:46→2:41 with no content
-      events, because content capture *does* pause). Fix: gate the network handler on `!state.paused`
-      too; decide whether `check_coverage.py` should also treat paused spans as expected gaps.
-- [ ] **Default Chrome's "you're recording / sharing" bar to closed/collapsed.** Adam: _"I would
-      prefer… the [bar that shows] you're recording to just always be toggled closed."_ Reinforces the
-      already-open item below (hide/collapse Chrome's `getDisplayMedia` "Stop sharing" bar) — treat as
-      the same task.
-- [ ] **Mic permission opens a separate window — Adam wants it in the window he's already using.**
-      _"The permission for microphones still opens a new window to ask permission; I want the permission
-      to stay in the window I'm using."_ Today `popup.js` `openMicGrant()` spawns a `type:"popup"`
-      system window for `mic-permission.html`. This **supersedes** the earlier "sub-window, never a tab"
-      preference (see `learnings.md` 2026-06-18). **Constraint (don't just swap the API):** an offscreen
-      doc can't prompt for the mic, and an action popup tends to close when Chrome's permission bubble
-      takes focus — which is exactly why the dedicated window was added. **Options to investigate:**
-      (a) request `getUserMedia({audio:true})` straight from the popup on the Enable-mic click and test
-      whether the popup survives the prompt (cleanest if it holds — no window at all); (b) if it can't,
-      grant once and rely on persistence so the nag doesn't recur; (c) last resort, keep a window but
-      anchor it over the current one. Scope before building.
+**Decisions captured from Adam 2026-06-18 — see each item.**
+
+- [ ] **Scope capture + overlay to the surface actually being recorded (headline).** **DECISION
+      (Adam):** _"it should only work in the place I'm recording. If it's 1 tab then 1 tab, 1 window
+      1 window, 1 screen just that screen."_ Today the overlay + Select/Draw + instrumentation mount in
+      EVERY tab the user enters (`onActivated`→`instrumentTab`), so the menu leaks onto a window that
+      isn't in `video.webm` (his complaint), and off-surface tabs get captured. **Approach:** read the
+      captured surface from the video track — `videoTrack.getSettings().displaySurface` is
+      `'browser'` (one tab) | `'window'` | `'monitor'` (whole screen) — report it from `offscreen.js`
+      in `offscreen-armed`, and gate `instrumentTab`/overlay on it:
+      - `browser` → only the shared tab (follow its navigations; don't instrument others).
+      - `window` → only tabs whose `windowId` matches the recording window.
+      - `monitor` → tabs on that display.
+      **Chrome limitation (note, don't pretend otherwise):** `getDisplayMedia` does NOT tell the
+      extension which tab/window/display was picked, so use the Start tab's tab/window as the proxy
+      (correct for tab + window shares, which you start from the thing you share). The `monitor` →
+      "all windows on that screen" case needs window-geometry↔display matching (likely the
+      `system.display` permission) — stage that as a refinement; v1 can scope a monitor share to the
+      Start window. Touches the just-stabilised capture lifecycle (`goLive`/`instrumentTab`/
+      `onActivated`/`isEligible`) — build carefully with the nav-policy tests.
+- [x] **Pause now suspends network/HAR capture too** (DONE 2026-06-18, commit `e5d27cd`). The CDP
+      handler gated only on `!state.recording`; added `state.paused`, so network stops in lockstep with
+      events/frames/rrweb when paused. Fixes the privacy leak (paused = off-record) AND the false
+      CAPTURE GAP warning (the network-without-content signature no longer appears, so `check_coverage`
+      needed no change).
+- [x] **Chrome's "you're recording / Stop sharing" bar — DECISION (Adam): live with it.** Not worth
+      changing the capture model (the bar is browser chrome; the only way to drop it is to abandon
+      `getDisplayMedia` full-screen capture for a `tabCapture`/activeTab path). Closes the old "NEXT —
+      hide the Stop sharing bar" item and the `activeTab`-vs-security reconciliation.
+- [ ] **Rebuild the mic-permission grant to happen in-window, and persist (don't ask every time).**
+      **DECISION (Adam):** _"I know Loom and other tools do it from the window I requested. If we need
+      to rebuild the permissions for the mic to work in the app, let's try that, because Loom doesn't
+      ask me all the time."_ So: kill the separate `type:"popup"` window (`popup.js` `openMicGrant()`)
+      and grant in-context — supersedes the earlier "sub-window, never a tab" note (`learnings.md`
+      2026-06-18). **Constraint:** an offscreen doc can't prompt, and an action popup can close when
+      Chrome's permission bubble takes focus (the reason the window existed). **Plan:** (1) request
+      `getUserMedia({audio:true})` directly from the popup on the Enable-mic click and verify the popup
+      holds through the prompt — if it does, no window at all (Loom-like); (2) the grant persists for
+      the extension origin, so subsequent recordings shouldn't re-prompt — verify the "asks every time"
+      complaint is the one-time grant not sticking and confirm `chrome://settings/content/microphone`
+      lists the extension as Allowed + macOS Privacy → Microphone → Chrome ON; (3) only if the popup
+      can't hold, fall back to a tab in the current window. Investigate, then build.
 
 ## ⚖️ TODO 2026-06-18 — add license + third-party notices (audit done, files not written)
 

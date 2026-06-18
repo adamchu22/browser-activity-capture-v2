@@ -51,15 +51,14 @@ typed into an `inputType: password` field was masked everywhere —
 - `network.har` → no cleartext password param (Euler encrypts login client-side; login failed anyway).
 Field redaction (rrweb `maskAllInputs` + `content.js` `maskValue`/`isSecretInput`) confirmed working.
 
-## ▶ NEXT (2026-06-18) — hide Chrome's "Stop sharing / Cancel" bar (Adam feedback, live-run #4)
+## ✅ DECIDED (2026-06-18) — Chrome's "Stop sharing" bar: live with it
 
-From the run's narration (start of `video.webm`): Chrome's tab-share notification bar
-("Stop sharing / Cancel", shown by `getDisplayMedia`) is **visible during capture and Adam wants it
-gone**. His suggestion: switch to an **`activeTab`-style** capture that doesn't trigger the
-screen-share picker/bar at all. Open question (don't assume): whether an activeTab/tabCapture path
-gives the same video stream we get today without the share bar, and what it costs (it changes how the
-video is acquired). Scope this before building. NOTE: a separate security follow-up in
-`to-do-current.md` proposes *dropping* `activeTab` — reconcile the two before acting.
+Earlier Adam wanted Chrome's `getDisplayMedia` share bar gone. **Decision 2026-06-18: live with the
+bar.** It's browser chrome the extension can't hide; the only way to drop it is to abandon full-screen
+`getDisplayMedia` capture for a `tabCapture`/activeTab path, which loses the cross-window/full-screen
+video that's the point of v2. Not worth it. (This also closes the `activeTab`-drop reconciliation.)
+Current open feedback lives in `to-do-current.md`: scope capture/overlay to the recorded surface
+(headline); rebuild mic-permission in-window + persist. (Pause-pauses-network is DONE, commit e5d27cd.)
 
 ## ✅ VERIFIED (2026-06-18, live-run #3) — blocklist + recorder/mic
 
