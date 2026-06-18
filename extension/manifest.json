@@ -39,7 +39,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "src/offscreen.html"
+        "src/offscreen.html",
+        "src/request-mic.html"
       ],
       "matches": [
         "<all_urls>"
