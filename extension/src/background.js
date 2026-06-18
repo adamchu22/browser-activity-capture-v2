@@ -91,7 +91,10 @@ function hostBlocked(url) {
 const RESTRICTED = /^(chrome|edge|about|chrome-extension|devtools|view-source):|^https:\/\/chrome\.google\.com\/webstore/;
 
 function isEligible(tab) {
-  return !!(tab && tab.url && !RESTRICTED.test(tab.url));
+  // Skip restricted pages AND the user's "Never record on" hosts — a blocklisted
+  // host must not be instrumented at all (no debugger, no content script, no DOM /
+  // clicks / frames), not merely have its network rows dropped from the HAR.
+  return !!(tab && tab.url && !RESTRICTED.test(tab.url) && !hostBlocked(tab.url));
 }
 
 // The content script is registered for new page loads, but a tab opened BEFORE
@@ -184,9 +187,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function start(triggerTabId, task, purposes) {
   if (state.recording || state.arming) return { ok: false, error: "Already recording." };
+  // Claim the lock SYNCHRONOUSLY, before any await — otherwise a second Start (double
+  // click, or popup + overlay) slips through the guard during getSettings/clearAll and
+  // opens a second picker + countdown, and the second clearAll wipes the first take.
+  state.arming = true;
 
   const { blocklist, micEnabled, downloadSubfolder, askWhereToSave } = await getSettings();
   await db.clearAll();
+  // Reset any offscreen doc left over from a previous (possibly worker-killed) session
+  // so a stale getDisplayMedia stream is released and we don't stack a second picker.
+  await closeOffscreen();
 
   let activeTabId = triggerTabId;
   if (activeTabId == null) {
@@ -257,7 +267,18 @@ async function goLive() {
   state.recording = true;
   state.paused = false;
   state.t0 = Date.now();
-  if (state.activeTabId != null) await instrumentTab(state.activeTabId);
+  // Re-resolve the active tab: the user may have closed or switched away from the
+  // Start tab during the picker/countdown. Instrument the tab they're actually on
+  // now — otherwise we'd go live with NO DOM/event capture (a dead/ineligible tab
+  // silently instruments nothing) until they happen to switch tabs.
+  let tabId = state.activeTabId;
+  const stillUsable = tabId != null && (await chrome.tabs.get(tabId).then(isEligible).catch(() => false));
+  if (!stillUsable) {
+    const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    tabId = active?.id ?? null;
+    state.activeTabId = tabId;
+  }
+  if (tabId != null) await instrumentTab(tabId);
   chrome.runtime.sendMessage({ type: "offscreen-go" }).catch(() => {}); // recorder.start()
   await captureFrame("recording started");
   startFrameTimer();
@@ -405,6 +426,12 @@ function broadcastOverlay() {
 // while we're recording (covers brand-new tabs and navigations to eligible pages),
 // re-arm the content script after each navigation, and drop tabs as they close.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // A tracked tab that navigates INTO a blocklisted host must be torn down — detach
+  // the debugger and stop the content script so nothing more is captured there.
+  if (state.recording && state.tabIds.has(tabId) && tab?.url && hostBlocked(tab.url)) {
+    uninstrumentTab(tabId);
+    return;
+  }
   const actions = navActions(changeInfo, {
     recording: state.recording,
     eligible: isEligible(tab),
@@ -458,6 +485,13 @@ function stopFrameTimer() {
 async function captureFrame(reason = "") {
   if (!state.recording || state.paused) return;
   try {
+    // captureVisibleTab shoots whatever tab is active — if that's a blocklisted host
+    // (the user switched into it), don't take the screenshot. Best-effort guard on top
+    // of the no-instrument rule, since frames are of the active tab, not a tracked one.
+    if (state.blocklist.length) {
+      const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (active && hostBlocked(active.url)) return;
+    }
     const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
     const t = now();
     const file = `frames/${String(t).padStart(10, "0")}.png`;
@@ -621,6 +655,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ---- offscreen video -----------------------------------------------------
+
+// Tear down the offscreen doc (and with it any live screen/mic stream). Used at the
+// start of a recording to clear an orphan left by a worker that was killed mid-arming
+// — MV3 workers are ephemeral, and a stuck getDisplayMedia keeps the "sharing your
+// screen" indicator lit with no way to stop it.
+async function closeOffscreen() {
+  try {
+    if (await chrome.offscreen.hasDocument?.()) await chrome.offscreen.closeDocument();
+  } catch {}
+}
 
 async function ensureOffscreen() {
   const has = await chrome.offscreen.hasDocument?.();
