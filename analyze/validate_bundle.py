@@ -43,12 +43,25 @@ SECRET_HEADER_RES = [
     re.compile(rf'"(?:{SECRET_NAMES})"\s*:\s*"(?!‹redacted)', re.I),
     re.compile(rf'"name"\s*:\s*"(?:{SECRET_NAMES})"\s*,\s*"value"\s*:\s*"(?!‹redacted)', re.I),
 ]
-# A bare JWT or long bearer-ish token sitting in the clear. Case-insensitive and
-# tolerant of a URL-encoded space, in lockstep with redact.js TOKEN_VALUE_RE — so the
-# gate flags exactly what the extension is supposed to have scrubbed (lowercase
-# `bearer …`, `Bearer%20…`).
+# A token sitting in the clear — JWT/bearer plus high-confidence provider key shapes.
+# In lockstep with redact.js TOKEN_VALUE_RE so the gate flags exactly what the
+# extension is supposed to have scrubbed (if you add a shape there, add it here).
+# Case-insensitive and tolerant of a URL-encoded space.
 TOKEN_RE = re.compile(
-    r"\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|Bearer(?:\s|%20|\+)+[A-Za-z0-9._-]{12,})",
+    "|".join([
+        r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",      # JWT
+        r"Bearer(?:\s|%20|\+)+[A-Za-z0-9._-]{12,}",         # bearer token
+        r"(?:AKIA|ASIA)[A-Z0-9]{16}",                       # AWS access key id
+        r"[sr]k_(?:live|test)_[A-Za-z0-9]{16,}",            # Stripe secret/restricted key
+        r"gh[posu]_[A-Za-z0-9]{36,}",                       # GitHub token
+        r"github_pat_[A-Za-z0-9_]{40,}",                    # GitHub fine-grained PAT
+        r"AIza[A-Za-z0-9_-]{35}",                           # Google API key
+        r"ya29\.[A-Za-z0-9_-]{20,}",                        # Google OAuth access token
+        r"xox[baprs]-[A-Za-z0-9-]{10,}",                    # Slack token
+        r"sk-ant-[A-Za-z0-9_-]{20,}",                       # Anthropic API key
+        r"sk-[A-Za-z0-9]{32,}",                             # OpenAI API key
+        r"-----BEGIN(?:[A-Z ]+)?PRIVATE KEY-----",          # PEM private key block
+    ]),
     re.IGNORECASE,
 )
 
@@ -191,6 +204,16 @@ def check_redaction(b: Bundle, r: Report):
             r.err(f"{name} contains an auth/cookie header that is NOT redacted")
             leaks += 1
         if TOKEN_RE.search(body):
+            r.err(f"{name} contains a token/bearer value in the clear")
+            leaks += 1
+    # manifest.json (urls_visited + tab titles), errors.json (messages may carry a
+    # URL with a token), and transcript.vtt (narration) were NOT scanned before — a
+    # secret in any of them passed the gate. Scan them for token shapes too (header
+    # structure only appears in the HAR/timeline above).
+    for name in ("manifest.json", "errors.json", "transcript.vtt"):
+        if not b.has(name):
+            continue
+        if TOKEN_RE.search(b.text(name)):
             r.err(f"{name} contains a token/bearer value in the clear")
             leaks += 1
     if not leaks:

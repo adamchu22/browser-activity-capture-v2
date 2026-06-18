@@ -31,13 +31,31 @@ const SECRET_PARAM_WORDS = `${SECRET_KEY_WORDS}|jwt|sig|signature|access[-_]?tok
 const SECRET_KEY_RE = new RegExp(SECRET_KEY_WORDS, "i");
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-// Values that are secrets regardless of their key — a JWT or a bearer token. A
-// JWT can sit under an innocuous key (e.g. "software_statement"), so name-based
-// redaction alone misses it; we redact by value SHAPE too. Kept in lockstep with
-// the analyzer's validator (analyze/validate_bundle.py TOKEN_RE). Case-insensitive
-// (HTTP auth schemes are; `bearer …` is as real as `Bearer …`) and tolerant of a
-// URL-encoded space (`Bearer%20…`, `Bearer+…`) so a token in a query value is caught.
-const TOKEN_VALUE_RE = /eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]+)?|Bearer(?:\s|%20|\+)+[A-Za-z0-9._-]{12,}/gi;
+// Values that are secrets regardless of their key — a token sitting under an
+// innocuous key (e.g. "software_statement", or pasted into a generic field), so
+// name-based redaction alone misses it; we redact by value SHAPE too. Each shape is
+// a HIGH-CONFIDENCE provider prefix to keep false-positives (over-redaction of real
+// page content) low. Kept in lockstep with the analyzer's validator
+// (analyze/validate_bundle.py TOKEN_RE). Case-insensitive (HTTP auth schemes are)
+// and tolerant of a URL-encoded space (`Bearer%20…`) so a token in a query value is
+// caught. If you add a shape here, add it to validate_bundle.py too.
+const TOKEN_VALUE_RE = new RegExp(
+  [
+    "eyJ[A-Za-z0-9_-]{6,}\\.[A-Za-z0-9_-]{6,}(?:\\.[A-Za-z0-9_-]+)?", // JWT
+    "Bearer(?:\\s|%20|\\+)+[A-Za-z0-9._-]{12,}",                        // bearer token
+    "(?:AKIA|ASIA)[A-Z0-9]{16}",                                       // AWS access key id
+    "[sr]k_(?:live|test)_[A-Za-z0-9]{16,}",                            // Stripe secret/restricted key
+    "gh[posu]_[A-Za-z0-9]{36,}",                                       // GitHub token (ghp_/gho_/ghs_/ghu_)
+    "github_pat_[A-Za-z0-9_]{40,}",                                    // GitHub fine-grained PAT
+    "AIza[A-Za-z0-9_-]{35}",                                           // Google API key
+    "ya29\\.[A-Za-z0-9_-]{20,}",                                       // Google OAuth access token
+    "xox[baprs]-[A-Za-z0-9-]{10,}",                                    // Slack token
+    "sk-ant-[A-Za-z0-9_-]{20,}",                                       // Anthropic API key
+    "sk-[A-Za-z0-9]{32,}",                                             // OpenAI API key
+    "-----BEGIN(?:[A-Z ]+)?PRIVATE KEY-----",                          // PEM private key block
+  ].join("|"),
+  "gi"
+);
 
 // Strip any JWT/bearer token sitting in a free-text string (header value, body,
 // query string) — defense in depth on top of the key-name rules.
@@ -61,10 +79,15 @@ const SECRET_PAIR_RE = new RegExp(`([?&]?)([^=&]*(?:${SECRET_PARAM_WORDS})[^=&]*
 // host/path are left intact (the redacted record isn't a working URL, just a log).
 export function redactUrl(url) {
   if (typeof url !== "string" || !url) return url;
-  const masked = url.replace(
-    /([?&])([^=&]+)=([^&#]*)/g,
-    (m, sep, key, val) => (SECRET_PARAM_RE.test(key) ? `${sep}${key}=${REDACTED_SECRET}` : m)
-  );
+  const masked = url
+    // `user:pass@host` — strip credentials embedded in the authority.
+    .replace(/(\/\/)([^/@\s]+)@/, (m, slashes, userinfo) =>
+      userinfo.includes(":") ? `${slashes}${REDACTED_SECRET}@` : m)
+    // Mask secret-keyed params in BOTH the query AND the #fragment — OAuth implicit
+    // flow returns the token in the fragment (…#access_token=…), which the old
+    // query-only regex skipped entirely.
+    .replace(/([?&#])([^=&#]+)=([^&#]*)/g, (m, sep, key, val) =>
+      SECRET_PARAM_RE.test(key) ? `${sep}${key}=${REDACTED_SECRET}` : m);
   return scrubTokens(masked);
 }
 

@@ -75,6 +75,42 @@ test("lowercase + url-encoded bearer tokens are scrubbed (case/encoding gaps)", 
   assert.ok(!/abcdef0123456789/.test(redactUrl("https://x.com/cb?next=Bearer+abcdef0123456789")));
 });
 
+test("value-shape backstop catches provider keys under innocuous keys", () => {
+  // These leak today if they sit under a non-secret field name — the backstop must
+  // catch them by shape. Each is a high-confidence provider prefix.
+  const secrets = {
+    aws: "AKIAIOSFODNN7EXAMPLE",
+    stripe: "sk_live_ABCDEFGHIJKLMNOP1234",
+    github: "ghp_" + "A".repeat(36),
+    githubPat: "github_pat_" + "B".repeat(40),
+    google: "AIza" + "C".repeat(35),
+    googleOauth: "ya29." + "D".repeat(25),
+    slack: "xoxb-1234567890-abcdefghij",
+    openai: "sk-" + "E".repeat(40),
+    anthropic: "sk-ant-" + "F".repeat(30),
+  };
+  for (const [name, val] of Object.entries(secrets)) {
+    // Under an innocent JSON key, and as a bare body value.
+    assert.ok(!redactBody(JSON.stringify({ data: val })).includes(val), `${name} in JSON leaked`);
+    assert.ok(!scrubTokens(`value is ${val} here`).includes(val), `${name} via scrubTokens leaked`);
+  }
+  assert.ok(scrubTokens("-----BEGIN RSA PRIVATE KEY-----").includes("‹redacted"));
+});
+
+test("redactUrl masks secrets in the #fragment and strips user:pass@ credentials", () => {
+  assert.ok(!redactUrl("https://app/cb#access_token=ya29." + "x".repeat(30)).includes("ya29"));
+  assert.ok(!redactUrl("https://app/cb#token=" + "y".repeat(30)).includes("y".repeat(30)));
+  const creds = redactUrl("https://admin:Hunter2Secret@host.com/x");
+  assert.ok(!creds.includes("Hunter2Secret"), "userinfo password must be stripped");
+  assert.ok(creds.startsWith("https://‹redacted") && creds.includes("@host.com/x"));
+});
+
+test("provider-key redaction doesn't over-redact benign hyphenated prose", () => {
+  // The sk- shape requires 32 pure-alnum chars, so normal hyphenated text is safe.
+  const prose = "task-oriented-approach to problem-solving";
+  assert.equal(redactBody(prose), prose);
+});
+
 test("scrubbing a serialized rrweb node clears a token in a DOM attribute", () => {
   // The 2026-06-17 run 2 leak: a JWT rode in an <img src> inside the rrweb DOM
   // stream (events.jsonl). The worker's scrubNode = JSON.parse(scrubTokens(JSON
