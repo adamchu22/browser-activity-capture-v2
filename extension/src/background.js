@@ -456,6 +456,10 @@ async function finalizeAndExport() {
   const video = await stopVideo();
   if (video?.micError && video.micError !== "mic not requested") {
     logError("offscreen-mic", { message: video.micError });
+    // The mic was wanted but didn't record (likely the grant was revoked). Clear the
+    // "granted once" fast-path flag so the popup re-prompts next time instead of
+    // silently producing another narration-less video.
+    chrome.storage.local.remove("micGrantedOnce").catch(() => {});
   }
 
   // MV3 service workers have no URL.createObjectURL, so we build a base64 data: URL

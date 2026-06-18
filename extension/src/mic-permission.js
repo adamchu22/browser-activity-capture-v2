@@ -30,6 +30,9 @@ async function request() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     // We only needed the grant — release the device immediately.
     stream.getTracks().forEach((t) => t.stop());
+    // Remember the grant so the popup never re-prompts (browser-agnostic — works even
+    // where the popup can't probe getUserMedia itself, e.g. Comet).
+    chrome.storage.local.set({ micGrantedOnce: true });
     status.className = "ok";
     status.textContent = T("micOkMsg");
     done.hidden = false;
