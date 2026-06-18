@@ -934,7 +934,13 @@ async function assembleBundle(video) {
 // real transcript (Whisper, etc.). See README.
 function buildTranscript(timeline) {
   const cues = timeline.filter((e) => e.kind === "speech");
-  if (!cues.length) return "WEBVTT\n\nNOTE No narration captured. Drop a transcript here.\n";
+  if (!cues.length)
+    return (
+      "WEBVTT\n\nNOTE No narration captured in this stream. The spoken audio is in " +
+      "video.webm — to fill this transcript, run `python analyze/pack.py <bundle>` " +
+      "(or analyze/transcribe.py <bundle>) in the repo .venv. One-time setup: " +
+      "analyze/setup.sh (Mac/Linux) or setup.ps1 (Windows); after that it's automatic.\n"
+    );
   const fmt = (t) => {
     const s = Math.floor(t / 1000);
     return `00:${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}.${String(t % 1000).padStart(3, "0")}`;
