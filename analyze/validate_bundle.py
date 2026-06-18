@@ -30,7 +30,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_coverage import analyze_coverage  # noqa: E402
 
-KNOWN_KINDS = {"nav", "speech", "click", "hover", "input", "key", "network"}
+KNOWN_KINDS = {"nav", "speech", "click", "hover", "input", "key", "network",
+               "annotation:select", "annotation:draw"}
 REQUIRED = ["manifest.json", "timeline.json"]
 EXPECTED = ["events.jsonl", "network.har", "transcript.vtt"]
 
@@ -42,8 +43,14 @@ SECRET_HEADER_RES = [
     re.compile(rf'"(?:{SECRET_NAMES})"\s*:\s*"(?!‹redacted)', re.I),
     re.compile(rf'"name"\s*:\s*"(?:{SECRET_NAMES})"\s*,\s*"value"\s*:\s*"(?!‹redacted)', re.I),
 ]
-# A bare JWT or long bearer-ish token sitting in the clear.
-TOKEN_RE = re.compile(r"\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|Bearer\s+[A-Za-z0-9._-]{12,})")
+# A bare JWT or long bearer-ish token sitting in the clear. Case-insensitive and
+# tolerant of a URL-encoded space, in lockstep with redact.js TOKEN_VALUE_RE — so the
+# gate flags exactly what the extension is supposed to have scrubbed (lowercase
+# `bearer …`, `Bearer%20…`).
+TOKEN_RE = re.compile(
+    r"\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|Bearer(?:\s|%20|\+)+[A-Za-z0-9._-]{12,})",
+    re.IGNORECASE,
+)
 
 
 class Bundle:

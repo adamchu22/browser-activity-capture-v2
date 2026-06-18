@@ -24,7 +24,7 @@ from pathlib import Path
 
 # Events produced by the content script (page side). If these stop but network
 # keeps going, the content script died.
-CONTENT_KINDS = {"click", "hover", "nav", "input", "key"}
+CONTENT_KINDS = {"click", "hover", "nav", "input", "key", "annotation:select", "annotation:draw"}
 NETWORK_KIND = "network"
 
 # A tab needs at least this many content events to count as "was being captured"
