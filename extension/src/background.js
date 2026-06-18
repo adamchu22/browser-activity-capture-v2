@@ -647,7 +647,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     if (hostBlocked(request.url)) return;
     const reqUrl = redactUrl(request.url); // host/path intact; only secrets in the query masked
     state.urls.add(reqUrl);
-    state.har.set(requestId, {
+    const entry = {
+      requestId, // keyPath for the IDB har store; stripped from the exported HAR
       _tab: source.tabId,
       _t: now(),
       startedDateTime: new Date().toISOString(),
@@ -661,7 +662,9 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
           : undefined,
       },
       response: {},
-    });
+    };
+    state.har.set(requestId, entry);
+    db.put("har", entry).catch(() => {}); // mirror to IDB so network survives a worker restart
   }
 
   if (method === "Network.responseReceived") {
@@ -675,6 +678,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       content: { mimeType: r.mimeType },
     };
     entry.time = Math.round((params.timestamp - entry._start) * 1000);
+    db.put("har", entry).catch(() => {}); // upsert the now-complete entry
     // Also surface the request as a timeline event for the merged view.
     appendTimeline({
       kind: "network",
@@ -941,7 +945,7 @@ async function assembleBundle(video) {
       version: "1.2",
       creator: { name: "browser-activity-capture", version: "0.1.0" },
       comment: `t0_wall=${manifest.t0_wall}. Auth headers and cookies redacted before write.`,
-      entries: [...state.har.values()].map(({ _t, _start, _tab, ...e }) => e),
+      entries: [...state.har.values()].map(({ _t, _start, _tab, requestId, ...e }) => e),
     },
   };
 
