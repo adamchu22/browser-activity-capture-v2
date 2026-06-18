@@ -39,7 +39,6 @@ const state = {
   tabs: new Map(), // tabId -> { id, url, title } legend for the bundle
   blocklist: [], // hostnames we never record on
   har: new Map(), // requestId -> partial HAR entry
-  frames: [], // { t, file, dataUrl }
   urls: new Set(),
   errors: [], // { t, where, message, stack } — surfaced into the bundle
   micActive: false, // is the mic actually being recorded? drives the overlay level meter
@@ -224,9 +223,9 @@ async function start(triggerTabId, task, purposes) {
     blocklist,
     saveMode, // "folder" (chosen dir, fallback Downloads) | "ask" (native Save dialog)
     har: new Map(),
-    frames: [],
     urls: new Set(),
     errors: [],
+    videoEndedEarly: false, // set if the screen share stops on its own mid-recording
     micActive: false, // confirmed once the offscreen doc reports the mic track is live
   });
 
@@ -459,9 +458,9 @@ async function restart() {
   state.pauseReason = null;
   state.pausedAccum = 0; // fresh take → fresh clock, no banked pause time
   state.pauseStartedAt = 0;
-  state.har = new Map();
-  state.frames = [];
+  state.har = new Map(); // db.clearAll() above already wiped the frames store
   state.errors = [];
+  state.videoEndedEarly = false;
   // Reseed the URL set from the still-instrumented tabs' current pages.
   state.urls = new Set();
   for (const info of state.tabs.values()) if (info.url) state.urls.add(info.url);
@@ -627,7 +626,10 @@ async function captureFrame(reason = "") {
     const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
     const t = now();
     const file = `frames/${String(t).padStart(10, "0")}.png`;
-    state.frames.push({ t, file, dataUrl });
+    // Frames are written straight to IndexedDB (not held in worker memory): a
+    // 30-min capture is hundreds of PNGs, and — more importantly — if the worker is
+    // ever torn down, in-memory frames would vanish. IDB survives a worker restart.
+    await db.append("frames", { t, file, dataUrl });
   } catch (e) {
     // captureVisibleTab can fail on chrome:// pages etc., or hit Chrome's
     // ~2/sec quota when an event frame lands next to a timer frame — non-fatal.
@@ -881,6 +883,9 @@ async function assembleBundle(video) {
   const narrationInVideo = !!video?.mic;
   const timeline = (await db.readAll("timeline")).map(({ seq, ...e }) => e);
   const rrweb = (await db.readAll("rrweb")).map(({ seq, ...e }) => e);
+  // Frames live in IndexedDB (autoincrement seq = capture order). Read them back
+  // here for the manifest list, the counts, and the file bytes.
+  const frames = (await db.readAll("frames")).map(({ seq, ...f }) => f);
   const duration = timeline.length ? timeline[timeline.length - 1].t : now();
 
   const manifest = {
@@ -898,6 +903,10 @@ async function assembleBundle(video) {
     capture_scope: "all_tabs",
     tabs: [...state.tabs.values()],
     video: videoDataUrl ? "video.webm" : null,
+    // True if the screen share stopped on its own before the user finished (closed
+    // the shared window / hit "Stop sharing") — video.webm ends early but the rest
+    // of the capture (events, network, mic) ran to the end. See errors.json.
+    video_ended_early: !!state.videoEndedEarly,
     // Whether video.webm contains the user's microphone narration (mixed in on
     // the same clock). If true, transcribing video.webm yields t0-aligned cues.
     narration_in_video: videoDataUrl ? narrationInVideo : false,
@@ -918,11 +927,11 @@ async function assembleBundle(video) {
       // not the pixels: a secret visible on screen is visible in video.webm/frames.
       visual_streams_redacted: false,
     },
-    frames: state.frames.map((f) => ({ t: f.t, file: f.file })),
+    frames: frames.map((f) => ({ t: f.t, file: f.file })),
     counts: {
       events: timeline.length,
       network: [...state.har.values()].length,
-      frames: state.frames.length,
+      frames: frames.length,
       errors: state.errors.length,
     },
   };
@@ -950,7 +959,7 @@ async function assembleBundle(video) {
     { name: "CLAUDE.md", data: bundleClaudeMd(manifest) },
     { name: "AGENTS.md", data: bundleAgentsMd(manifest) },
   ];
-  for (const f of state.frames) files.push({ name: f.file, data: dataUrlToBytes(f.dataUrl) });
+  for (const f of frames) files.push({ name: f.file, data: dataUrlToBytes(f.dataUrl) });
   if (videoDataUrl) files.push({ name: "video.webm", data: dataUrlToBytes(videoDataUrl) });
 
   await db.clearAll();
