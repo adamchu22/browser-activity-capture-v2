@@ -6,6 +6,40 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (61 tests; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
+## ⚖️ TODO 2026-06-18 — add license + third-party notices (audit done, files not written)
+
+Adam wants to license the project. Provenance audit is **done** (findings below); the
+files just need writing + committing. Not legal advice — confirm with a lawyer before relying on it.
+
+**Decision (Adam, 2026-06-18):** proprietary / **all-rights-reserved**, permission-required —
+commercial use reserved to Adam; nobody may use without his explicit approval. NOTE: a true
+OSI open-source license *can't* restrict commercial use to one party, so this is source-available/
+proprietary, not "open source." (Alternatives if he changes his mind: PolyForm Noncommercial — free
+non-commercial use, commercial reserved; or BSL 1.1 — restricted now, opens after a change date.)
+
+**Audit findings (what's ours vs third-party):**
+- ~7,727 lines of original JS/Python/HTML/CSS authored here + all docs = **ours** (copyrightable).
+- Only **two** third-party assets bundled in-repo, both permissive:
+  - `extension/src/lib/rrweb.min.js` — **MIT**, "Copyright (c) 2018 Contributors (rrweb)".
+  - `extension/src/fonts/Geist-Variable.woff2` — **SIL OFL 1.1**, "Copyright (c) 2023 Vercel,
+    in collaboration with basement.studio". OFL = keep license with font, don't sell font alone,
+    don't ship a *modified* font under the name "Geist".
+- Pip deps (NOT in repo, installed on user machine): `faster-whisper`, `ctranslate2`, `anthropic` — all MIT.
+- **Screenity check = CLEAN.** Only studied for the MV3 `getDisplayMedia`-in-offscreen pattern
+  (which comes from Chrome's own docs); no Screenity code copied. Single ref in `learnings.md`
+  ~line 494. No "copied/adapted from" markers anywhere; only internal self-copies (annotate-geom.js↔content.js).
+  Matters because Screenity is GPL-3.0 — we're clear of copyleft.
+- Repo currently has **zero license files** → bundled rrweb/Geist are missing their required notices (the gap to fix).
+
+**Remaining steps:**
+- [ ] Add top-level `LICENSE` — proprietary all-rights-reserved, "Copyright (c) 2026 Adam Chubak"
+      (confirm legal holder — person vs a company/Distru), permission-required for any use/copy/modify/distribute.
+- [ ] Add `extension/src/lib/rrweb.LICENSE` — exact rrweb MIT text (fetched & verified 2026-06-18).
+- [ ] Add `extension/src/fonts/Geist-LICENSE.txt` — full Geist OFL 1.1 text
+      (`curl -s https://unpkg.com/geist@1.3.1/LICENSE.txt`; verified 92 lines).
+- [ ] Add top-level `THIRD_PARTY_NOTICES.md` summarizing rrweb (MIT) + Geist (OFL 1.1) + the MIT pip deps.
+- [ ] Commit. (A `Geist-LICENSE.txt` was fetched then removed when this was deferred — just re-fetch.)
+
 ## ✅ Done 2026-06-18 — live-run #2 fixes (built + unit-tested; need a live verify)
 
 From Adam's second run (`outputs/capture-2026-06-18T12-45-56-384Z.zip`). All landed with tests
