@@ -74,9 +74,13 @@ look. Decisions worth keeping:
   rules outrank the UA `[hidden]{display:none}` rule — so `popup.js` toggling `.hidden`
   silently no-ops without `[hidden]{display:none!important}` in the stylesheet. This was a
   latent bug on the live row even before the redesign.
-- **Mic grant MUST open as a system sub-window, never a tab.** `popup.js` `openMicGrant()`
-  uses `chrome.windows.create({ type: "popup", … })` for `mic-permission.html`. Keep it a
-  `type:"popup"` window — do not switch to `chrome.tabs.create`. (Adam's standing preference.)
+- **Mic grant currently opens a separate `type:"popup"` system sub-window** (`popup.js`
+  `openMicGrant()` → `chrome.windows.create` for `mic-permission.html`). **SUPERSEDED
+  2026-06-18:** Adam now wants the permission handled **inside the window/context he's already
+  in — no separate floating window** (the old "sub-window, never a tab" rule no longer holds).
+  See the to-do item; this is constrained by Chrome (an offscreen doc can't prompt, and an
+  action popup tends to close when the permission bubble steals focus — which is *why* the
+  dedicated window existed). Needs investigation, don't just swap the API.
 - **Context is now narration-first.** The typed "What are you doing in this recording?" field
   is a collapsed `<details>` toggle (`#whatBox`), no longer prominent; `#task` still flows to
   the worker if filled. The primary intent capture is **spoken**: the pre-roll countdown

@@ -21,10 +21,15 @@ it warm.** Full diagnosis in `learnings.md` 2026-06-18. Fix in 4 bisected commit
   `clearAll()` the take is now blocked. `background.js`.
 - **`track.onended`** — a share that stops on its own is reported (errors.json + `manifest.video_ended_early`).
 
-**▶ NEXT — LIVE-VERIFY (no unit test; lifecycle is chrome.*):** record → Pause → leave idle several
-minutes (or terminate the worker via `chrome://serviceworker-internals`) → return: overlay must still
-be controllable, Resume + Finish must yield a complete bundle (`validate_bundle.py` PASS). Tests now
-60 node / 125 python green.
+**✅ LIVE-VERIFIED (2026-06-18, Adam):**
+- Test 1 (keepalive through a gap) — `capture-…17-45-27-904Z`: paused, switched windows, waited
+  minutes, "still hasn't broken." Validates PASS, `errors.json` empty (worker never died).
+- Test 2 (forced worker kill mid-recording) — `capture-…18-18-44-905Z`: `errors.json` has the
+  `worker-restart … state recovered, capture resumed` entry at ~17s, capture continued, validates
+  **PASS, 0 warnings**. Recovery confirmed end-to-end.
+- Test 3 (second-Start guard) — confirmed "Already recording." behavior (no bundle artifact).
+Tests 60 node / 125 python green. NEW follow-ups from these runs live in `to-do-current.md` (overlay
+on non-recorded windows; pause doesn't pause network; share bar; mic-permission window).
 
 ## ✅ DONE (2026-06-18) — transcription "install once, automatic forever" hardening
 

@@ -19,8 +19,10 @@ nothing keeps it warm. Fixed in 4 bisected commits (built + unit-tested):
       resumes a live recording on cold start, or salvages a video-less bundle if the browser restarted.
 - [x] **Second-Start guard** (rehydrate restores `recording=true` so the old re-Start can't `clearAll`)
       + `track.onended` (share-stopped-on-its-own → errors.json + `manifest.video_ended_early`).
-- [ ] **LIVE-VERIFY (sign-off):** record → Pause → idle several min (or kill the worker via
-      `chrome://serviceworker-internals`) → return → overlay controllable, Resume + Finish → PASS bundle.
+- [x] ~~**LIVE-VERIFY (sign-off)**~~ — DONE 2026-06-18 (Adam). Test 1 (keepalive, `…17-45-27`):
+      paused + idle minutes, didn't break, PASS, empty errors. Test 2 (forced worker kill,
+      `…18-18-44`): `worker-restart … recovered` in errors.json, capture continued, **PASS 0 warnings**.
+      Test 3 (second-Start guard): "Already recording." confirmed. Recovery verified end-to-end.
 
 ## 🎯 ADAM'S FEEDBACK + a bug found, from the Test-1 run (2026-06-18, `capture-2026-06-18T17-45-27-904Z`)
 
@@ -52,6 +54,17 @@ Three items came out of it — two from his narration, one I found reviewing the
       prefer… the [bar that shows] you're recording to just always be toggled closed."_ Reinforces the
       already-open item below (hide/collapse Chrome's `getDisplayMedia` "Stop sharing" bar) — treat as
       the same task.
+- [ ] **Mic permission opens a separate window — Adam wants it in the window he's already using.**
+      _"The permission for microphones still opens a new window to ask permission; I want the permission
+      to stay in the window I'm using."_ Today `popup.js` `openMicGrant()` spawns a `type:"popup"`
+      system window for `mic-permission.html`. This **supersedes** the earlier "sub-window, never a tab"
+      preference (see `learnings.md` 2026-06-18). **Constraint (don't just swap the API):** an offscreen
+      doc can't prompt for the mic, and an action popup tends to close when Chrome's permission bubble
+      takes focus — which is exactly why the dedicated window was added. **Options to investigate:**
+      (a) request `getUserMedia({audio:true})` straight from the popup on the Enable-mic click and test
+      whether the popup survives the prompt (cleanest if it holds — no window at all); (b) if it can't,
+      grant once and rely on persistence so the nag doesn't recur; (c) last resort, keep a window but
+      anchor it over the current one. Scope before building.
 
 ## ⚖️ TODO 2026-06-18 — add license + third-party notices (audit done, files not written)
 
