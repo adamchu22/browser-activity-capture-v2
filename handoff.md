@@ -205,14 +205,23 @@ the blocklist only suppressing HAR (now blocks instrumentation), capture-start r
 before await, goLive re-resolves the active tab, offscreen reset), frames-annotated.html coord
 injection, maybe_transcribe never-fatal, and validator annotation-kind recognition.
 
-`python3 -m unittest discover -s tests` — 108 tests (glossary, network-noise collapse,
+A security scan (2026-06-17) followed — two adversarial audits (redaction-bypass; egress/
+permissions/injection). Extension confirmed **local-only** (no exfiltration path). Fixed: broadened
+the value-shape redaction to high-confidence provider keys (AWS/Stripe/GitHub/Google/Slack/OpenAI/
+Anthropic/PEM) + validator lockstep; `redactUrl` now masks the #fragment + `user:pass@`; `ctx.href`
+and `tab.title` are redacted; the validator now scans manifest/errors/transcript; path-traversal on
+the analyze side (`manifest["video"]`, frame `file`) basename-stripped; documented that frames/video
+aren't pixel-redacted. Residual low-severity recommendations are in `to-do-current.md` ("Security
+follow-ups"). See `learnings.md` for the full list.
+
+`python3 -m unittest discover -s tests` — 109 tests (glossary, network-noise collapse,
 multi-tab rendering, semantic labels + step segmentation + frame annotation, purpose steer,
 bundled skills incl. competitive-research, coverage diagnostic, `test_annotations.py` (13):
 annotation:select/draw in the timeline, steps, the `## ✦ Annotations` section, and the
 frames-annotated.html marks; and `test_autotranscribe.py` (12): the stub-detection + the
 best-effort auto-transcribe gates, transcriber mocked). Stdlib only, all green.
-`node --test tests/test_*.mjs` — 40 tests: redact (URL/value/form-body/case, 10), nav-policy,
-bundle-docs, and `test_annotate.mjs` (7, the Draw `drawGeom` %-coord/bbox math). The content.js
+`node --test tests/test_*.mjs` — 43 tests: redact (URL/value/form-body/case/provider-keys/
+fragment, 13), nav-policy, bundle-docs, and `test_annotate.mjs` (7, the Draw `drawGeom` math). The content.js
 unique-selector AND semantic-context (`describe()`) logic is verified in real Chromium via
 `tests/browser/selector-harness.html` (browser, not unittest) — `allUnique`, `allIdentify`,
 and `allCtxPass` all true. The overlay + annotation tools are shadow-DOM + chrome.* dependent,

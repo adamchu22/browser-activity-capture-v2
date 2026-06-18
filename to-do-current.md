@@ -281,6 +281,19 @@ why Chrome intercepted and whether it can disrupt a real capture.
   shown on-screen during recording AND emitted as timeline events (so the agent gets the
   selector/region, not just the video pixels). Flag if you only want them visible.
 
+## Security follow-ups (recommended, from the 2026-06-17 scan — not yet done)
+The scan's code findings are fixed (see `learnings.md`). These residual items are low-severity /
+need a live check, so they're deferred:
+- [ ] **Remove `web_accessible_resources` for `src/offscreen.html`** — `chrome.offscreen.createDocument`
+      loads it as an extension page and (almost certainly) doesn't need it web-accessible. Untestable
+      without a load-unpacked run, so verify video still records after removing the WAR block.
+- [ ] **Pin + audit optional analyze deps** — `analyze/README.md` installs `mlx-audio faster-whisper`
+      unpinned; `adapters/requirements.txt` floors `anthropic`. Pin exact versions and run `pip-audit`.
+- [ ] **Record a SHA-256 of vendored `rrweb.min.js`** so a re-vendor can't silently drift. 2.0.0 is
+      advisory-clean (Snyk); consider bumping to 2.0.1.
+- [ ] **Drop `activeTab` permission** — likely redundant given `<all_urls>` + `tabs` (verify nothing
+      relies on it).
+
 ## Future improvements (out of scope for now)
 - [ ] **Blur tool** — element-aware blur like Loom's (snaps to elements). Decide then:
       real video-pixel blur (real-time region mask on the getDisplayMedia stream) vs. a

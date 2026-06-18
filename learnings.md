@@ -4,6 +4,43 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (security scan — adversarial review of redaction + egress + injection)
+
+Two independent adversarial audits (redaction-bypass hunt; egress/permissions/injection). The
+extension is **verified local-only** — no `fetch`/WebSocket/beacon/native-messaging anywhere; the
+only outbound is `chrome.downloads` (a local file) and the offscreen doc. The one egress path is
+the optional `analyze/adapters/run_claude.py` (explicit, API-keyed handoff). `innerHTML` uses only
+static strings; `executeScript` injects fixed file paths. Findings fixed:
+
+- **Redaction's value-shape backstop knew ONLY JWT + Bearer**, so AWS/Stripe/GitHub/Google/Slack/
+  OpenAI/Anthropic keys + PEM blocks leaked when they sat under an innocuous key name (and a
+  non-JSON/multipart body or a custom header only got the JWT/Bearer scrub). Added high-confidence
+  provider-prefix shapes to `TOKEN_VALUE_RE` (and the validator's `TOKEN_RE` in lockstep). Lesson:
+  a value-shape backstop is only as good as the shapes it knows — enumerate the common providers,
+  keep the prefixes high-precision to avoid over-redacting page content.
+- **`redactUrl` skipped the `#fragment` and `user:pass@` userinfo** — OAuth implicit flow returns
+  the token in the fragment, and basic-auth creds sit before the `@`. Both now masked.
+- **`ctx.href` was the one URL field that escaped redaction** — `describe()` copies a link's raw
+  href into the event ctx, and `appendTimeline` only scrubbed `event.url`. A secret in an
+  `<a href="…?token=…">` leaked into timeline.json. Now scrubbed at the same chokepoint. Lesson
+  (again): enumerate EVERY field a URL lands in.
+- **The validator gate skipped manifest.json / errors.json / transcript.vtt** — the two biggest URL
+  collections (urls_visited + tab titles) lived in the one required file the redaction check didn't
+  scan, giving false confidence. Now scanned. Also `tab.title` is scrubbed (a "Reset password:
+  <token>" page title).
+- **Path traversal on the untrusted-bundle analyze side:** `manifest["video"]` was joined raw, so a
+  hostile bundle could make ffmpeg read an arbitrary file (`"video":"../../.ssh/id_rsa"`); and
+  `frames-annotated.html` emitted `<img src="<raw frame file>">`, a `../`-traversal local-file read
+  when opened. Both now basename-stripped (`Path(...).name`). `_esc` also escapes `'` now.
+- **Visual streams are NOT redacted** (frames/video are pixels) — `password_fields_masked:true` could
+  imply otherwise. Documented in the in-zip docs + `manifest.redaction.visual_streams_redacted:false`.
+
+Residual (recommended, NOT done — flagged to Adam): remove `web_accessible_resources` for
+`offscreen.html` (createDocument doesn't need it; untestable here so left for a live check); record
+a SHA-256 of vendored `rrweb.min.js` (2.0.0 is advisory-clean per Snyk; latest is 2.0.1); pin the
+optional analyze deps (mlx-audio/faster-whisper/anthropic) + `pip-audit`; drop the likely-redundant
+`activeTab` permission. _(Redaction sink-enumeration + value-shape lessons are wiki candidates.)_
+
 ## 2026-06-17 (hardening pass — bugs found by independent review, fixed)
 
 A fan-out review of the new P2/P3/P4 code (three independent passes) surfaced real bugs. The
