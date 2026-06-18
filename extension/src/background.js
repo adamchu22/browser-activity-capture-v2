@@ -23,6 +23,7 @@ import { bundleReadme, bundleClaudeMd, bundleAgentsMd } from "./bundle-docs.js";
 import { navActions } from "./nav-policy.js";
 import { hostOnBlocklist } from "./blocklist.js";
 import { recordingElapsed } from "./clock.js";
+import { serializeSession, applySession } from "./session.js";
 
 const state = {
   recording: false,
@@ -57,6 +58,7 @@ function logError(where, info = {}) {
   const message = info.message || String(info.error || info) || "unknown error";
   state.errors.push({ t: state.t0 ? now() : 0, where, message, stack: info.stack || null });
   console.warn(`[capture-error] ${where}: ${message}`);
+  persistSession();
 }
 
 // Uncaught failures in the service worker itself.
@@ -64,6 +66,103 @@ self.addEventListener("error", (e) => logError("background", { message: e.messag
 self.addEventListener("unhandledrejection", (e) =>
   logError("background", { message: e.reason?.message || String(e.reason), stack: e.reason?.stack })
 );
+
+// ---- crash recovery: persist the live recording so a worker restart survives ----
+//
+// The keepalive (offscreen.js) should stop the worker dying mid-recording, but it's
+// not a guarantee — Chrome can still reclaim the worker under memory pressure or a
+// crash. So the durable slice of `state` (t0, pause accounting, tab legend,
+// blocklist, …) is mirrored to chrome.storage.local on every transition; the bulk
+// streams (timeline, rrweb, frames, network) already live in IndexedDB. On a cold
+// start, rehydrate() reads it back and resumes the recording instead of losing it.
+const SESSION_KEY = "captureSession";
+let persistTimer = null;
+
+// Debounced — transitions can cluster (instrument several tabs, a burst of navs);
+// one coalesced write per ~250ms is plenty (the keepalive keeps death rare, so this
+// is a backstop, not a hot path).
+function persistSession() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    const rec = serializeSession(state);
+    if (rec) chrome.storage.local.set({ [SESSION_KEY]: rec }).catch(() => {});
+    else chrome.storage.local.remove(SESSION_KEY).catch(() => {});
+  }, 250);
+}
+
+function clearPersistedSession() {
+  clearTimeout(persistTimer);
+  persistTimer = null;
+  chrome.storage.local.remove(SESSION_KEY).catch(() => {});
+}
+
+async function offscreenExists() {
+  try {
+    return !!(await chrome.offscreen.hasDocument?.());
+  } catch {
+    return false;
+  }
+}
+
+// Commands (pause/finish/start/…) wait on this so they aren't dropped against a
+// half-restored worker that woke specifically to handle them.
+let resolveRehydrated;
+const rehydrated = new Promise((r) => (resolveRehydrated = r));
+
+// Runs once on every worker cold start. If a recording was live when the previous
+// worker instance died, restore it. Two cases:
+//   • offscreen doc still alive (worker-only death — the common case, e.g. Chrome
+//     reclaimed the worker during a pause): re-attach debuggers, resume the frame
+//     timer + overlay, and carry on. The video kept recording in the offscreen doc
+//     the whole time, so nothing is lost.
+//   • offscreen doc gone (e.g. the browser was restarted): the video pipeline can't
+//     continue, but the structured capture is safe in IndexedDB — salvage it into a
+//     (video-less) bundle so the recording still isn't lost, then clear.
+async function rehydrate() {
+  try {
+    if (state.recording || state.arming) return; // a fresh session is already live here
+    let rec;
+    try {
+      ({ [SESSION_KEY]: rec } = await chrome.storage.local.get(SESSION_KEY));
+    } catch {
+      return;
+    }
+    if (!rec || !rec.recording) return;
+
+    applySession(state, rec);
+    // The in-memory HAR working copy is rebuilt from its IDB mirror.
+    try {
+      for (const e of await db.readAll("har")) state.har.set(e.requestId, e);
+    } catch {}
+
+    if (await offscreenExists()) {
+      for (const tabId of [...state.tabIds]) {
+        // The debugger may have detached when the worker died; re-attach so network
+        // resumes. Already-attached throws → ignore. Re-arm the content script too.
+        try {
+          await chrome.debugger.attach({ tabId }, "1.3");
+          await chrome.debugger.sendCommand({ tabId }, "Network.enable");
+        } catch {}
+        chrome.tabs.sendMessage(tabId, { type: "start", ...overlayClock() }).catch(() => {});
+      }
+      if (!state.paused) startFrameTimer();
+      setBadge(state.paused ? "❚❚" : "REC", state.paused ? "#f39c12" : "#c0392b");
+      broadcastOverlay();
+      logError("worker-restart", { message: "service worker restarted mid-recording — state recovered, capture resumed" });
+      persistSession();
+    } else {
+      // No video context to resume — finalise what we have so it isn't lost.
+      logError("worker-restart", { message: "recording interrupted (no video context) — exporting recovered data" });
+      state.recording = false;
+      stopFrameTimer();
+      await finalizeAndExport();
+      clearPersistedSession();
+    }
+  } finally {
+    resolveRehydrated(); // unblock any queued commands regardless of outcome
+  }
+}
 
 async function getSettings() {
   const {
@@ -143,6 +242,7 @@ async function instrumentTab(tabId) {
   // the correct state (paused-aware elapsed clock, paused or live).
   if (injected)
     chrome.tabs.sendMessage(tabId, { type: "start", ...overlayClock() }).catch(() => {});
+  persistSession(); // tab legend / tabIds changed
 }
 
 // Re-arm a tab AFTER A NAVIGATION. A full-page navigation (every click in a
@@ -167,6 +267,7 @@ async function reattachTab(tabId, tab) {
   const present = await ensureContentScript(tabId);
   if (present)
     chrome.tabs.sendMessage(tabId, { type: "start", ...overlayClock() }).catch(() => {});
+  if (tab?.url) persistSession(); // legend URL moved
 }
 
 async function uninstrumentTab(tabId) {
@@ -176,6 +277,7 @@ async function uninstrumentTab(tabId) {
   try {
     await chrome.debugger.detach({ tabId });
   } catch {}
+  persistSession(); // tabIds changed
 }
 
 const COUNTDOWN_SECONDS = 3;
@@ -289,6 +391,9 @@ async function goLive() {
   await captureFrame("recording started");
   startFrameTimer();
   setBadge("REC");
+  // Persist now that the recording is genuinely live: t0 is the one value a crash
+  // recovery can't reconstruct, so it must hit disk the moment capture starts.
+  persistSession();
   // If they happened to go live while looking at a blocklisted tab, suspend at once.
   updateAutoPause();
 }
@@ -297,7 +402,14 @@ async function stop() {
   if (!state.recording) return;
   state.recording = false;
   stopFrameTimer();
+  await teardownTabs();
+  await finalizeAndExport();
+  clearPersistedSession();
+}
 
+// Stop the overlay + detach the debugger on every tracked tab. (Stale tab ids — e.g.
+// after a browser restart during salvage — just throw and are ignored.)
+async function teardownTabs() {
   for (const tabId of state.tabIds) {
     chrome.tabs.sendMessage(tabId, { type: "stop" }).catch(() => {});
     try {
@@ -305,7 +417,12 @@ async function stop() {
     } catch {}
   }
   state.tabIds.clear();
+}
 
+// Pull the video back from the offscreen recorder (or null if it's gone), assemble
+// the bundle from IndexedDB + state, and export it. Shared by a normal Finish and
+// by the crash-recovery salvage path.
+async function finalizeAndExport() {
   const video = await stopVideo();
   if (video?.micError && video.micError !== "mic not requested") {
     logError("offscreen-mic", { message: video.micError });
@@ -413,6 +530,7 @@ function applyPause() {
     chrome.action.setTitle({ title: "Recording" });
   }
   broadcastOverlay();
+  persistSession(); // pause state + accounting must survive a worker restart
 }
 
 function pause() {
@@ -472,6 +590,7 @@ async function restart() {
   await captureFrame("recording restarted");
   setBadge("REC");
   broadcastOverlay(); // new t0 resets every overlay's elapsed clock
+  persistSession(); // fresh take → persist the new t0 / cleared accounting
 }
 
 // Cancel: stop recording and discard — no bundle, no download. Tears down the
@@ -500,6 +619,7 @@ async function cancel() {
   state.tabIds.clear();
   chrome.runtime.sendMessage({ type: "offscreen-cancel" }).catch(() => {}); // discard video, release streams
   await db.clearAll();
+  clearPersistedSession(); // nothing to recover — drop the crash-recovery snapshot
   setBadge("");
 }
 
@@ -797,26 +917,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       for (const tabId of state.tabIds) chrome.tabs.sendMessage(tabId, payload).catch(() => {});
     }
   }
-  // Both the popup and the injected on-screen overlay drive the same verbs.
+  // Both the popup and the injected on-screen overlay drive the same verbs. Each
+  // waits on `rehydrated` so a command that woke the worker isn't run against a
+  // half-restored state — e.g. the first Pause after a crash recovery would
+  // otherwise see recording=false and be dropped, and a Start would slip past the
+  // "already recording" guard and wipe the recovered take.
   if (msg.type === "popup-command" || msg.type === "overlay-command") {
     const c = msg.command;
     if (c === "start") {
-      start(msg.tabId, msg.task, msg.purposes).then(sendResponse);
+      rehydrated.then(() => start(msg.tabId, msg.task, msg.purposes)).then(sendResponse);
       return true; // async response
     }
     // "finish" is the overlay's word for stop+save+export; same as the popup's stop.
     if (c === "stop" || c === "finish") {
-      stop().then(() => sendResponse({ ok: true }));
+      rehydrated.then(() => stop()).then(() => sendResponse({ ok: true }));
       return true;
     }
-    if (c === "pause") pause();
-    if (c === "resume") resume();
-    if (c === "restart") restart();
-    if (c === "cancel") cancel();
     if (c === "status") {
-      sendResponse({ recording: state.recording, paused: state.paused, arming: state.arming });
+      rehydrated.then(() =>
+        sendResponse({ recording: state.recording, paused: state.paused, arming: state.arming })
+      );
       return true;
     }
+    rehydrated.then(() => {
+      if (c === "pause") pause();
+      else if (c === "resume") resume();
+      else if (c === "restart") restart();
+      else if (c === "cancel") cancel();
+    });
   }
 });
 
@@ -1004,3 +1132,7 @@ function dataUrlToBytes(dataUrl) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes;
 }
+
+// On every worker cold start, recover a recording that was live when a previous
+// worker instance died (see rehydrate()). A no-op when nothing was recording.
+rehydrate();
