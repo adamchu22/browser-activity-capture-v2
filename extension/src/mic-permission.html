@@ -4,28 +4,84 @@
     <meta charset="utf-8" />
     <title>Enable microphone — Browser Activity Capture</title>
     <style>
-      body { font: 14px system-ui, sans-serif; max-width: 460px; margin: 48px auto; padding: 0 16px; color: #222; }
-      h1 { font-size: 18px; }
-      #status { padding: 12px; border-radius: 6px; margin: 16px 0; }
-      .ok { background: #e8f6ec; color: #1e7e34; }
-      .err { background: #fdecea; color: #b3261e; }
-      .pending { background: #eef1f5; color: #555; }
-      button { font: inherit; padding: 8px 14px; cursor: pointer; }
-      .hint { color: #777; font-size: 13px; }
+      @font-face {
+        font-family: "Geist";
+        src: url("fonts/Geist-Variable.woff2") format("woff2");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
+      :root {
+        --accent: #ff4d4d;
+        --text: rgba(255, 255, 255, 0.92);
+        --text-2: rgba(255, 255, 255, 0.56);
+        --hairline: rgba(255, 255, 255, 0.08);
+        --surface: rgba(255, 255, 255, 0.04);
+        --ease: cubic-bezier(0.32, 0.72, 0, 1);
+      }
+      * { box-sizing: border-box; }
+      html { color-scheme: dark; }
+      body {
+        font-family: "Geist", system-ui, sans-serif;
+        font-size: 14px;
+        line-height: 1.55;
+        max-width: 460px;
+        margin: 0 auto;
+        padding: 56px 24px;
+        color: var(--text);
+        background: #0a0a0b;
+        background-image:
+          radial-gradient(110% 70% at 100% -5%, rgba(255, 77, 77, 0.14), transparent 55%),
+          radial-gradient(80% 60% at -10% 0%, rgba(255, 255, 255, 0.04), transparent 50%);
+        -webkit-font-smoothing: antialiased;
+        accent-color: var(--accent);
+      }
+      .eyebrow {
+        font-size: 10px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.2em; color: rgba(255, 255, 255, 0.36); margin-bottom: 10px;
+      }
+      h1 { font-size: 22px; font-weight: 580; letter-spacing: -0.02em; margin: 0 0 14px; }
+      p { color: var(--text-2); margin: 0 0 16px; }
+      b { color: var(--text); font-weight: 560; }
+      #status {
+        padding: 13px 15px;
+        border-radius: 14px;
+        margin: 20px 0;
+        font-size: 13.5px;
+        border: 1px solid var(--hairline);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      }
+      .ok      { background: rgba(74, 222, 128, 0.1);  color: #4ade80; border-color: rgba(74, 222, 128, 0.22) !important; }
+      .err     { background: rgba(255, 77, 77, 0.1);   color: #ff7a7a; border-color: rgba(255, 77, 77, 0.25) !important; }
+      .pending { background: var(--surface); color: var(--text-2); }
+      button {
+        font: inherit; font-weight: 520; cursor: pointer;
+        padding: 10px 18px; border-radius: 999px;
+        color: var(--text);
+        background: var(--surface);
+        border: 1px solid var(--hairline);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        transition: transform 0.45s var(--ease), background 0.45s var(--ease), border-color 0.45s var(--ease);
+      }
+      button:hover { background: rgba(255, 255, 255, 0.07); border-color: rgba(255, 255, 255, 0.14); }
+      button:active { transform: scale(0.98); }
+      .hint { color: rgba(255, 255, 255, 0.4); font-size: 13px; }
     </style>
   </head>
   <body>
-    <h1>Enable microphone narration</h1>
-    <p>
+    <div class="eyebrow">Browser Activity Capture</div>
+    <h1 data-i18n="micHead">Enable microphone narration</h1>
+    <p data-i18n-html="micBody">
       Browser Activity Capture records your spoken narration into the screen
       recording. Chrome will ask for microphone access — choose <b>Allow</b>.
       You only need to do this once.
     </p>
     <div id="status" class="pending">Requesting microphone access…</div>
-    <button id="retry" hidden>Try again</button>
-    <p class="hint" id="done" hidden>
+    <button id="retry" hidden data-i18n="micRetry">Try again</button>
+    <p class="hint" id="done" hidden data-i18n="micDone">
       Granted. You can close this window and press Start — your voice will be included.
     </p>
+    <script src="i18n.js"></script>
     <script src="mic-permission.js"></script>
   </body>
 </html>

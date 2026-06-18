@@ -3,89 +3,372 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      :root { --accent: #c0392b; }
-      body { font: 13px system-ui, sans-serif; width: 264px; margin: 0; padding: 12px 12px 10px; color: #1c1c1e; }
-      h1 { font-size: 13px; font-weight: 600; margin: 0 0 10px; display: flex; align-items: center; gap: 6px; }
-      h1 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-      button { font: inherit; padding: 6px 10px; cursor: pointer; border-radius: 6px; border: 1px solid #d0d0d5; background: #fff; }
-      #rec { background: var(--accent); color: #fff; border: none; font-weight: 600; width: 100%; padding: 8px; }
-      #rec:disabled { opacity: .6; cursor: default; }
-      #stop { background: #1c1c1e; color: #fff; border: none; flex: 2; }
+      /* Geist (variable) — bundled locally, MIT (Vercel). No network calls. */
+      @font-face {
+        font-family: "Geist";
+        src: url("fonts/Geist-Variable.woff2") format("woff2");
+        font-weight: 100 900;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      :root {
+        --bg: #0a0a0b;
+        --accent: #ff4d4d;
+        --accent-soft: rgba(255, 77, 77, 0.16);
+        --text: rgba(255, 255, 255, 0.92);
+        --text-2: rgba(255, 255, 255, 0.56);
+        --text-3: rgba(255, 255, 255, 0.36);
+        --hairline: rgba(255, 255, 255, 0.08);
+        --hairline-2: rgba(255, 255, 255, 0.06);
+        --surface: rgba(255, 255, 255, 0.035);
+        --surface-2: rgba(255, 255, 255, 0.05);
+        --ok: #4ade80;
+        --warn: #fbbf24;
+        --ease: cubic-bezier(0.32, 0.72, 0, 1);
+      }
+
+      * { box-sizing: border-box; }
+      /* Display rules below (.row/#rec use flex) outrank the UA [hidden] rule,
+         so the attribute would no-op without this — JS toggles state via .hidden. */
+      [hidden] { display: none !important; }
+
+      html { color-scheme: dark; }
+
+      body {
+        font-family: "Geist", system-ui, sans-serif;
+        font-size: 13px;
+        line-height: 1.45;
+        width: 300px;
+        margin: 0;
+        padding: 16px 16px 14px;
+        color: var(--text);
+        background: var(--bg);
+        /* Ember glow, top-right — the only colour in an otherwise OLED field. */
+        background-image:
+          radial-gradient(120% 90% at 100% -10%, rgba(255, 77, 77, 0.14), transparent 55%),
+          radial-gradient(90% 70% at -10% 0%, rgba(255, 255, 255, 0.04), transparent 50%);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+        accent-color: var(--accent);
+      }
+
+      /* ── Header ───────────────────────────────────────────────── */
+      .head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin: 0 0 14px;
+      }
+      h1 {
+        font-size: 14px;
+        font-weight: 560;
+        letter-spacing: -0.01em;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+
+      /* Language segmented control — a glass pill, active segment lit ember. */
+      .lang {
+        display: inline-flex;
+        gap: 2px;
+        padding: 2px;
+        border-radius: 999px;
+        background: var(--surface);
+        border: 1px solid var(--hairline);
+        box-shadow: inset 0 1px 0 var(--hairline-2);
+      }
+      .lang-opt {
+        font: inherit;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: var(--text-3);
+        background: transparent;
+        border: none;
+        border-radius: 999px;
+        padding: 3px 7px;
+        cursor: pointer;
+        box-shadow: none;
+        transition: color 0.4s var(--ease), background 0.4s var(--ease);
+      }
+      .lang-opt:hover { color: var(--text); background: transparent; transform: none; }
+      .lang-opt:active { transform: scale(0.96); }
+      .lang-opt.active {
+        color: #fff;
+        background: linear-gradient(180deg, #ff5a5a, #e23b3b);
+        box-shadow: 0 2px 8px -3px rgba(255, 77, 77, 0.6);
+      }
+      h1 .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 4px var(--accent-soft), 0 0 12px rgba(255, 77, 77, 0.55);
+        animation: pulse 2.4s var(--ease) infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft), 0 0 12px rgba(255, 77, 77, 0.5); }
+        50%      { box-shadow: 0 0 0 6px rgba(255, 77, 77, 0.06), 0 0 18px rgba(255, 77, 77, 0.7); }
+      }
+
+      /* ── Labels & eyebrows ────────────────────────────────────── */
+      label {
+        display: block;
+        margin: 0 0 7px;
+        color: var(--text-2);
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .eyebrow {
+        font-size: 9.5px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        color: var(--text-3);
+      }
+      label.check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0;
+        font-size: 12px;
+        font-weight: 450;
+        color: var(--text);
+        cursor: pointer;
+        padding: 4px 0;
+        transition: color 0.4s var(--ease);
+      }
+      label.check:hover { color: #fff; }
+      label.check input { width: auto; margin: 0; cursor: pointer; }
+
+      /* ── Inputs (double-bezel: hairline shell + inset-lit core) ── */
+      textarea, input[type="text"] {
+        width: 100%;
+        font: inherit;
+        font-size: 12.5px;
+        color: var(--text);
+        background: var(--surface);
+        border: 1px solid var(--hairline);
+        border-radius: 12px;
+        padding: 9px 11px;
+        outline: none;
+        box-shadow: inset 0 1px 0 var(--hairline-2);
+        transition: border-color 0.5s var(--ease), background 0.5s var(--ease), box-shadow 0.5s var(--ease);
+      }
+      textarea::placeholder, input::placeholder { color: var(--text-3); }
+      textarea:focus, input[type="text"]:focus {
+        border-color: rgba(255, 77, 77, 0.45);
+        background: var(--surface-2);
+        box-shadow: inset 0 1px 0 var(--hairline-2), 0 0 0 3px var(--accent-soft);
+      }
+      textarea#task { resize: vertical; min-height: 52px; }
+
+      /* ── Buttons ──────────────────────────────────────────────── */
+      button {
+        font: inherit;
+        font-weight: 520;
+        cursor: pointer;
+        border-radius: 999px;
+        border: 1px solid var(--hairline);
+        background: var(--surface);
+        color: var(--text);
+        padding: 9px 14px;
+        transition: transform 0.45s var(--ease), background 0.45s var(--ease),
+                    border-color 0.45s var(--ease), box-shadow 0.45s var(--ease);
+        box-shadow: inset 0 1px 0 var(--hairline-2);
+      }
+      button:hover { background: var(--surface-2); border-color: rgba(255, 255, 255, 0.14); }
+      button:active { transform: scale(0.98); }
+
+      /* Primary record CTA — island pill with nested trailing icon. */
+      #rec {
+        position: relative;
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 9px;
+        padding: 12px 14px;
+        font-size: 13.5px;
+        font-weight: 580;
+        color: #fff;
+        border: none;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 40%),
+          linear-gradient(180deg, #ff5a5a, #e23b3b);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.28),
+          0 6px 20px -6px rgba(255, 77, 77, 0.55),
+          0 2px 6px -2px rgba(0, 0, 0, 0.5);
+      }
+      #rec:hover { background: linear-gradient(180deg, rgba(255,255,255,0.2), transparent 40%), linear-gradient(180deg, #ff6464, #e84444); }
+      #rec:disabled { opacity: 0.5; cursor: default; transform: none; }
+      #rec .rec-dot {
+        width: 8px; height: 8px; border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.22);
+      }
+      /* Button-in-button trailing icon — its own circular enclosure, flush right. */
+      #rec .rec-ico {
+        position: absolute;
+        right: 6px;
+        width: 26px; height: 26px;
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(255, 255, 255, 0.16);
+        transition: transform 0.45s var(--ease), background 0.45s var(--ease);
+      }
+      #rec:hover .rec-ico { transform: translate(2px, -1px) scale(1.06); background: rgba(255, 255, 255, 0.24); }
+      #rec .rec-ico svg { width: 13px; height: 13px; }
+
+      .row { display: flex; gap: 8px; margin-top: 8px; }
+      #stop {
+        flex: 2;
+        color: #fff;
+        border: none;
+        background: linear-gradient(180deg, rgba(255,255,255,0.08), transparent 50%), #18181b;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 2px 8px -2px rgba(0,0,0,0.5);
+      }
+      #stop:hover { background: linear-gradient(180deg, rgba(255,255,255,0.12), transparent 50%), #202024; }
       #pause { flex: 1; }
-      .row { display: flex; gap: 6px; margin-top: 6px; }
-      label { display: block; margin: 0 0 4px; color: #444; font-size: 12px; }
-      label.check { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: #333; }
-      label.check input { width: auto; }
-      textarea, input[type="text"] { width: 100%; box-sizing: border-box; font: 12px/1.4 system-ui, sans-serif; border: 1px solid #d0d0d5; border-radius: 6px; padding: 5px 6px; }
-      textarea#task { resize: vertical; }
-      /* Collapsible sections — the "dropdown" feel, so the popup stays small. */
-      details { margin-top: 10px; border-top: 1px solid #eee; padding-top: 8px; }
-      details > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: #333; list-style: none; user-select: none; }
+      #enableMic, #chooseFolder { width: 100%; }
+      #enableMic { margin-top: 8px; }
+
+      /* ── Collapsible sections ─────────────────────────────────── */
+      details {
+        margin-top: 14px;
+        border-top: 1px solid var(--hairline);
+        padding-top: 12px;
+      }
+      details > summary {
+        cursor: pointer;
+        font-size: 11.5px;
+        font-weight: 560;
+        color: var(--text-2);
+        list-style: none;
+        user-select: none;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        transition: color 0.4s var(--ease);
+      }
+      details > summary:hover { color: var(--text); }
       details > summary::-webkit-details-marker { display: none; }
-      details > summary::before { content: "▸ "; color: #999; }
-      details[open] > summary::before { content: "▾ "; }
-      .purposes { margin-top: 8px; display: grid; gap: 3px; }
-      .field { margin-top: 8px; }
-      #status { margin-top: 8px; color: #777; min-height: 15px; font-size: 12px; }
-      .hint { color: #999; font-size: 11px; line-height: 1.4; margin-top: 8px; }
-      #micState { margin-top: 4px; }
-      #enableMic { width: 100%; margin-top: 6px; }
+      details > summary::before {
+        content: "";
+        width: 5px; height: 5px;
+        border-right: 1.4px solid currentColor;
+        border-bottom: 1.4px solid currentColor;
+        transform: rotate(-45deg);
+        margin-left: 1px;
+        transition: transform 0.45s var(--ease);
+        opacity: 0.7;
+      }
+      details[open] > summary::before { transform: rotate(45deg); }
+      details[open] > summary { color: var(--text); }
+      .summary-note { font-weight: 400; color: var(--text-3); }
+
+      .purposes { margin-top: 10px; display: grid; gap: 1px; }
+      .field { margin-top: 12px; }
+
+      #status {
+        margin-top: 12px;
+        color: var(--text-2);
+        min-height: 16px;
+        font-size: 12px;
+      }
+      .hint {
+        color: var(--text-3);
+        font-size: 11px;
+        line-height: 1.5;
+        margin-top: 10px;
+      }
+      .hint code {
+        font-family: ui-monospace, "Geist", monospace;
+        background: var(--surface);
+        border: 1px solid var(--hairline);
+        border-radius: 5px;
+        padding: 0 4px;
+        font-size: 10.5px;
+      }
+      #micState { margin-top: 6px; }
     </style>
   </head>
   <body>
-    <h1><span class="dot"></span> Activity Capture</h1>
-
-    <label for="task">What are you doing in this recording?</label>
-    <textarea id="task" rows="2" placeholder="e.g. Issue a refund for a damaged order in Distru"></textarea>
-
-    <!-- Kept prominent (open by default): the purpose seeds the analyzing agent's
-         context. Collapsible so the popup can shrink when you don't need it. -->
-    <details id="whyBox" open>
-      <summary>Why are you recording? <span style="font-weight:400;color:#999">(optional)</span></summary>
-      <div class="purposes" id="purposes">
-        <label class="check"><input type="checkbox" name="purpose" value="skill" /> Build a skill / automation</label>
-        <label class="check"><input type="checkbox" name="purpose" value="docs" /> Documentation / SOP</label>
-        <label class="check"><input type="checkbox" name="purpose" value="ux" /> UX / product feedback</label>
-        <label class="check"><input type="checkbox" name="purpose" value="ui" /> Propose UI changes</label>
-        <label class="check"><input type="checkbox" name="purpose" value="improve" /> Find a better / faster way</label>
-        <label class="check"><input type="checkbox" name="purpose" value="research" /> Competitive / product research</label>
-        <label class="check"><input type="checkbox" name="purpose" value="general" /> General capture</label>
-      </div>
-    </details>
-
-    <div class="field">
-      <button id="rec">● Start recording</button>
-      <label class="check" style="margin-top:6px"><input type="checkbox" id="mic" checked /> Record microphone (narration)</label>
-      <div id="micState" class="hint"></div>
-      <button id="enableMic" hidden>Enable microphone…</button>
-      <div class="row" hidden id="live">
-        <button id="pause">Pause</button>
-        <button id="stop">■ Stop &amp; export</button>
+    <div class="head">
+      <h1><span class="dot"></span> <span data-i18n="appName">Activity Capture</span></h1>
+      <!-- Language toggle: sits next to the title, above Start. Switches the whole
+           UI between EN / ES / PT and persists the choice (chrome.storage `lang`). -->
+      <div class="lang" id="lang" role="group" aria-label="Language">
+        <button class="lang-opt" type="button" data-lang="en">EN</button>
+        <button class="lang-opt" type="button" data-lang="es">ES</button>
+        <button class="lang-opt" type="button" data-lang="pt">PT</button>
       </div>
     </div>
+
+    <!-- Primary action lives at the top — everything below it is optional context. -->
+    <button id="rec">
+      <span class="rec-dot"></span>
+      <span class="rec-label" data-i18n="start">Start recording</span>
+      <span class="rec-ico" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </span>
+    </button>
+    <label class="check" style="margin-top:10px"><input type="checkbox" id="mic" checked /> <span data-i18n="recMic">Record microphone (narration)</span></label>
+    <div id="micState" class="hint"></div>
+    <button id="enableMic" hidden data-i18n="enableMic">Enable microphone…</button>
+    <div class="row" hidden id="live">
+      <button id="pause" data-i18n="pause">Pause</button>
+      <button id="stop">■ <span data-i18n="stop">Stop &amp; export</span></button>
+    </div>
+
+    <!-- Context is optional: the countdown nudges you to narrate what this is for,
+         which gives the AI the richest context. Type it here only if you'd rather. -->
+    <details id="whatBox">
+      <summary><span data-i18n="whatTitle">What are you doing in this recording?</span> <span class="summary-note" data-i18n="optional">(optional)</span></summary>
+      <textarea id="task" rows="2" style="margin-top:10px" data-i18n-ph="taskPh" placeholder="e.g. Issue a refund for a damaged order in Distru"></textarea>
+    </details>
+
+    <!-- The purpose seeds the analyzing agent (skill vs doc vs UX teardown). -->
+    <details id="whyBox" open>
+      <summary><span data-i18n="whyTitle">Why are you recording?</span> <span class="summary-note" data-i18n="optional">(optional)</span></summary>
+      <div class="purposes" id="purposes">
+        <label class="check"><input type="checkbox" name="purpose" value="skill" /> <span data-i18n="pSkill">Build a skill / automation</span></label>
+        <label class="check"><input type="checkbox" name="purpose" value="docs" /> <span data-i18n="pDocs">Documentation / SOP</span></label>
+        <label class="check"><input type="checkbox" name="purpose" value="ux" /> <span data-i18n="pUx">UX / product feedback</span></label>
+        <label class="check"><input type="checkbox" name="purpose" value="ui" /> <span data-i18n="pUi">Propose UI changes</span></label>
+        <label class="check"><input type="checkbox" name="purpose" value="improve" /> <span data-i18n="pImprove">Find a better / faster way</span></label>
+        <label class="check"><input type="checkbox" name="purpose" value="research" /> <span data-i18n="pResearch">Competitive / product research</span></label>
+        <label class="check"><input type="checkbox" name="purpose" value="general" /> <span data-i18n="pGeneral">General capture</span></label>
+      </div>
+    </details>
 
     <!-- Settings, collapsed by default (out of the main flow, Loom-style).
          Changes save the moment you make them (no separate Save button). -->
     <details id="settings">
-      <summary>Settings</summary>
+      <summary data-i18n="settings">Settings</summary>
       <div class="field">
-        <label for="blocklist">Never record on (one host per line)</label>
+        <label for="blocklist"><span data-i18n="blockTitle">Never record on</span> <span class="summary-note" data-i18n="blockNote">(one host per line)</span></label>
         <textarea id="blocklist" rows="3" placeholder="my.1password.com&#10;mail.google.com&#10;bank.example.com"></textarea>
-        <div class="hint">Switching to one of these tabs auto-pauses the whole recording (video too) until you leave it. A parent domain (e.g. <code>1password.com</code>) also covers its subdomains.</div>
+        <div class="hint" data-i18n-html="blockHint">Switching to one of these tabs auto-pauses the whole recording (video too) until you leave it. A parent domain (e.g. <code>1password.com</code>) also covers its subdomains.</div>
       </div>
       <div class="field">
-        <label>When a recording finishes</label>
-        <label class="check" style="margin-top:2px"><input type="radio" name="savemode" value="folder" checked /> Auto-save to a folder</label>
-        <button id="chooseFolder" type="button" style="width:100%;margin-top:5px">Choose folder…</button>
+        <label data-i18n="onFinish">When a recording finishes</label>
+        <label class="check"><input type="radio" name="savemode" value="folder" checked /> <span data-i18n="saveFolder">Auto-save to a folder</span></label>
+        <button id="chooseFolder" type="button" style="margin-top:7px" data-i18n="chooseFolder">Choose folder…</button>
         <div id="folderName" class="hint"></div>
-        <label class="check" style="margin-top:8px"><input type="radio" name="savemode" value="ask" /> Ask me where to save &amp; name it each time</label>
-        <div class="hint">“Ask” opens your file explorer to pick any location and rename — every time.</div>
+        <label class="check" style="margin-top:8px"><input type="radio" name="savemode" value="ask" /> <span data-i18n="saveAsk">Ask me where to save &amp; name it each time</span></label>
+        <div class="hint" data-i18n="askHint">“Ask” opens your file explorer to pick any location and rename — every time.</div>
       </div>
-      <div id="saved" class="hint" style="color:#2e7d32;min-height:14px"></div>
+      <div id="saved" class="hint" style="min-height:14px"></div>
     </details>
 
     <div id="status"></div>
-    <div class="hint">On Start, Chrome asks which screen/window to share, then a short countdown begins. A "this tab is being debugged" banner is the network capture. Secrets are redacted before export.</div>
+    <script src="i18n.js"></script>
     <script type="module" src="popup.js"></script>
   </body>
 </html>

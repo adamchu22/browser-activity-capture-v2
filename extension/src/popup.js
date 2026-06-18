@@ -8,6 +8,32 @@ import { saveExportDir } from "./fsdir.js";
 const $ = (id) => document.getElementById(id);
 let paused = false;
 
+// ── i18n ────────────────────────────────────────────────────────────────────
+// Strings + table live in i18n.js (loaded as a classic script before this module,
+// so it's on window). `lang` is the active UI language, persisted in storage.
+const I18N = window.BAC_I18N;
+let lang = "en";
+const T = (key, vars) => (I18N ? I18N.t(lang, key, vars) : key);
+
+// Last-known auto-save folder state, kept so applyLang() can re-render its
+// message in the new language without re-reading storage.
+let folderState = { name: "", needsRegrant: false };
+
+// Swap every visible string to the chosen language and light the active segment.
+// Static strings carry data-i18n / -ph / -html; JS-driven ones (status, mic state,
+// folder, pause label) are re-rendered by the helpers called at the end.
+function applyLang(next) {
+  lang = (I18N && I18N.normalize(next)) || "en";
+  document.documentElement.lang = lang;
+  for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = T(el.dataset.i18n);
+  for (const el of document.querySelectorAll("[data-i18n-ph]")) el.placeholder = T(el.dataset.i18nPh);
+  for (const el of document.querySelectorAll("[data-i18n-html]")) el.innerHTML = T(el.dataset.i18nHtml);
+  for (const b of document.querySelectorAll(".lang-opt")) b.classList.toggle("active", b.dataset.lang === lang);
+  renderFolder();
+  refreshMicState();
+  refresh();
+}
+
 async function activeTabId() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab?.id;
@@ -24,8 +50,8 @@ async function refresh() {
   paused = res?.paused;
   $("rec").hidden = live || arming;
   $("live").hidden = !live;
-  $("pause").textContent = paused ? "Resume" : "Pause";
-  $("status").textContent = arming ? "Starting…" : live ? (paused ? "Paused" : "Recording…") : "";
+  $("pause").textContent = paused ? T("resume") : T("pause");
+  $("status").textContent = arming ? T("stStarting") : live ? (paused ? T("stPaused") : T("stRecording")) : "";
 }
 
 async function micGranted() {
@@ -64,7 +90,8 @@ function saveSettings() {
     await chrome.storage.local.set({ ...readSettings(), purposes: selectedPurposes() });
     const s = $("saved");
     if (s) {
-      s.textContent = "Saved ✓";
+      s.textContent = T("saved");
+      s.style.color = "#4ade80";
       clearTimeout(saveSettings._clear);
       saveSettings._clear = setTimeout(() => (s.textContent = ""), 1500);
     }
@@ -74,17 +101,21 @@ function saveSettings() {
 // Show the chosen auto-save folder (or that none is set → Downloads fallback), and
 // flag if folder access lapsed (e.g. after a browser restart) so the user re-picks.
 function renderFolder(name, needsRegrant) {
+  // Called with args from storage/picker (updates state); called bare from
+  // applyLang to re-render the stored state in the new language.
+  if (name !== undefined) folderState = { name, needsRegrant: !!needsRegrant };
   const el = $("folderName");
   if (!el) return;
-  if (needsRegrant && name) {
-    el.textContent = `⚠ Lost access to “${name}” — click Choose folder to restore it.`;
-    el.style.color = "#b35900";
-  } else if (name) {
-    el.textContent = `Saving to: ${name}`;
-    el.style.color = "#2e7d32";
+  const { name: n, needsRegrant: r } = folderState;
+  if (r && n) {
+    el.textContent = T("folderLost", { name: n });
+    el.style.color = "#fbbf24";
+  } else if (n) {
+    el.textContent = T("folderSaving", { name: n });
+    el.style.color = "#4ade80";
   } else {
-    el.textContent = "No folder chosen — saves to Downloads.";
-    el.style.color = "#999";
+    el.textContent = T("folderNone");
+    el.style.color = "rgba(255,255,255,0.36)";
   }
 }
 
@@ -95,7 +126,7 @@ async function chooseFolder() {
     const handle = await window.showDirectoryPicker({ mode: "readwrite" });
     const perm = await handle.requestPermission({ mode: "readwrite" });
     if (perm !== "granted") {
-      $("status").textContent = "Folder access wasn’t granted.";
+      $("status").textContent = T("stFolderDenied");
       return;
     }
     await saveExportDir(handle);
@@ -106,7 +137,7 @@ async function chooseFolder() {
     renderFolder(handle.name, false);
     saveSettings();
   } catch (e) {
-    if (e?.name !== "AbortError") $("status").textContent = "Couldn’t open the folder picker.";
+    if (e?.name !== "AbortError") $("status").textContent = T("stPickerFail");
   }
 }
 
@@ -123,16 +154,16 @@ $("rec").addEventListener("click", async () => {
   // offscreen doc can't prompt, so starting now would just yield a silent video.
   if (settings.micEnabled && !(await micGranted())) {
     openMicGrant();
-    $("status").textContent = "Allow the mic in the window that popped up, then press Start again.";
+    $("status").textContent = T("stMicPrompt");
     return;
   }
   // The worker spins up the offscreen doc, which calls getDisplayMedia — Chrome's
   // "Choose what to share" dialog appears, then a short countdown, then capture.
-  $("status").textContent = "Choose a screen/window to share in the dialog…";
+  $("status").textContent = T("stPickShare");
   const task = $("task").value.trim();
   const res = await send("start", { tabId: await activeTabId(), task, purposes });
   if (res && !res.ok) {
-    $("status").textContent = res.error || "Couldn't start.";
+    $("status").textContent = res.error || T("stStartFail");
     return;
   }
   setTimeout(refresh, 200);
@@ -145,7 +176,7 @@ $("pause").addEventListener("click", async () => {
 
 $("stop").addEventListener("click", async () => {
   await send("stop");
-  $("status").textContent = "Exporting bundle…";
+  $("status").textContent = T("stExporting");
   setTimeout(refresh, 500);
 });
 
@@ -163,11 +194,7 @@ async function refreshMicState() {
     granted = false; // can't tell → assume not granted, let the user enable it
   }
   $("enableMic").hidden = granted || !micWanted;
-  $("micState").textContent = !micWanted
-    ? ""
-    : granted
-      ? "Microphone enabled ✓"
-      : "Microphone not enabled — narration won't record.";
+  $("micState").textContent = !micWanted ? "" : granted ? T("micOn") : T("micOff");
 }
 
 // Open the one-time mic-grant page as a small floating popup window on the
@@ -194,19 +221,29 @@ $("blocklist").addEventListener("input", saveSettings);
 for (const el of document.querySelectorAll('input[name="savemode"]')) el.addEventListener("change", saveSettings);
 for (const el of document.querySelectorAll('input[name="purpose"]')) el.addEventListener("change", saveSettings);
 
+// Language toggle — re-render in the picked language and remember it.
+for (const b of document.querySelectorAll(".lang-opt")) {
+  b.addEventListener("click", () => {
+    applyLang(b.dataset.lang);
+    chrome.storage.local.set({ lang });
+  });
+}
+
 chrome.storage.local
-  .get(["blocklist", "micEnabled", "purposes", "saveMode", "exportDirName", "exportDirNeedsRegrant"])
+  .get(["blocklist", "micEnabled", "purposes", "saveMode", "exportDirName", "exportDirNeedsRegrant", "lang"])
   .then(({ blocklist = [], micEnabled = true, purposes = [], saveMode = "folder",
-           exportDirName = "", exportDirNeedsRegrant = false }) => {
+           exportDirName = "", exportDirNeedsRegrant = false, lang: savedLang }) => {
     $("blocklist").value = blocklist.join("\n");
     $("mic").checked = micEnabled;
     const modeEl = document.querySelector(`input[name="savemode"][value="${saveMode}"]`);
     if (modeEl) modeEl.checked = true;
-    renderFolder(exportDirName, exportDirNeedsRegrant);
+    renderFolder(exportDirName, exportDirNeedsRegrant); // records folder state
     for (const el of document.querySelectorAll('input[name="purpose"]')) {
       el.checked = purposes.includes(el.value);
     }
-    refreshMicState();
+    // Default to the browser's language (among en/es/pt) until the user picks one.
+    // applyLang re-renders folder + mic state + live status in the chosen language.
+    applyLang(savedLang || (I18N ? I18N.detect() : "en"));
   });
 
 refresh();

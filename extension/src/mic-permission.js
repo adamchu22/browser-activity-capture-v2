@@ -10,9 +10,20 @@ const status = document.getElementById("status");
 const retry = document.getElementById("retry");
 const done = document.getElementById("done");
 
+// Same language the popup is set to (shared table in i18n.js, stored under `lang`).
+const I18N = window.BAC_I18N;
+let lang = "en";
+const T = (key, vars) => (I18N ? I18N.t(lang, key, vars) : key);
+
+function applyStatic() {
+  document.documentElement.lang = lang;
+  for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = T(el.dataset.i18n);
+  for (const el of document.querySelectorAll("[data-i18n-html]")) el.innerHTML = T(el.dataset.i18nHtml);
+}
+
 async function request() {
   status.className = "pending";
-  status.textContent = "Requesting microphone access…";
+  status.textContent = T("micRequesting");
   retry.hidden = true;
   done.hidden = true;
   try {
@@ -20,17 +31,19 @@ async function request() {
     // We only needed the grant — release the device immediately.
     stream.getTracks().forEach((t) => t.stop());
     status.className = "ok";
-    status.textContent = "✓ Microphone enabled.";
+    status.textContent = T("micOkMsg");
     done.hidden = false;
   } catch (e) {
     status.className = "err";
-    status.textContent =
-      "Microphone blocked: " + (e?.message || e) +
-      ". Check the mic icon in the address bar, or macOS System Settings → " +
-      "Privacy & Security → Microphone (allow Chrome), then try again.";
+    status.textContent = T("micBlocked", { e: e?.message || e });
     retry.hidden = false;
   }
 }
 
 retry.addEventListener("click", request);
-request();
+
+chrome.storage.local.get(["lang"]).then(({ lang: saved }) => {
+  lang = (I18N && I18N.normalize(saved)) || (I18N ? I18N.detect() : "en");
+  applyStatic();
+  request();
+});
