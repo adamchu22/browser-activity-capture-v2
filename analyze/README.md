@@ -42,7 +42,9 @@ If the bundle has narration (`manifest.narration_in_video: true`), turn the voic
 into a timestamped `transcript.vtt` with a **local** model — audio never leaves the
 machine. `pack.py` then interleaves the narration with the clicks on the one clock.
 
-**One-time setup** (creates `.venv`; `ffmpeg` must be on PATH):
+**One-time setup, then automatic forever.** Run this once on your machine and every
+future capture you pack gets transcribed with no extra step (`ffmpeg` must be on PATH
+first — setup hard-stops with the install command if it's missing):
 
 ```bash
 bash analyze/setup.sh                                   # macOS / Linux
@@ -50,9 +52,15 @@ bash analyze/setup.sh                                   # macOS / Linux
 powershell -ExecutionPolicy Bypass -File analyze\setup.ps1
 ```
 
+Setup verifies the whole chain works end-to-end before it reports success (and
+downloads the model once so your first capture is fast and offline). To re-check it
+anytime: `.venv/bin/python analyze/transcribe.py --selftest`.
+
 That's it — `pack.py` then **auto-transcribes** narration (it finds `.venv` and
-picks the engine: `parakeet` on Apple Silicon, `faster-whisper` elsewhere). To run
-the transcriber by hand, or pick a non-default engine:
+picks the engine: `parakeet` on Apple Silicon, `faster-whisper` elsewhere). Note a
+freshly downloaded bundle ships `transcript.vtt` as a stub; it's filled when you run
+`pack.py` (or `transcribe.py`), not by opening the file. To run the transcriber by
+hand, or pick a non-default engine:
 
 ```bash
 # transcribe a bundle in place (writes transcript.vtt into it)

@@ -1,16 +1,63 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-18 (live-run #2 fixes landed — see below; NEXT: a load-unpacked verify of
-the blocklist auto-pause, the pause clock, and auto-transcribe)_
+_Last updated: 2026-06-18 (hardened transcription portability for other machines; NEXT: address the
+visible Chrome "Stop sharing / Cancel" bar — Adam deferred it but it's the open item)_
 
-## ▶ NEXT (2026-06-18) — verify live-run #2 fixes
+## ✅ DONE (2026-06-18) — transcription "install once, automatic forever" hardening
 
-Adam's 2nd run exposed that **1Password was fully captured** (blocklist never saved + exact-match
-miss) and the **pause timer jumped**. Both fixed, plus auto-transcribe now works on this machine and
-annotations fuse with narration. Built + unit-tested (node 55 / python 116 green); needs a
-load-unpacked sign-off. The exact live checks are the new **"✅ Done 2026-06-18"** block at the top of
-`to-do-current.md`; root causes + fixes are in `learnings.md` 2026-06-18. Set up transcription once
-with `bash analyze/setup.sh` (Mac) — the `.venv` already exists on this machine and works.
+Made the local-transcription install trustworthy on a recipient's machine (they clone the repo,
+install once, record their own captures). Four fixes — details in `learnings.md` 2026-06-18:
+- ffmpeg is now a **hard gate** in `setup.sh`/`setup.ps1` (was a silent warning).
+- New `transcribe.py --selftest` verifies the ffmpeg+engine chain end-to-end AND pre-warms the model;
+  setup runs it and only reports success if it passes. Auto-detects the installed engine.
+- Stub `transcript.vtt` + `analyze/README.md` now explain the install-once / pack.py-fills-it flow.
+- Tests: `tests/test_selftest.py`; full suite **125 python / 55 node** green.
+Not yet committed at time of writing — bisect into logical commits (background stub, transcribe
+selftest, setup gates, README, tests).
+
+## ✅ VERIFIED (2026-06-18, live-run #4) — password-field redaction
+
+`Downloads/capture-2026-06-18T14-31-57-860Z.zip` (eulerapp.com signin, fake creds): a password
+typed into an `inputType: password` field was masked everywhere —
+- `timeline.json` input event → `value: "‹redacted:secret›"` (email field → `‹redacted:email›`);
+- `network.har` → no cleartext password param (Euler encrypts login client-side; login failed anyway).
+Field redaction (rrweb `maskAllInputs` + `content.js` `maskValue`/`isSecretInput`) confirmed working.
+
+## ▶ NEXT (2026-06-18) — hide Chrome's "Stop sharing / Cancel" bar (Adam feedback, live-run #4)
+
+From the run's narration (start of `video.webm`): Chrome's tab-share notification bar
+("Stop sharing / Cancel", shown by `getDisplayMedia`) is **visible during capture and Adam wants it
+gone**. His suggestion: switch to an **`activeTab`-style** capture that doesn't trigger the
+screen-share picker/bar at all. Open question (don't assume): whether an activeTab/tabCapture path
+gives the same video stream we get today without the share bar, and what it costs (it changes how the
+video is acquired). Scope this before building. NOTE: a separate security follow-up in
+`to-do-current.md` proposes *dropping* `activeTab` — reconcile the two before acting.
+
+## ✅ VERIFIED (2026-06-18, live-run #3) — blocklist + recorder/mic
+
+`Downloads/capture-2026-06-18T14-20-08-292Z` confirmed the live-run #2 fixes:
+- **Blocklist works.** A 1Password tab visited during the run was correctly excluded — no
+  `1password.com` host in `urls_visited`/`tabs`/`network.har`, no vault content anywhere. (The lone
+  "1Password" string is the extension's autofill tooltip on an *allowed* page, not the vault.)
+- **Recorder + mic healthy.** `video.webm` present (VP8+Opus), `narration_in_video: true`, empty
+  `errors.json` — the 64MiB handoff + mic-timeout failures from live-run #2 did NOT recur.
+- Noted while here: redaction does NOT cover secrets in page *body* content (e.g. an API key in a
+  Google Doc) — documented gap, not fixed by design. See `learnings.md` 2026-06-18.
+
+## ▶ NEXT (2026-06-18) — verify typed passwords in a form field are NOT captured
+
+This checks the **field-redaction** path (distinct from the tab-exclusion path verified above). In a
+recorded run, type a password into a real `<input type=password>` (and/or a field named like
+`password`/`secret`/`token`/`api_key`). Then confirm the typed value never appears in the bundle:
+- `events.jsonl` / `timeline.json` — the input value shows as `‹redacted:secret›`, never the
+  cleartext (rrweb `maskAllInputs` + `content.js` `maskValue`/`isSecretInput`).
+- `network.har` — if the form submits, the password isn't in the request body/URL in the clear.
+- Reminder: the visual streams are NOT redacted — if the field unmasks on screen (a "show password"
+  toggle), the cleartext is still visible in `video.webm`/`frames`. That's the documented limit.
+
+Background: live-run #2's other fixes (pause clock, auto-transcribe, annotation fusion) are built +
+unit-tested (node 55 / python 116 green). Set up transcription once with `bash analyze/setup.sh`
+(Mac) — the `.venv` already exists on this machine and works.
 
 ---
 

@@ -40,6 +40,60 @@ A second live run (`outputs/capture-2026-06-18T12-45-56-384Z.zip`) surfaced four
   sends now go through a `safeSend` guard (`chrome.runtime?.id` check + try/catch). The CSP
   `frame-ancestors`/`report-uri`-via-meta warnings are from recorded sites, not our code.
 
+### Known limitation — redaction does NOT cover secrets in page content (documented, not fixed)
+
+Live-run #3 (`Downloads/capture-2026-06-18T14-20-08-292Z`) verified the blocklist fix: a
+1Password tab visited during the run was correctly excluded (no `1password.com` host in
+`urls_visited`/`tabs`/`network.har`; the only "1Password" string is the extension's autofill
+tooltip injected into an *allowed* page — no vault content). Recorder + mic also healthy that
+run (`video.webm` present, `narration_in_video: true`, empty `errors.json`).
+
+But that prompted the real boundary, worth stating plainly so users know what to expect:
+
+- **Redaction is field-and-network scoped, not content scoped.** It masks (1) secret-shaped
+  *form fields* (`isSecretInput`/`maskValue` in `content.js`: `password` type or
+  `password|secret|token|api_key|auth|ssn|card|cvv` name/id), (2) *network* secrets
+  (`Authorization`/`Cookie` headers; JWT/`Bearer`/`AIza…`/`sk-…`/`ghp_…` shapes in URLs/bodies
+  via `redact.js`), and (3) rrweb is `maskAllInputs: true` only — **no `maskAllText`**.
+- **So a secret written into page *body* text is NOT redacted.** Example: an API key saved in a
+  Google Doc. It's not a form field and not a network value, so no masker touches it. It would
+  appear verbatim in any captured DOM text, and — regardless of DOM — **in `video.webm` and
+  `frames/` in the clear** (`visual_streams_redacted: false`; AGENTS.md already warns on-screen
+  secrets are visible there).
+- **Google Docs specifically:** body text is canvas-rendered (rrweb isn't recording canvas), so it
+  likely won't land in `events.jsonl` at all — but it's still fully visible in the video/frames.
+- **The only protection for content secrets is tab exclusion** (Settings → "Never record on" /
+  auto-pause), the same path that excluded 1Password. Decision (Adam, 2026-06-18): **document this
+  expectation; do not build content-level redaction.** Treat it as "don't record tabs holding
+  secrets in their content," not "the tool will scrub them."
+
+### Transcription portability — make "install once, automatic forever" trustworthy on someone else's machine
+
+The recipient model: they clone the full repo, install once, likely have an AI agent, and record
+*their own* captures. Transcription is always post-download (the extension can't run ASR — needs a
+native ML runtime + ffmpeg it can't host). Two paths already existed (one-time `.venv` install →
+`pack.py` auto-transcribes every future bundle; or hand the self-driving bundle to an agent via
+`AGENTS.md`). What was missing was making the *install* trustworthy on a machine unlike Adam's.
+Four gaps, all fixed this session:
+
+- **ffmpeg was a silent failure.** `setup.sh`/`setup.ps1` only *warned* if ffmpeg was missing, then
+  built the venv and reported success — so transcription silently skipped forever. Now a **hard
+  gate**: setup exits non-zero with the per-OS install command if ffmpeg isn't on PATH.
+- **No proof it worked.** Added `transcribe.py --selftest`: synth 1s of silence via ffmpeg → run the
+  installed engine → report pass/fail with the exact missing piece. setup runs it at the end and only
+  claims success if it passes. `--selftest` needs no bundle and **auto-detects** the installed engine
+  (parakeet on Apple Silicon, faster-whisper elsewhere) unless `--engine` is forced.
+- **Surprise model download mid-task.** The selftest's first engine run downloads/loads weights, so
+  setup **pre-warms** the model — the user's first real capture is fast and offline. (One mechanism
+  covers verify + pre-warm.)
+- **Discoverability.** The export-time stub `transcript.vtt` now names the command that fills it
+  (`pack.py`/`transcribe.py` + the one-time setup), and `analyze/README.md` states the
+  "install once → automatic, stub is filled by pack.py not by opening the file" flow. Kept the
+  `No narration captured` marker so `pack._transcript_is_stub` detection is unchanged.
+
+Tests: `tests/test_selftest.py` (engine auto-detect, ffmpeg-missing → rc 2, no-engine → rc 3,
+explicit-engine not overridden, success path). 125 python / 55 node green.
+
 ### Save-to-a-chosen-folder (File System Access) — the constraints that shaped it
 
 Adam wanted an in-extension folder picker that auto-saves there. Key constraints found:
