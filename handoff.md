@@ -1,7 +1,30 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-18 (hardened transcription portability for other machines; NEXT: address the
-visible Chrome "Stop sharing / Cancel" bar — Adam deferred it but it's the open item)_
+_Last updated: 2026-06-18 (FIXED the lost-30-min-recording bug — MV3 worker died mid-pause and wiped
+in-memory state; added keepalive + persist/rehydrate + second-Start guard. NEXT: live-verify the
+recovery, then the still-open "Stop sharing" bar item.)_
+
+## ✅ DONE (2026-06-18) — recording survives a service-worker restart (lost-capture bug)
+
+Adam lost a ~30 min recording: he paused (sharing one window) to work elsewhere, came back to a dead
+overlay (couldn't pause/finish), the overlay in another window, and the take gone. **Root cause: ALL
+recording state lived in the MV3 worker's in-memory `state`, and the worker is terminated after ~30s
+idle — Pause stops the frame timer + event ingest, so the pause window is exactly when nothing keeps
+it warm.** Full diagnosis in `learnings.md` 2026-06-18. Fix in 4 bisected commits:
+- **Keepalive** — offscreen doc pings the worker every 20s while recording (prevents the death). No
+  new permission. `offscreen.js`.
+- **Frames → IndexedDB** and **HAR → IndexedDB** (were memory-only). `db.js` (v2, +`put`/`har` store),
+  `background.js`.
+- **Persist + rehydrate** — `session.js` (pure, 5 unit tests) mirrors the durable `state` slice to
+  `chrome.storage.local`; on cold start `rehydrate()` resumes the recording (or salvages a video-less
+  bundle if the browser was restarted). Commands `await` rehydration; the second-Start that used to
+  `clearAll()` the take is now blocked. `background.js`.
+- **`track.onended`** — a share that stops on its own is reported (errors.json + `manifest.video_ended_early`).
+
+**▶ NEXT — LIVE-VERIFY (no unit test; lifecycle is chrome.*):** record → Pause → leave idle several
+minutes (or terminate the worker via `chrome://serviceworker-internals`) → return: overlay must still
+be controllable, Resume + Finish must yield a complete bundle (`validate_bundle.py` PASS). Tests now
+60 node / 125 python green.
 
 ## ✅ DONE (2026-06-18) — transcription "install once, automatic forever" hardening
 

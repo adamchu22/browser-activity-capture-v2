@@ -6,6 +6,22 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (61 tests; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
+## ✅ Done 2026-06-18 — lost-recording bug fixed (MV3 worker died mid-pause); needs live verify
+
+Adam lost a ~30 min capture: paused (sharing one window) to work elsewhere, returned to a dead overlay
+(couldn't pause/finish), overlay in another window, recording gone + `offscreen video capture failed:
+DOMException`. Root cause + full diagnosis in `learnings.md` 2026-06-18 — the MV3 service worker holds
+all recording state in memory and is terminated after ~30s idle, and Pause is exactly the window where
+nothing keeps it warm. Fixed in 4 bisected commits (built + unit-tested):
+- [x] **Keepalive** — offscreen doc pings the worker every 20s while recording (no new permission).
+- [x] **Frames + HAR → IndexedDB** (were worker-memory only, so a restart lost them).
+- [x] **Persist + rehydrate** — `session.js` (pure, 5 tests) → `chrome.storage.local`; `rehydrate()`
+      resumes a live recording on cold start, or salvages a video-less bundle if the browser restarted.
+- [x] **Second-Start guard** (rehydrate restores `recording=true` so the old re-Start can't `clearAll`)
+      + `track.onended` (share-stopped-on-its-own → errors.json + `manifest.video_ended_early`).
+- [ ] **LIVE-VERIFY (sign-off):** record → Pause → idle several min (or kill the worker via
+      `chrome://serviceworker-internals`) → return → overlay controllable, Resume + Finish → PASS bundle.
+
 ## ⚖️ TODO 2026-06-18 — add license + third-party notices (audit done, files not written)
 
 Adam wants to license the project. Provenance audit is **done** (findings below); the

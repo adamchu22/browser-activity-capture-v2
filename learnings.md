@@ -4,6 +4,63 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-18 (CAPTURE BUG — a 30-min recording was lost when the service worker died mid-pause)
+
+The most serious data-loss bug yet. Adam recorded ~30 min sharing a single window,
+**paused** to work in another window while waiting on a load, and came back to: the
+overlay dead on the original tab (Pause/Finish did nothing), the overlay showing in a
+different window, the share "source changed," and the recording gone. Console showed
+`message channel closed before a response was received`, `Error in event handler`, and
+`offscreen video capture failed: [object DOMException]`.
+
+- **Root cause: ALL recording state lived in the MV3 service worker's in-memory `state`
+  object, and the worker was terminated during the pause.** MV3 workers are killed after
+  ~30s idle. During *active* recording, network + the 3s frame timer keep it warm — but
+  **Pause stops the frame timer and drops event ingest, so nothing wakes the worker** and
+  Chrome reclaims it. That wiped `t0`, the frame buffer, the HAR map, and the tab list
+  (only `timeline`/`rrweb` were in IndexedDB), and reset `recording` to false. Every
+  symptom follows: overlay commands early-return on `!state.recording` ("couldn't pause/
+  finish"); the worker lost the tab id so it stopped syncing the original overlay while
+  `onActivated` mounted a fresh one in the next window; the async-listener + "event
+  handler" errors are the classic in-flight-message-during-termination signature.
+- **What actually destroyed the data:** with the worker reset to idle, a *second* Start
+  ran (the `DOMException` is `getDisplayMedia` being re-invoked — "source changed"), and
+  `start()` calls `closeOffscreen()` (kills the still-live take-1 stream) + `db.clearAll()`
+  (wipes the persisted timeline). So a *recoverable* loss became total.
+- **Key realization that made recovery cheap:** the **offscreen document is a separate
+  context from the worker** — its `MediaRecorder` keeps recording the video even while the
+  worker is dead. So the video was never the problem; the worker losing its bookkeeping and
+  its ability to stop was. That also means the offscreen doc is the reliable place to keep
+  the worker alive, AND its keepalive ping doubles as the thing that wakes a dead worker.
+
+**Fix — three independent layers (commits bisected):**
+1. **Keepalive (prevent death).** The offscreen doc pings the worker every 20s while
+   armed→recording, resetting the worker's idle timer through the pause window. No new
+   permission (offscreen-ping, not `chrome.alarms`).
+2. **Persist + rehydrate (survive death anyway).** Durable `state` slice (t0, pause
+   accounting, tab legend, blocklist, urls, errors) → `chrome.storage.local` on every
+   transition via the pure, unit-tested `session.js`; frames and the HAR moved into
+   IndexedDB. On cold start `rehydrate()` restores the recording: if the offscreen doc is
+   still alive (worker-only death) it re-attaches debuggers + resumes; if it's gone
+   (browser restart) it **salvages** the IDB data into a video-less bundle so nothing is
+   lost. Commands `await` a `rehydrated` promise so the first Pause/Finish after recovery
+   isn't dropped.
+3. **Second-Start guard.** Because rehydrate restores `recording=true` before a queued
+   Start runs, the existing "already recording" guard now catches the second Start instead
+   of letting it `clearAll()` the take. Net: a re-Start can't nuke a live/recovered recording.
+4. Also added a `getDisplayMedia` video-track `onended` handler: a share that stops on its
+   own (closed window / "Stop sharing") is reported to `errors.json` + `manifest.video_ended_early`
+   instead of silently going mute.
+
+**Durable lesson (wiki candidate):** in MV3, never hold unrecoverable state only in the
+service worker — it WILL be terminated, and a long idle/pause is the exact trigger. Keep a
+keepalive from a Document context (offscreen/port) AND persist enough to rehydrate. A
+separate-context MediaRecorder survives a worker death; the worker's bookkeeping does not.
+
+**Needs a live-Chrome verify** (lifecycle is chrome.*-dependent, no unit test): record,
+Pause, leave it idle several minutes (or kill the worker from `chrome://serviceworker-internals`),
+return → overlay still controllable, Resume + Finish yields a complete bundle.
+
 ## 2026-06-18 (popup UI redesign — Ethereal Glass dark theme + narration-first context)
 
 Redesigned the extension UI (popup + mic-permission window) to a dark "Ethereal Glass"
