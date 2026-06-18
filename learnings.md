@@ -40,6 +40,29 @@ A second live run (`outputs/capture-2026-06-18T12-45-56-384Z.zip`) surfaced four
   sends now go through a `safeSend` guard (`chrome.runtime?.id` check + try/catch). The CSP
   `frame-ancestors`/`report-uri`-via-meta warnings are from recorded sites, not our code.
 
+### Save-to-a-chosen-folder (File System Access) — the constraints that shaped it
+
+Adam wanted an in-extension folder picker that auto-saves there. Key constraints found:
+
+- **`chrome.downloads` can only write into the browser's Downloads tree** (filename is relative;
+  absolute paths / `..` are rejected). It CANNOT silently save to an arbitrary folder. So
+  "auto-save anywhere, no dialog" is impossible via the downloads API. (`saveAs: true` opens the
+  native dialog but prompts every time — that's the "ask" mode.)
+- The way to do it: **File System Access API** — `showDirectoryPicker()` in the popup (needs a user
+  gesture; popups have one on click), persist the returned handle in **IndexedDB** (it isn't JSON,
+  so it can't go in `chrome.storage`; kept in its own `bac-fs` DB via `fsdir.js`, separate from the
+  capture DB so `clearAll()` can't wipe it).
+- **The write must happen in a Window context, not the service worker** — SWs can't reliably
+  `createWritable()`. So the **offscreen document** (already alive at export time) loads the handle,
+  `queryPermission({mode:'readwrite'})`, and writes the bundle. The worker coordinates via a
+  message round-trip (`offscreen-save-file` → `offscreen-saved {ok,reason}`).
+- **Permission can lapse across a browser restart** (`queryPermission` → `'prompt'`, and there's no
+  gesture at export time to `requestPermission`). Handled gracefully: on any failure the worker
+  falls back to a normal Downloads download (never lose a recording) and sets
+  `exportDirNeedsRegrant` so the popup tells the user to re-pick the folder.
+- popup.js + offscreen.js became `type="module"` so they can import `fsdir.js`. **Needs a live
+  Chrome verify** (FSA is browser-API, no unit test).
+
 ## 2026-06-17 (security scan — adversarial review of redaction + egress + injection)
 
 Two independent adversarial audits (redaction-bypass hunt; egress/permissions/injection). The

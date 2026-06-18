@@ -3,6 +3,8 @@
 // picker is Chrome's own getDisplayMedia dialog, shown from the offscreen
 // document after Start — so it's fine if this popup closes when the dialog appears.
 
+import { saveExportDir } from "./fsdir.js";
+
 const $ = (id) => document.getElementById(id);
 let paused = false;
 
@@ -38,36 +40,23 @@ function selectedPurposes() {
   return [...document.querySelectorAll('input[name="purpose"]:checked')].map((el) => el.value);
 }
 
-// A download subfolder must be a relative path UNDER Downloads (chrome.downloads
-// rejects absolute paths and `..`). Strip slashes and any parent-dir hops so the
-// setting can't escape Downloads.
-function cleanFolder(v) {
-  return (v || "")
-    .trim()
-    .replace(/^[/\\]+|[/\\]+$/g, "")
-    .split(/[/\\]+/)
-    .filter((seg) => seg && seg !== "..")
-    .join("/");
-}
-
 function saveMode() {
   const el = document.querySelector('input[name="savemode"]:checked');
-  return el ? el.value : "auto"; // "auto" → drop into folder; "ask" → native Save dialog
+  return el ? el.value : "folder"; // "folder" → chosen dir (fallback Downloads); "ask" → dialog
 }
 
 function readSettings() {
   return {
     blocklist: $("blocklist").value.split("\n").map((s) => s.trim()).filter(Boolean),
     micEnabled: $("mic").checked,
-    downloadSubfolder: cleanFolder($("folder").value),
-    askWhereToSave: saveMode() === "ask",
+    saveMode: saveMode(),
   };
 }
 
 // Settings persist the moment they change — the old popup only wrote them on
 // Start, so a blocklist typed and left unsubmitted was silently lost (which let a
-// sensitive tab get captured). Debounced so typing in the blocklist/folder fields
-// doesn't thrash storage, with a brief "Saved ✓" confirmation.
+// sensitive tab get captured). Debounced so typing in the blocklist doesn't thrash
+// storage, with a brief "Saved ✓" confirmation.
 let saveTimer = null;
 function saveSettings() {
   clearTimeout(saveTimer);
@@ -79,8 +68,46 @@ function saveSettings() {
       clearTimeout(saveSettings._clear);
       saveSettings._clear = setTimeout(() => (s.textContent = ""), 1500);
     }
-    $("folder").disabled = saveMode() !== "auto"; // folder only applies in auto-save mode
   }, 250);
+}
+
+// Show the chosen auto-save folder (or that none is set → Downloads fallback), and
+// flag if folder access lapsed (e.g. after a browser restart) so the user re-picks.
+function renderFolder(name, needsRegrant) {
+  const el = $("folderName");
+  if (!el) return;
+  if (needsRegrant && name) {
+    el.textContent = `⚠ Lost access to “${name}” — click Choose folder to restore it.`;
+    el.style.color = "#b35900";
+  } else if (name) {
+    el.textContent = `Saving to: ${name}`;
+    el.style.color = "#2e7d32";
+  } else {
+    el.textContent = "No folder chosen — saves to Downloads.";
+    el.style.color = "#999";
+  }
+}
+
+// File System Access folder picker, scoped to this extension. The handle is kept
+// in IndexedDB (fsdir.js) so the offscreen doc can write exports straight into it.
+async function chooseFolder() {
+  try {
+    const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+    const perm = await handle.requestPermission({ mode: "readwrite" });
+    if (perm !== "granted") {
+      $("status").textContent = "Folder access wasn’t granted.";
+      return;
+    }
+    await saveExportDir(handle);
+    await chrome.storage.local.set({ exportDirName: handle.name, exportDirNeedsRegrant: false });
+    // Picking a folder implies auto-save mode.
+    const folderRadio = document.querySelector('input[name="savemode"][value="folder"]');
+    if (folderRadio) folderRadio.checked = true;
+    renderFolder(handle.name, false);
+    saveSettings();
+  } catch (e) {
+    if (e?.name !== "AbortError") $("status").textContent = "Couldn’t open the folder picker.";
+  }
 }
 
 $("rec").addEventListener("click", async () => {
@@ -155,36 +182,27 @@ function openMicGrant() {
   });
 }
 
-// Extensions can only auto-save into the browser's own download folder — they
-// can't write to an arbitrary path silently. But that folder is user-settable to
-// ANY location, so this opens the browser's download settings (where "Change"
-// brings up the native folder picker). Set it once and every auto-save lands there.
-$("openDownloadSettings").addEventListener("click", () => {
-  chrome.tabs.create({ url: "chrome://settings/downloads" });
-});
-
+$("chooseFolder").addEventListener("click", chooseFolder);
 $("enableMic").addEventListener("click", openMicGrant);
 $("mic").addEventListener("change", () => {
   refreshMicState();
   saveSettings();
 });
 
-// Persist settings as they change (blocklist, save mode, folder, purposes).
+// Persist settings as they change (blocklist, save mode, purposes).
 $("blocklist").addEventListener("input", saveSettings);
-$("folder").addEventListener("input", saveSettings);
 for (const el of document.querySelectorAll('input[name="savemode"]')) el.addEventListener("change", saveSettings);
 for (const el of document.querySelectorAll('input[name="purpose"]')) el.addEventListener("change", saveSettings);
 
 chrome.storage.local
-  .get(["blocklist", "micEnabled", "purposes", "downloadSubfolder", "askWhereToSave"])
-  .then(({ blocklist = [], micEnabled = true, purposes = [], downloadSubfolder = "", askWhereToSave = false }) => {
+  .get(["blocklist", "micEnabled", "purposes", "saveMode", "exportDirName", "exportDirNeedsRegrant"])
+  .then(({ blocklist = [], micEnabled = true, purposes = [], saveMode = "folder",
+           exportDirName = "", exportDirNeedsRegrant = false }) => {
     $("blocklist").value = blocklist.join("\n");
     $("mic").checked = micEnabled;
-    $("folder").value = downloadSubfolder;
-    const mode = askWhereToSave ? "ask" : "auto";
-    const modeEl = document.querySelector(`input[name="savemode"][value="${mode}"]`);
+    const modeEl = document.querySelector(`input[name="savemode"][value="${saveMode}"]`);
     if (modeEl) modeEl.checked = true;
-    $("folder").disabled = mode !== "auto";
+    renderFolder(exportDirName, exportDirNeedsRegrant);
     for (const el of document.querySelectorAll('input[name="purpose"]')) {
       el.checked = purposes.includes(el.value);
     }

@@ -69,22 +69,12 @@ async function getSettings() {
   const {
     blocklist = [],
     micEnabled = true,
-    downloadSubfolder = "",
-    askWhereToSave = false,
-  } = await chrome.storage.local.get(["blocklist", "micEnabled", "downloadSubfolder", "askWhereToSave"]);
-  return { blocklist, micEnabled, downloadSubfolder: cleanSubfolder(downloadSubfolder), askWhereToSave };
-}
-
-// A download subfolder must be a relative path UNDER Downloads — chrome.downloads
-// rejects absolute paths and `..`. Mirror the popup's sanitiser so a hand-edited
-// storage value can't escape Downloads either.
-function cleanSubfolder(v) {
-  return (v || "")
-    .trim()
-    .replace(/^[/\\]+|[/\\]+$/g, "")
-    .split(/[/\\]+/)
-    .filter((seg) => seg && seg !== "..")
-    .join("/");
+    saveMode = "folder",
+  } = await chrome.storage.local.get(["blocklist", "micEnabled", "saveMode"]);
+  // saveMode: "folder" = write into the user's chosen folder (File System Access),
+  // falling back to Downloads if none is set / access lapsed; "ask" = native Save
+  // dialog every time.
+  return { blocklist, micEnabled, saveMode };
 }
 
 // Suffix-aware host match (so `1password.com` blocks `my.1password.com`) — see
@@ -198,7 +188,7 @@ async function start(triggerTabId, task, purposes) {
   // opens a second picker + countdown, and the second clearAll wipes the first take.
   state.arming = true;
 
-  const { blocklist, micEnabled, downloadSubfolder, askWhereToSave } = await getSettings();
+  const { blocklist, micEnabled, saveMode } = await getSettings();
   await db.clearAll();
   // Reset any offscreen doc left over from a previous (possibly worker-killed) session
   // so a stale getDisplayMedia stream is released and we don't stack a second picker.
@@ -231,8 +221,7 @@ async function start(triggerTabId, task, purposes) {
     tabIds: new Set(),
     tabs: new Map(),
     blocklist,
-    downloadSubfolder, // preset export folder (subdir of Downloads) — set in Settings
-    askWhereToSave, // when false, export drops straight into Downloads (no Save dialog)
+    saveMode, // "folder" (chosen dir, fallback Downloads) | "ask" (native Save dialog)
     har: new Map(),
     frames: [],
     urls: new Set(),
@@ -321,23 +310,60 @@ async function stop() {
     logError("offscreen-mic", { message: video.micError });
   }
 
-  // MV3 service workers have no URL.createObjectURL, so we hand chrome.downloads
-  // a base64 data: URL built from the zip bytes instead of a blob URL.
+  // MV3 service workers have no URL.createObjectURL, so we build a base64 data: URL
+  // from the zip bytes — handed to either the offscreen FSA writer or chrome.downloads.
   try {
     const blob = await assembleBundle(video);
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const url = `data:application/zip;base64,${base64FromBytes(bytes)}`;
     const stamp = new Date(state.t0).toISOString().replace(/[:.]/g, "-");
-    // Honor the Settings: drop into a preset subfolder of Downloads and skip the
-    // Save dialog unless the user asked to be prompted each time.
-    const sub = cleanSubfolder(state.downloadSubfolder);
-    const filename = (sub ? sub + "/" : "") + `capture-${stamp}.zip`;
-    await chrome.downloads.download({ url, filename, saveAs: !!state.askWhereToSave });
+    const filename = `capture-${stamp}.zip`;
+    await exportBundle(url, filename);
   } catch (e) {
     console.error("bundle export failed:", e);
   } finally {
     setBadge("");
   }
+}
+
+// Route the finished zip to its destination per the save mode:
+//   "folder" → write into the user's chosen folder via the offscreen FSA writer;
+//              fall back to a Downloads download if no folder is set or access
+//              lapsed (and flag the popup to re-pick so access is restored).
+//   "ask"    → chrome.downloads with the native Save dialog (pick anywhere + rename).
+async function exportBundle(url, filename) {
+  if (state.saveMode === "ask") {
+    await chrome.downloads.download({ url, filename, saveAs: true });
+    return;
+  }
+  const res = await saveToChosenFolder(url, filename);
+  if (res.ok) return;
+  // Couldn't use the chosen folder — never lose the recording: save to Downloads.
+  if (res.reason === "permission" || res.reason === "error" || res.reason === "timeout") {
+    // A folder WAS chosen but we couldn't write it — ask the popup to re-pick.
+    chrome.storage.local.set({ exportDirNeedsRegrant: true });
+  }
+  await chrome.downloads.download({ url, filename, saveAs: false });
+}
+
+// Ask the offscreen document (a Window context that can createWritable) to write
+// the bundle into the chosen folder. Resolves {ok, reason}.
+function saveToChosenFolder(dataUrl, filename) {
+  return new Promise((resolve) => {
+    const listener = (msg) => {
+      if (msg.type === "offscreen-saved") {
+        chrome.runtime.onMessage.removeListener(listener);
+        resolve({ ok: !!msg.ok, reason: msg.reason || null });
+      }
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    chrome.runtime.sendMessage({ type: "offscreen-save-file", dataUrl, filename }).catch(() => {});
+    // If the offscreen doc is gone (data-only capture, killed worker), don't hang.
+    setTimeout(() => {
+      chrome.runtime.onMessage.removeListener(listener);
+      resolve({ ok: false, reason: "timeout" });
+    }, 6000);
+  });
 }
 
 // ---- overlay controls: pause / resume / restart / cancel -----------------

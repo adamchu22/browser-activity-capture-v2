@@ -28,6 +28,8 @@
 // sound; that also sidesteps the tabCapture "audio is muted unless you pipe it
 // back" gotcha.)
 
+import { loadExportDir } from "./fsdir.js";
+
 let recorder = null;
 let chunks = [];
 let streams = []; // every MediaStream we open, so stop() can release them all
@@ -77,7 +79,35 @@ chrome.runtime.onMessage.addListener(async (msg) => {
   if (msg.type === "offscreen-cancel") {
     cancelRecording();
   }
+  // Write the finished bundle into the user's chosen folder via the File System
+  // Access handle (this doc is a Window context, so it can createWritable(); the
+  // service worker can't). Replies offscreen-saved {ok, reason}; the worker falls
+  // back to a Downloads download when ok is false.
+  if (msg.type === "offscreen-save-file") {
+    saveToChosenDir(msg.dataUrl, msg.filename);
+  }
 });
+
+async function saveToChosenDir(dataUrl, filename) {
+  const reply = (r) => chrome.runtime.sendMessage({ type: "offscreen-saved", ...r });
+  try {
+    const dir = await loadExportDir();
+    if (!dir) return reply({ ok: false, reason: "no-dir" }); // never picked → Downloads
+    // queryPermission (no gesture here): 'granted' if still authorized this session
+    // or persisted; otherwise it lapsed (e.g. browser restart) → caller re-prompts.
+    const perm = await dir.queryPermission({ mode: "readwrite" });
+    if (perm !== "granted") return reply({ ok: false, reason: "permission" });
+    const blob = await (await fetch(dataUrl)).blob(); // data: URL → bytes
+    const fileHandle = await dir.getFileHandle(filename, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    reply({ ok: true });
+  } catch (e) {
+    reportError("fsdir-save failed: " + (e?.message || e), e?.stack);
+    reply({ ok: false, reason: "error" });
+  }
+}
 
 async function startRecording(withMic) {
   chunks = [];

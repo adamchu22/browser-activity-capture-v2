@@ -75,10 +75,9 @@
       </div>
       <div class="field">
         <label>When a recording finishes</label>
-        <label class="check" style="margin-top:2px"><input type="radio" name="savemode" value="auto" checked /> Auto-save (no dialog)</label>
-        <div class="hint">Saves to your browser’s download folder (default: Downloads). Point that at any folder once and every recording lands there automatically.</div>
-        <button id="openDownloadSettings" type="button" style="width:100%;margin-top:5px">Change download folder…</button>
-        <input type="text" id="folder" placeholder="optional subfolder" style="margin-top:6px" />
+        <label class="check" style="margin-top:2px"><input type="radio" name="savemode" value="folder" checked /> Auto-save to a folder</label>
+        <button id="chooseFolder" type="button" style="width:100%;margin-top:5px">Choose folder…</button>
+        <div id="folderName" class="hint"></div>
         <label class="check" style="margin-top:8px"><input type="radio" name="savemode" value="ask" /> Ask me where to save &amp; name it each time</label>
         <div class="hint">“Ask” opens your file explorer to pick any location and rename — every time.</div>
       </div>
@@ -87,6 +86,6 @@
 
     <div id="status"></div>
     <div class="hint">On Start, Chrome asks which screen/window to share, then a short countdown begins. A "this tab is being debugged" banner is the network capture. Secrets are redacted before export.</div>
-    <script src="popup.js"></script>
+    <script type="module" src="popup.js"></script>
   </body>
 </html>
