@@ -31,13 +31,26 @@
   let recording = false;
   let rrwebStop = null;
 
+  // Send to the worker, but never throw. When the unpacked extension is reloaded,
+  // the OLD content script keeps running in already-open tabs with a dead
+  // `chrome.runtime` — any sendMessage then throws "Extension context invalidated"
+  // (the four errors seen in chrome://extensions). Guard on the runtime id and
+  // swallow the rest so a stale script goes quietly inert instead of spamming.
+  function safeSend(msg, cb) {
+    try {
+      if (!chrome.runtime?.id) return; // context torn down (reload/update) — give up
+      if (cb) chrome.runtime.sendMessage(msg, cb);
+      else chrome.runtime.sendMessage(msg);
+    } catch {
+      /* context invalidated mid-call — ignore */
+    }
+  }
+
   // Surface in-page failures into the bundle's errors.json (only while recording,
   // so we don't spam the worker with unrelated page errors).
   function reportError(message, stack) {
     if (!recording) return;
-    try {
-      chrome.runtime.sendMessage({ type: "capture-error", where: "content", message, stack: stack || null });
-    } catch {}
+    safeSend({ type: "capture-error", where: "content", message, stack: stack || null });
   }
   window.addEventListener("error", (e) => reportError(e.message, e.error?.stack));
   window.addEventListener("unhandledrejection", (e) =>
@@ -273,11 +286,11 @@
   // Hand an event to the worker, which stamps it against t0 and buffers it.
   function emit(kind, payload) {
     if (!recording) return;
-    chrome.runtime.sendMessage({ type: "timeline-event", event: { kind, ...payload } });
+    safeSend({ type: "timeline-event", event: { kind, ...payload } });
   }
   function emitRaw(node) {
     if (!recording) return;
-    chrome.runtime.sendMessage({ type: "rrweb-event", node });
+    safeSend({ type: "rrweb-event", node });
   }
 
   function onClick(e) {
@@ -350,13 +363,22 @@
     let timer = null;
     let t0 = 0;
     let paused = false;
+    let pauseReason = null; // "manual" | "blocklist"
+    let pausedAccum = 0; // ms banked from completed pauses (from the worker)
+    let pauseStartedAt = 0; // wall-clock ms the current pause began (0 if live)
 
     const fmt = (ms) => {
       const s = Math.max(0, Math.floor(ms / 1000));
       return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
     };
+    // Elapsed RECORDING time = wall - t0 - banked pause - the pause in progress, so
+    // the pill matches video.webm and never jumps forward when you resume.
+    const elapsed = () => {
+      const ongoing = paused && pauseStartedAt ? Date.now() - pauseStartedAt : 0;
+      return Date.now() - t0 - pausedAccum - ongoing;
+    };
     const tick = () => {
-      if (els.time) els.time.textContent = fmt(Date.now() - t0);
+      if (els.time) els.time.textContent = fmt(elapsed());
     };
     const startTimer = () => {
       stopTimer();
@@ -368,11 +390,7 @@
       timer = null;
     };
 
-    const cmd = (command) => {
-      try {
-        chrome.runtime.sendMessage({ type: "overlay-command", command });
-      } catch {}
-    };
+    const cmd = (command) => safeSend({ type: "overlay-command", command });
 
     // Destructive verbs need a deliberate second click: Restart wipes the
     // current take, Cancel discards the whole recording with no export.
@@ -403,6 +421,9 @@
       if (host) return; // already shown
       t0 = meta?.t0 || Date.now();
       paused = !!meta?.paused;
+      pauseReason = meta?.pauseReason || null;
+      pausedAccum = meta?.pausedAccum || 0;
+      pauseStartedAt = meta?.pauseStartedAt || 0;
 
       host = document.createElement("div");
       host.id = "__bac_overlay__";
@@ -487,7 +508,12 @@
     function applyPaused() {
       if (!els.dot) return;
       els.dot.classList.toggle("paused", paused);
-      els.pause.textContent = paused ? "Resume" : "Pause";
+      const blocklist = paused && pauseReason === "blocklist";
+      // A blocklist pause is automatic — the worker resumes it when the user leaves
+      // the blocklisted tab, so don't offer a manual Resume that can't take effect.
+      els.pause.textContent = blocklist ? "Blocked" : paused ? "Resume" : "Pause";
+      els.pause.disabled = blocklist;
+      els.pause.title = blocklist ? "Paused automatically — you're on a blocklisted site" : "";
       // Annotations are dropped while paused (the worker ignores events then), so
       // disable the tools and leave any active mode.
       els.select.disabled = paused;
@@ -508,6 +534,9 @@
       }
       if (s.t0 && s.t0 !== t0) t0 = s.t0; // Restart reset the clock
       paused = !!s.paused;
+      pauseReason = s.pauseReason || null;
+      pausedAccum = s.pausedAccum || 0;
+      pauseStartedAt = s.pauseStartedAt || 0;
       applyPaused();
       if (paused) {
         stopTimer();
@@ -914,8 +943,9 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    // t0/paused ride along so a tab joining mid-recording shows the right clock.
-    if (msg.type === "start") startCapture({ t0: msg.t0, paused: msg.paused });
+    // The full paused-aware clock rides along so a tab joining mid-recording shows
+    // the right elapsed time (t0, pausedAccum, pauseStartedAt, pauseReason).
+    if (msg.type === "start") startCapture(msg);
     if (msg.type === "stop") stopCapture();
     if (msg.type === "restart") restartCapture();
     // Pre-roll countdown pushed by the worker (n=3..1, then 0 to clear) — shown
@@ -949,11 +979,12 @@
     const again = () => {
       if (attempt < 5) setTimeout(() => selfAttach(attempt + 1), 300);
     };
+    if (!chrome.runtime?.id) return; // context torn down (reload) — don't retry
     try {
       chrome.runtime.sendMessage({ type: "is-recording" }, (res) => {
         replied = true;
         if (chrome.runtime.lastError) return again(); // worker unreachable — retry
-        if (res?.recording) startCapture({ t0: res.t0, paused: res.paused });
+        if (res?.recording) startCapture(res); // res carries the full clock
         // res.recording === false is a definitive "not recording" — stop retrying.
       });
     } catch {
