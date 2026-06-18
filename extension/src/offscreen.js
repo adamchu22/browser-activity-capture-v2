@@ -36,6 +36,7 @@ let streams = []; // every MediaStream we open, so stop() can release them all
 let activeTracks = []; // the live screen+mic tracks, reused by restart without re-prompting
 let micRecorded = false; // did the final recording actually include the mic?
 let micError = null; // why the mic was absent (surfaced into the bundle manifest)
+let captureSurface = null; // displaySurface of the share: "browser" | "window" | "monitor"
 let audioCtx = null; // Web Audio graph that taps the mic for the overlay level meter
 let levelTimer = null; // interval pushing mic loudness to the worker
 let keepAliveTimer = null; // pings the worker so the MV3 service worker can't be torn down mid-recording
@@ -140,6 +141,7 @@ async function startRecording(withMic) {
   streams = [];
   micRecorded = false;
   micError = withMic ? null : "mic not requested";
+  captureSurface = null;
   const tracks = [];
 
   // Whole-screen/window video via getDisplayMedia (shows Chrome's "Choose what to
@@ -152,6 +154,10 @@ async function startRecording(withMic) {
     streams.push(videoStream);
     const vTracks = videoStream.getVideoTracks();
     tracks.push(...vTracks);
+    // What did the user pick in the "Choose what to share" dialog — a tab ("browser"),
+    // an OS window, or a whole monitor? The worker uses this to scope the overlay +
+    // capture to the recorded surface so the menu doesn't leak onto other windows.
+    captureSurface = vTracks[0]?.getSettings?.().displaySurface || null;
     // If the captured screen/window share ends on its own — the user closes the
     // shared window, or clicks Chrome's "Stop sharing" bar — the video track fires
     // `ended` and the recorder silently stops producing video while everything else
@@ -211,8 +217,9 @@ async function startRecording(withMic) {
   // and the pause window is exactly when the worker would otherwise be torn down.
   startKeepAlive();
   // Picker done and recorder armed — tell the worker to run the countdown + go live.
-  // `mic` lets the overlay know whether to show the live level meter.
-  chrome.runtime.sendMessage({ type: "offscreen-armed", video: true, mic: micRecorded });
+  // `mic` lets the overlay know whether to show the live level meter; `surface` scopes
+  // capture/overlay to what the user actually shared (tab/window/monitor).
+  chrome.runtime.sendMessage({ type: "offscreen-armed", video: true, mic: micRecorded, surface: captureSurface });
 }
 
 // Live mic loudness for the on-screen overlay meter. An AnalyserNode taps the mic

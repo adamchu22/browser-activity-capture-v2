@@ -24,11 +24,16 @@ import { navActions } from "./nav-policy.js";
 import { hostOnBlocklist } from "./blocklist.js";
 import { recordingElapsed } from "./clock.js";
 import { serializeSession, applySession } from "./session.js";
+import { inCaptureScope } from "./capture-scope.js";
 
 const state = {
   recording: false,
   arming: false, // picker open / countdown running, before capture goes live
   activeTabId: null, // the tab Start was pressed in — instrumented when we go live
+  // What the user shared, used to scope capture/overlay to the recorded surface only:
+  captureSurface: null, // "browser" (one tab) | "window" | "monitor" (whole screen)
+  captureTabId: null, // for a tab share — the only tab in scope
+  captureWindowId: null, // for a window share — the only window in scope
   paused: false, // EFFECTIVE pause (manual || auto) — what the recorder/overlay see
   manualPaused: false, // user pressed Pause
   autoPaused: false, // active tab is blocklisted → capture suspended automatically
@@ -181,6 +186,17 @@ async function getSettings() {
 // tab through.
 const hostBlocked = (url) => hostOnBlocklist(url, state.blocklist);
 
+// Is this tab part of the surface the user is actually recording? Used to keep the
+// overlay + annotation tools + instrumentation + frames off windows/tabs that aren't
+// in video.webm (a window share must not light up the menu on another window). Pure
+// decision lives in capture-scope.js; this feeds it the live capture context.
+const inScope = (tab) =>
+  inCaptureScope(tab, {
+    surface: state.captureSurface,
+    captureTabId: state.captureTabId,
+    captureWindowId: state.captureWindowId,
+  });
+
 // ---- lifecycle -----------------------------------------------------------
 
 // Pages where content scripts, captureVisibleTab, and the debugger all fail.
@@ -222,6 +238,10 @@ async function instrumentTab(tabId) {
   if (!state.recording || state.tabIds.has(tabId)) return;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!isEligible(tab)) return;
+  // Don't instrument (or mount the overlay on) a tab outside the recorded surface — a
+  // tab share captures only that tab; a window share only that window. Otherwise the
+  // menu + capture would leak onto a window that isn't in video.webm.
+  if (!inScope(tab)) return;
   state.tabIds.add(tabId);
   const tabUrl = redactUrl(tab.url);
   // A page title can carry a token (e.g. a "Reset password: <token>" page) and the
@@ -311,6 +331,9 @@ async function start(triggerTabId, task, purposes) {
     recording: false,
     arming: true,
     activeTabId,
+    captureSurface: null,
+    captureTabId: null,
+    captureWindowId: null,
     paused: false,
     manualPaused: false,
     autoPaused: false,
@@ -386,6 +409,13 @@ async function goLive() {
     tabId = active?.id ?? null;
     state.activeTabId = tabId;
   }
+  // Anchor the recorded surface to this tab/window so inScope() can gate everything
+  // else to it. We can't know which tab/window/monitor Chrome actually captured, so the
+  // tab we go live in is the proxy (see capture-scope.js): a tab share scopes to this
+  // tab, a window share to its window, a screen share to everywhere (v1).
+  state.captureTabId = tabId;
+  const liveTab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
+  state.captureWindowId = liveTab?.windowId ?? null;
   if (tabId != null) await instrumentTab(tabId);
   chrome.runtime.sendMessage({ type: "offscreen-go" }).catch(() => {}); // recorder.start()
   await captureFrame("recording started");
@@ -736,13 +766,13 @@ function stopFrameTimer() {
 async function captureFrame(reason = "") {
   if (!state.recording || state.paused) return;
   try {
-    // captureVisibleTab shoots whatever tab is active — if that's a blocklisted host
-    // (the user switched into it), don't take the screenshot. Best-effort guard on top
-    // of the no-instrument rule, since frames are of the active tab, not a tracked one.
-    if (state.blocklist.length) {
-      const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      if (active && hostBlocked(active.url)) return;
-    }
+    // captureVisibleTab shoots the active tab of the focused window. Only shoot the
+    // surface we're recording: skip a focused tab/window outside the captured scope
+    // (e.g. a window share while another window is focused — its frame wouldn't match
+    // video.webm), and skip a blocklisted host the user switched into.
+    const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (active && !inScope(active)) return;
+    if (active && state.blocklist.length && hostBlocked(active.url)) return;
     const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
     const t = now();
     const file = `frames/${String(t).padStart(10, "0")}.png`;
@@ -911,6 +941,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // Whether the mic track is actually live — set before goLive() sends the first
     // overlay clock, so each overlay knows to show (or hide) the level meter.
     state.micActive = !!msg.mic;
+    // What surface the user shared (tab/window/monitor) — set before goLive() so the
+    // first tab is scoped correctly.
+    state.captureSurface = msg.surface || null;
     runCountdownThenGo();
   }
   // Live microphone loudness from the offscreen recorder (~12/sec). Fan it out to
@@ -1038,6 +1071,9 @@ async function assembleBundle(video) {
     // v2: video is a full screen/window recording that spans every tab; events
     // carry a `tab` id and this legend maps each id to its page.
     capture_scope: "all_tabs",
+    // What the user shared in the picker ("browser" = one tab | "window" | "monitor").
+    // Capture + overlay are scoped to this surface, so `tabs` lists only its tabs.
+    capture_surface: state.captureSurface || null,
     tabs: [...state.tabs.values()],
     video: videoDataUrl ? "video.webm" : null,
     // True if the screen share stopped on its own before the user finished (closed

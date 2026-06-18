@@ -33,6 +33,9 @@ export function serializeSession(state) {
     saveMode: state.saveMode ?? "folder",
     micActive: !!state.micActive,
     videoEndedEarly: !!state.videoEndedEarly,
+    captureSurface: state.captureSurface ?? null,
+    captureTabId: state.captureTabId ?? null,
+    captureWindowId: state.captureWindowId ?? null,
     activeTabId: state.activeTabId ?? null,
     tabIds: [...(state.tabIds || [])],
     tabs: state.tabs ? [...state.tabs.values()] : [],
@@ -60,6 +63,9 @@ export function applySession(state, record) {
   state.saveMode = record.saveMode ?? "folder";
   state.micActive = !!record.micActive;
   state.videoEndedEarly = !!record.videoEndedEarly;
+  state.captureSurface = record.captureSurface ?? null;
+  state.captureTabId = record.captureTabId ?? null;
+  state.captureWindowId = record.captureWindowId ?? null;
   state.activeTabId = record.activeTabId ?? null;
   state.tabIds = new Set(record.tabIds || []);
   state.tabs = new Map((record.tabs || []).map((t) => [t.id, t]));

@@ -20,6 +20,9 @@ function liveState() {
     saveMode: "folder",
     micActive: true,
     videoEndedEarly: false,
+    captureSurface: "window",
+    captureTabId: 7,
+    captureWindowId: 3,
     activeTabId: 7,
     tabIds: new Set([7, 9]),
     tabs: new Map([
@@ -59,6 +62,9 @@ test("serialize → JSON round-trip → apply restores an equivalent state", () 
   assert.deepEqual(restored.blocklist, ["1password.com"]);
   assert.equal(restored.saveMode, "folder");
   assert.equal(restored.micActive, true);
+  assert.equal(restored.captureSurface, "window");
+  assert.equal(restored.captureTabId, 7);
+  assert.equal(restored.captureWindowId, 3);
   assert.equal(restored.activeTabId, 7);
 
   // Collections come back as Set/Map with the right contents
