@@ -4,6 +4,42 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-17 (hardening pass — bugs found by independent review, fixed)
+
+A fan-out review of the new P2/P3/P4 code (three independent passes) surfaced real bugs. The
+durable lessons:
+
+- **Redaction sinks must share ONE secret-name list, or the narrowest one leaks.** The form-body
+  branch of `redactBody` used `(pass|secret|token|key|auth)` while the URL/JSON sinks used the
+  broader `SECRET_KEY_RE`/`SECRET_PARAM_RE` — so `card=`, `cvv=`, `ssn=`, `jwt=`, `sig=` in a
+  form POST leaked into `network.har`. Fix: derive every matcher from shared `SECRET_KEY_WORDS` /
+  `SECRET_PARAM_WORDS` constants. Also: `TOKEN_VALUE_RE` was case-sensitive (lowercase `bearer …`
+  slipped) and didn't handle a URL-encoded space (`Bearer%20…` in a query value) — added the `i`
+  flag + `(?:\s|%20|\+)`. `validate_bundle.py`'s `TOKEN_RE` updated in lockstep. Bare `key` also
+  over-matched `monkey`/`turnkey` → use `api[-_]?key`. This is the same lesson as the original JWT
+  leak: **enumerate EVERY sink and run them all through the SAME rule.** _(Wiki candidate.)_
+- **"Never record on" must block instrumentation, not just HAR rows.** `hostBlocked` was only
+  consulted in the network handler, so a blocklisted host (e.g. a webmail/bank tab) still got the
+  debugger, content script, rrweb DOM, clicks, and screenshots — only its HAR entries were
+  dropped. Real privacy leak against the exact contract the UI promises. Fix: `hostBlocked` now
+  feeds `isEligible` (no attach at all), a tracked tab that navigates INTO a blocklisted host is
+  torn down, and `captureFrame` skips a blocklisted active tab.
+- **Claim a lock BEFORE the first await.** `start()` set `state.arming=true` only after
+  `await getSettings()/clearAll()`, so two rapid Starts both passed the guard → two pickers, and
+  the second `clearAll()` wiped the first take. Set the flag synchronously. Also: the user can
+  close/switch the Start tab during the picker/countdown, so `goLive()` re-resolves the active tab
+  (else it instruments a dead tab and captures nothing); and a worker killed mid-arming orphans the
+  getDisplayMedia stream (stuck "sharing" indicator) — `start()` now `closeOffscreen()`s first.
+- **Generated HTML/SVG must coerce numeric fields too, not just escape strings.** The
+  `frames-annotated.html` label/role/selector paths were `_esc`-escaped, but the coordinate fields
+  (`xpct`, `points[i]`) went in raw — a tampered bundle could inject `<script>` via a coord. Coerce
+  to float (`_num`). Relevant because "analyze someone else's capture" means the bundle is untrusted.
+- **A best-effort step's input reads must be inside the try.** `maybe_transcribe`'s "never fatal"
+  contract was broken by reading `manifest.json`/`transcript.vtt` BEFORE the try — a malformed
+  manifest or non-UTF-8 transcript crashed the whole pack build. Moved the reads in.
+- Validators must know new event kinds: `KNOWN_KINDS` (else spurious "unknown kind" warning) and
+  `check_coverage`'s `CONTENT_KINDS` (else an annotation-only tab's coverage gap goes undetected).
+
 ## 2026-06-17 (P3 — popup redesign, preset download folder, pre-recording countdown)
 
 Three UX items. Two non-obvious things worth not relearning:
