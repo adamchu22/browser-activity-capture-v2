@@ -1,6 +1,83 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-17 (P2 + P4 + P3 all built/unit-tested where possible; NEXT: one live-Chrome run to verify P2 annotations + P3 popup/countdown/folder, and re-verify the tab-scope change)_
+_Last updated: 2026-06-17 (P2 + P3 + P4 + a hardening pass + a security scan all landed this
+session; NEXT: Adam runs ONE live-Chrome session to verify everything — full checklist below)_
+
+---
+
+# 🧪 TEST & REVIEW CHECKLIST — verify this session's changes
+
+**If Adam asks "what needs testing/reviewing," walk him through THIS section.** Everything below
+was built/changed this session (P2 annotations, P3 popup+countdown+folder, P4 auto-transcribe +
+annotation rendering, a bug-hardening pass, and a security scan). Unit tests cover the pure logic;
+the items here need a real Chrome run or a human eyeball because they're shadow-DOM / `chrome.*` /
+visual and can't be unit-tested. Do them in order.
+
+### Step 0 — Pre-flight (sanity, ~10s)
+- [ ] `python3 -m unittest discover -s tests` → **109 passed** (1 skipped).
+- [ ] `node --test tests/test_*.mjs` → **43 passed**.
+- [ ] Load the extension: `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
+      (If rrweb is missing, vendor it — see `extension/FIRST-CAPTURE.md` §0.)
+
+### Step 1 — ONE recording session covers most of it
+Open ~3 tabs (include one SENSITIVE tab, e.g. webmail/1Password, and add its host to the popup's
+**Settings → "Never record on"** before starting). Set a download subfolder in Settings too. Then
+Start and work across the tabs while narrating. Watch for:
+
+- [ ] **P3 popup** — compact: the purpose field is open/prominent at top; blocklist + download
+      folder + "ask where to save" live in a collapsed **Settings** section.
+- [ ] **P3 countdown** — after the "Choose what to share" picker, a **3-2-1** shows in the active
+      tab, THEN recording begins. The recording clock/overlay starts at the END of the count (the
+      countdown seconds must NOT appear inside `video.webm`).
+- [ ] **P3 blocklist enforcement** — switch into the sensitive (blocklisted) tab. It must NOT get
+      the "this tab is being debugged" banner, and nothing from it should be captured.
+- [ ] **P2 Selector** — click **Select** on the overlay pill → hovering outlines the element under
+      the cursor → click marks it (blue box + ring, fades after ~3s).
+- [ ] **P2 Draw** — click **Draw** → drag to draw a freeform stroke (fades after ~3s).
+- [ ] **P2 controls** — **Esc** exits a tool; switching Select↔Draw works; both tools are **disabled
+      while Paused**.
+- [ ] **Arming robustness** — (a) double-click Start fast → only ONE "Choose what to share" picker
+      should open; (b) optional: switch tabs during the 3-2-1 → capture should still attach to the
+      tab you end on (not silently capture nothing).
+- [ ] Finish & export.
+
+### Step 2 — Inspect the exported bundle
+- [ ] **P3 download folder** — the `capture-*.zip` landed in `Downloads/<your subfolder>` with NO
+      "Save as" dialog (because "ask where to save" was off).
+- [ ] `python3 analyze/validate_bundle.py <zip>` → **PASS**, "redaction check passed", "capture
+      coverage OK". (This also exercises the hardened validator + redaction.)
+- [ ] **Tab-scope + blocklist** — open `manifest.json`: `tabs` and `urls_visited` list ONLY the tabs
+      you actually entered, and NOT the blocklisted/sensitive tab.
+- [ ] **P2 events present** — `timeline.json` contains `annotation:select` (with `selector` + `ctx`)
+      and `annotation:draw` (with `points`/`bbox`); a `frames/*.png` shows your mark.
+
+### Step 3 — Build the pack (P4 rendering + auto-transcribe)
+- [ ] `python3 analyze/pack.py <bundle-dir> --out <pack>` then read `<pack>/context.md`:
+      a **`## ✦ Annotations`** section lists what you marked; the marks also show in the **Steps**
+      and **Timeline**. Open **`<pack>/frames-annotated.html`** — the selected element is boxed in
+      BLUE and the freeform draw is traced as a blue line.
+- [ ] **P4 auto-transcribe** — if the bundle's `transcript.vtt` is a stub: with the `.venv` active
+      (so ffmpeg + the ASR engine exist) it should auto-fill the transcript; on bare `python3`
+      (no engine) it should print a "skipping/failed — run transcribe.py" note and still build the
+      pack (NEVER crash). Either outcome is correct.
+
+### Step 4 — Review (no test, just decisions)
+- [ ] **Security scan** — read `SECURITY-SCAN.md` (repo root, untracked). All code findings are
+      fixed; 4 low-severity residual recommendations are in `to-do-current.md` → "Security
+      follow-ups" (remove offscreen WAR, pin/audit deps, hash rrweb, drop `activeTab`). Decide which
+      to action.
+- [ ] **Mic prompt** — if Chrome asks for the mic every recording, that's the one-time grant not
+      sticking (chrome://settings/content/microphone should list the extension as Allowed; macOS
+      Privacy → Microphone → Chrome ON). The "Choose what to share" picker is separate and always
+      appears. (Offer to harden the popup's permission pre-flight if it's nagging.)
+
+**What's lower-risk (already unit-tested, but a live run confirms no regression):** the redaction
+hardening (form-body/provider-key/fragment/`ctx.href`/`tab.title`), `drawGeom` math, nav-policy,
+pack.py annotation rendering, auto-transcribe gating. **What has NO unit test (live is the only
+check):** the overlay pill, Selector/Draw tools, the countdown, the popup, the arming handshake,
+blocklist enforcement, the preset-folder download.
+
+---
 
 ## ▶ NEXT — one live-Chrome run verifies P2 (Selector + Draw) + P3 (popup, countdown, preset download folder) + the tab-scope change. Then the only code left is P4's auto-transcribe + small follow-ups.
 
