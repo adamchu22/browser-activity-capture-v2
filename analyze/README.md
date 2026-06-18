@@ -42,14 +42,25 @@ If the bundle has narration (`manifest.narration_in_video: true`), turn the voic
 into a timestamped `transcript.vtt` with a **local** model — audio never leaves the
 machine. `pack.py` then interleaves the narration with the clicks on the one clock.
 
-```bash
-# one-time: isolated venv (Apple Silicon). ffmpeg must be on PATH.
-uv venv --python 3.12 .venv
-VIRTUAL_ENV=.venv uv pip install mlx-audio faster-whisper
+**One-time setup** (creates `.venv`; `ffmpeg` must be on PATH):
 
+```bash
+bash analyze/setup.sh                                   # macOS / Linux
+# Windows (PowerShell):
+powershell -ExecutionPolicy Bypass -File analyze\setup.ps1
+```
+
+That's it — `pack.py` then **auto-transcribes** narration (it finds `.venv` and
+picks the engine: `parakeet` on Apple Silicon, `faster-whisper` elsewhere). To run
+the transcriber by hand, or pick a non-default engine:
+
+```bash
 # transcribe a bundle in place (writes transcript.vtt into it)
 .venv/bin/python analyze/transcribe.py /path/to/bundle          # default: parakeet
 ```
+
+Under the hood the setup installs `faster-whisper` everywhere (cross-platform) and
+adds `mlx-audio` on Apple Silicon for the faster `parakeet` engine.
 
 Engines:
 - **`parakeet`** (default) — Parakeet-TDT via `mlx-audio` (Apple Silicon). Fastest
