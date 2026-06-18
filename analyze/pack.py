@@ -450,7 +450,8 @@ def render_steps(events: list[dict], blocklist: list[str] | None = None,
 
 
 def _esc(s: str) -> str:
-    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&#39;"))
 
 
 def _point_card(e: dict, frames: list[dict], kind: str) -> str:
@@ -482,7 +483,7 @@ def _point_card(e: dict, frames: list[dict], kind: str) -> str:
         f'  <figcaption><code>{ms(e.get("t",0))}</code> · {caption_kind} '
         f'<b>{_esc(label)}</b>{(" (" + _esc(role) + ")") if role else ""}</figcaption>\n'
         f'  <div class="shot">\n'
-        f'    <img src="{_esc(f)}" loading="lazy" alt="{_esc(label)}">\n'
+        f'    <img src="frames/{_esc(Path(f).name)}" loading="lazy" alt="{_esc(label)}">\n'
         f'    {box}\n'
         f'    <div class="dot{cls}" style="left:{x:g}%;top:{y:g}%"></div>\n'
         f'  </div>\n'
@@ -515,7 +516,7 @@ def _draw_card(e: dict, frames: list[dict]) -> str:
         f'  <figcaption><code>{ms(e.get("t",0))}</code> · ✦ drew on screen'
         f'{(" · " + _esc(region)) if region else ""}</figcaption>\n'
         f'  <div class="shot">\n'
-        f'    <img src="{_esc(f)}" loading="lazy" alt="freeform drawing">\n'
+        f'    <img src="frames/{_esc(Path(f).name)}" loading="lazy" alt="freeform drawing">\n'
         f'    {svg}\n'
         f'  </div>\n'
         f'</figure>'
@@ -743,7 +744,9 @@ def maybe_transcribe(bundle: Path, enabled: bool = True) -> None:
             manifest = json.loads(mpath.read_text(encoding="utf-8"))
         if manifest.get("narration_in_video") is False:
             return  # the manifest says the video has no mic audio
-        video = bundle / (manifest.get("video") or "video.webm")
+        # .name strips any directory — a hostile manifest can't point `video` at a
+        # file outside the bundle (e.g. "../../../.ssh/id_rsa") for ffmpeg to read.
+        video = bundle / Path(manifest.get("video") or "video.webm").name
         if not video.exists():
             return  # no audio to recover
         if not shutil.which("ffmpeg"):

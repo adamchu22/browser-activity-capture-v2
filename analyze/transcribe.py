@@ -134,7 +134,9 @@ def transcribe(bundle: Path, engine: str, model: str, chunk: float,
                glossary_path: Path | None, use_glossary: bool = True) -> int:
     manifest_path = bundle / "manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
-    video = bundle / (manifest.get("video") or "video.webm")
+    # .name strips any directory so a hostile manifest can't point `video` at a file
+    # outside the bundle for ffmpeg to read (path traversal on an untrusted bundle).
+    video = bundle / Path(manifest.get("video") or "video.webm").name
 
     if not video.exists():
         print(f"no video in bundle ({video.name}) — nothing to transcribe", file=sys.stderr)

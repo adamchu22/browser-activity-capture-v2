@@ -114,6 +114,14 @@ class TestAnnotatedFramesHtml(unittest.TestCase):
         self.assertNotIn("<script>", html)
         self.assertIn("0,5 10,10", html)  # the bad point became 0
 
+    def test_frame_path_is_basename_only(self):
+        # A hostile bundle whose frame file escapes the bundle must not produce an
+        # <img src> that reads outside frames/ when the HTML is opened.
+        evil_frames = [{"t": 1000, "file": "../../../../etc/passwd.png"}]
+        html = pack.build_annotated_frames_html([SELECT], evil_frames)
+        self.assertNotIn("../", html)
+        self.assertIn('src="frames/passwd.png"', html)
+
     def test_click_still_red(self):
         # Regression: a normal click keeps the plain (red) box/dot, no 'sel' class.
         click = ev(1000, "click", selector="#a", ctx={"name": "A"}, xpct=5, ypct=5,
