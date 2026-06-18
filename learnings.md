@@ -74,19 +74,26 @@ look. Decisions worth keeping:
   rules outrank the UA `[hidden]{display:none}` rule — so `popup.js` toggling `.hidden`
   silently no-ops without `[hidden]{display:none!important}` in the stylesheet. This was a
   latent bug on the live row even before the redesign.
-- **Mic grant now happens INLINE in the popup — no separate window (2026-06-18, supersedes the
-  old "sub-window, never a tab" preference).** The old flow opened a `type:"popup"`
-  `mic-permission.html` window on every Start. Root cause of Adam's "asks every time": the gate
-  used `navigator.permissions.query({name:"microphone"})`, which is **unreliable in an extension
-  popup** — it returned not-granted even though the grant had persisted (recordings DID get
-  narration), so the window re-opened each time. **Fix:** the popup calls
-  `getUserMedia({audio:true})` directly (`ensureMic()`), which is itself the reliable grant test —
-  already-granted resolves with NO prompt/window, so a returning user is never asked; first-time
-  shows Chrome's prompt over the popup and the grant persists for the extension origin regardless.
-  Lesson: **don't use `permissions.query` for mic in a popup — call `getUserMedia` and treat a
-  prompt-less resolve as "granted."** Caveat to verify live: if a popup closes as the first-time
-  bubble appears, that one Start may not proceed, but the persisted grant makes the next Start
-  silent. `mic-permission.html`/`.js` are now unused (left for now; safe to delete).
+- **Mic grant: detect silently, grant via a real page, remember with a flag (2026-06-18).** Two
+  bugs, two lessons.
+  1. **"Asks every time"** came from gating Start on `navigator.permissions.query({name:"microphone"})`,
+     which is **unreliable in an extension popup** — it returned not-granted even though the grant had
+     persisted (recordings DID get narration), so the window re-opened each Start. Lesson: don't use
+     `permissions.query` for the mic in a popup.
+  2. **First attempt over-corrected** to a pure-inline popup `getUserMedia` grant and **broke in
+     Comet** — the popup probe does nothing there, so Enable-mic was dead and recording was blocked.
+     Lesson: **requesting `getUserMedia` straight from an action popup is not portable** (no prompt in
+     some Chromium forks; the popup can also close when the bubble appears). Use a real extension PAGE
+     to grant.
+  - **Final design (commit 34fd711):** `ensureMic()` is a **silent detector only** (resolves with no
+    prompt when already granted — never relied on to grant). A persisted **`micGrantedOnce`** flag
+    (set on ANY successful grant — inline or via `mic-permission.html`) is the browser-agnostic fast
+    path: once set, Start proceeds with no prompt/window, even in Comet where the probe can't run. The
+    dedicated `type:"popup"` grant page is the reliable fallback, opened only when the flag is unset
+    (first time). The worker clears the flag when a recording's mic fails (revoked) so it self-heals.
+    This supersedes the brief "inline, no window" note above and the old "sub-window, never a tab"
+    rule: it's "no window once granted; a real page the first time." `mic-permission.html`/`.js` are
+    IN USE (the fallback) — don't delete.
 - **Context is now narration-first.** The typed "What are you doing in this recording?" field
   is a collapsed `<details>` toggle (`#whatBox`), no longer prominent; `#task` still flows to
   the worker if filled. The primary intent capture is **spoken**: the pre-roll countdown

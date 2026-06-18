@@ -57,19 +57,21 @@ Three items came out of it — two from his narration, one I found reviewing the
       changing the capture model (the bar is browser chrome; the only way to drop it is to abandon
       `getDisplayMedia` full-screen capture for a `tabCapture`/activeTab path). Closes the old "NEXT —
       hide the Stop sharing bar" item and the `activeTab`-vs-security reconciliation.
-- [x] **Mic-permission grant now happens inline in the popup, no separate window** — DONE 2026-06-18
-      (commit `41aba3a`). **Root cause of "asks every time":** the Start gate used
-      `navigator.permissions.query({name:"microphone"})`, unreliable in a popup — it returned
-      not-granted even though the grant had persisted (his recordings had narration), so the grant
-      window re-opened every Start. Now the popup calls `getUserMedia({audio:true})` via `ensureMic()`,
-      which doubles as the grant test: already-granted → resolves with NO prompt/window (returning users
-      never asked again); first time → Chrome's prompt appears over the popup and the grant persists.
-      Removed `openMicGrant()` + the dead `micGranted()`; `stMicPrompt` copy updated en/es/pt.
-      `mic-permission.html`/`.js` are now unused (left in place; safe to delete in a cleanup).
-  - [ ] **Live-verify:** first-time Start → prompt appears in-context (no separate window) → Allow →
-        records narration; subsequent Starts do NOT re-prompt. If a first-time grant is flaky because
-        the popup closes as the bubble appears, the grant still persists so the 2nd Start works — but
-        confirm the behavior. Also confirm macOS Privacy → Microphone → Chrome is ON (OS-level, separate).
+- [x] **Mic permission: never re-ask once granted (browser-agnostic)** — DONE 2026-06-18
+      (commits `41aba3a`, then `34fd711` fixing a Comet regression). **Root cause of "asks every
+      time":** the Start gate used `navigator.permissions.query({name:"microphone"})`, unreliable in a
+      popup — returned not-granted though the grant persisted, so the window re-opened every Start.
+      **Comet regression (first attempt):** pure-inline popup `getUserMedia` does nothing in Comet, so
+      Enable-mic was dead and recording blocked. **Final design:** `ensureMic()` is a silent DETECTOR
+      only (resolves with no prompt when granted); a persisted **`micGrantedOnce`** flag (set on any
+      successful grant, inline or via the page) is the fast path so Start proceeds with no prompt/window
+      thereafter — even in Comet. The dedicated grant page (`openMicGrant`) is the reliable fallback,
+      opened only the first time. The worker clears the flag if a recording's mic actually fails
+      (revoked) so it self-heals.
+  - [ ] **Live-verify (Comet + Chrome):** first Enable-mic/Start → grant page opens (Comet) or inline
+        prompt (Chrome) → Allow → records narration; EVERY subsequent Start → no prompt, no window.
+        Revoke the mic mid-life → next Start re-prompts. Confirm macOS Privacy → Microphone → Chrome ON.
+        `mic-permission.html`/`.js` are still used (the fallback) — do NOT delete.
 
 ## ⚖️ TODO 2026-06-18 — add license + third-party notices (audit done, files not written)
 
