@@ -4,6 +4,81 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-18 (popup UI redesign — Ethereal Glass dark theme + narration-first context)
+
+Redesigned the extension UI (popup + mic-permission window) to a dark "Ethereal Glass"
+look. Decisions worth keeping:
+
+- **Geist is bundled locally** at `extension/src/fonts/Geist-Variable.woff2` (variable,
+  MIT/Vercel, ~57KB, validated `wOF2` magic). Both `popup.html` and `mic-permission.html`
+  `@font-face` it via a relative `fonts/…` URL — **no network calls** (the default MV3
+  `extension_pages` CSP allows `'self'` resources). Don't switch to a CDN/Google Fonts link.
+- **`[hidden]` needs `!important`.** `.row`/`#rec` set `display:flex`, and author display
+  rules outrank the UA `[hidden]{display:none}` rule — so `popup.js` toggling `.hidden`
+  silently no-ops without `[hidden]{display:none!important}` in the stylesheet. This was a
+  latent bug on the live row even before the redesign.
+- **Mic grant MUST open as a system sub-window, never a tab.** `popup.js` `openMicGrant()`
+  uses `chrome.windows.create({ type: "popup", … })` for `mic-permission.html`. Keep it a
+  `type:"popup"` window — do not switch to `chrome.tabs.create`. (Adam's standing preference.)
+- **Context is now narration-first.** The typed "What are you doing in this recording?" field
+  is a collapsed `<details>` toggle (`#whatBox`), no longer prominent; `#task` still flows to
+  the worker if filled. The primary intent capture is **spoken**: the pre-roll countdown
+  overlay (`content.js`) now shows a caption — "Say out loud what you're about to do / Your
+  narration gives the AI the most context" — to prompt the user to narrate during the 3-2-1.
+  Start CTA moved to the top of the popup; the old "On Start, Chrome asks…" foot hint removed.
+
+## 2026-06-18 (overlay mic level meter — "is the mic hearing me?")
+
+Added a live mic level meter (green equalizer bars) to the on-screen recording
+overlay so the user can confirm narration is being picked up while recording.
+
+- **Where the level is measured vs shown.** The mic stream only exists in the
+  offscreen document (`offscreen.js`), but the overlay lives in each tab's content
+  script. So: `offscreen.js` taps the mic with a Web Audio `AnalyserNode` (NOT
+  connected to any output — no echo; never touches the recorded audio), samples RMS
+  every 80ms (~12/sec), and posts `{type:"mic-level", level}` to the worker.
+  `background.js` fans it out to every instrumented tab (like `broadcastOverlay`),
+  guarded by `state.recording && state.micActive`. `content.js` `overlay.setMicLevel()`
+  drives 5 bars via `transform: scaleY()` (GPU-friendly, per the UI guardrails).
+- **mic on/off plumbing.** `offscreen.js` reports `mic: micRecorded` in
+  `offscreen-armed`; the worker stores `state.micActive` and includes it in
+  `overlayClock()`, so every `start` / `overlay-state` / `is-recording` payload
+  carries it (a tab joining mid-recording renders the right state). When the mic
+  isn't live the overlay shows a dimmed, amber-slashed mic glyph and no bars.
+- **Rest behaviour.** The offscreen loop posts `level:0` whenever
+  `recorder.state !== "recording"` (pre-roll / paused), so the bars fall to a flat
+  baseline instead of freezing. The loop + AudioContext are torn down in
+  `releaseStreams()` (stop/cancel), so there's no traffic once recording ends.
+
+## 2026-06-18 (popup i18n — manual EN/ES/PT language toggle)
+
+Added an in-UI language switch (header, next to the title) for the first three
+audiences: English, Spanish, Portuguese. Notes:
+
+- **NOT `chrome.i18n` / `_locales`.** That follows the *browser's* UI locale and
+  can't be toggled from inside the popup — the whole point here is a user-picked
+  toggle. Instead: a shared string table in `extension/src/i18n.js` (a classic
+  script that sets `window.BAC_I18N` with `t(lang, key, vars)`), `data-i18n` /
+  `data-i18n-ph` / `data-i18n-html` attributes on static elements, and `applyLang()`
+  in `popup.js` that swaps text + lights the active segment. Choice persists in
+  `chrome.storage.local` under `lang`; first-run default is `BAC_I18N.detect()`
+  (browser language narrowed to en/es/pt, else en).
+- **Load order matters.** `i18n.js` is a plain `<script>` loaded *before* the
+  `type="module"` `popup.js`, so `window.BAC_I18N` exists when the module runs.
+  Same pattern on `mic-permission.html`.
+- **Three string surfaces, three mechanisms.** (1) popup + mic-permission share
+  `i18n.js`. (2) `content.js` (the countdown caption) can't import `i18n.js`
+  without adding it to the `content_scripts` array, so it keeps an **inline**
+  `CD_STRINGS` map (en/es/pt) and reads `lang` via `chrome.storage` +
+  `onChanged` — keep `cdBold`/`cdSmall` in `i18n.js` and `CD_STRINGS` in
+  `content.js` in sync. (3) JS-driven strings (status, mic state, folder, pause)
+  route through `T()` and are re-rendered by `applyLang()`.
+- **Rich strings use `data-i18n-html`** (blocklist hint with `<code>`, mic body
+  with `<b>`). Safe because they're authored translations, never user input.
+- Verified: 51 keys, full en/es/pt parity, every `data-i18n*` key defined
+  (node parity check), all four JS files pass `node --check`, and the live
+  toggle was exercised end-to-end in Chromium (EN→ES→PT re-renders correctly).
+
 ## 2026-06-18 (live-run #2 findings + fixes — blocklist, pause clock, ASR, annotation fusion)
 
 A second live run (`outputs/capture-2026-06-18T12-45-56-384Z.zip`) surfaced four things:
