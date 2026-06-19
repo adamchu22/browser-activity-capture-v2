@@ -18,6 +18,7 @@
 
 import { redactHeaders, redactBody, redactUrl, scrubTokens } from "./redact.js";
 import { makeZip } from "./zip.js";
+import { streamFiles, frameMeta } from "./bundle-streams.js";
 import * as db from "./db.js";
 import { bundleReadme, bundleClaudeMd, bundleAgentsMd } from "./bundle-docs.js";
 import { navActions } from "./nav-policy.js";
@@ -48,6 +49,10 @@ const state = {
   urls: new Set(),
   errors: [], // { t, where, message, stack } — surfaced into the bundle
   micActive: false, // is the mic actually being recorded? drives the overlay level meter
+  // Frame METADATA only ({ t, file }) — the PNG bytes live in IndexedDB. This lets
+  // the worker build manifest.frames without ever loading hundreds of screenshots
+  // into memory (that bloat is exactly what the offscreen assembly now avoids).
+  frames: [],
 };
 
 // The recording clock: ms since t0 with all PAUSED time removed, so event/frame
@@ -170,15 +175,11 @@ async function rehydrate() {
 }
 
 async function getSettings() {
-  const {
-    blocklist = [],
-    micEnabled = true,
-    saveMode = "folder",
-  } = await chrome.storage.local.get(["blocklist", "micEnabled", "saveMode"]);
-  // saveMode: "folder" = write into the user's chosen folder (File System Access),
-  // falling back to Downloads if none is set / access lapsed; "ask" = native Save
-  // dialog every time.
-  return { blocklist, micEnabled, saveMode };
+  const { blocklist = [], micEnabled = true } = await chrome.storage.local.get(["blocklist", "micEnabled"]);
+  // Exports always go to the browser's Downloads folder (bulletproof, no size limit,
+  // no folder-picker / "Save as" dialog). The video Blob is written from the offscreen
+  // doc via an object URL — see exportViaOffscreen / offscreen.js assembleAndSave.
+  return { blocklist, micEnabled };
 }
 
 // Suffix-aware host match (so `1password.com` blocks `my.1password.com`) — see
@@ -310,8 +311,20 @@ async function start(triggerTabId, task, purposes) {
   // opens a second picker + countdown, and the second clearAll wipes the first take.
   state.arming = true;
 
-  const { blocklist, micEnabled, saveMode } = await getSettings();
+  // Loss guard: a previous take whose export FAILED is still sitting in IndexedDB.
+  // Starting a new recording would clearAll() and wipe it. Refuse until the user
+  // retries the export or explicitly discards it (the popup surfaces both).
+  try {
+    const { unsavedTake } = await chrome.storage.local.get("unsavedTake");
+    if (unsavedTake) {
+      state.arming = false;
+      return { ok: false, error: "You have an unsaved recording. Retry its export or discard it first." };
+    }
+  } catch {}
+
+  const { blocklist, micEnabled } = await getSettings();
   await db.clearAll();
+  state.frames = []; // fresh take → drop the previous take's frame metadata
   // Reset any offscreen doc left over from a previous (possibly worker-killed) session
   // so a stale getDisplayMedia stream is released and we don't stack a second picker.
   await closeOffscreen();
@@ -346,7 +359,6 @@ async function start(triggerTabId, task, purposes) {
     tabIds: new Set(),
     tabs: new Map(),
     blocklist,
-    saveMode, // "folder" (chosen dir, fallback Downloads) | "ask" (native Save dialog)
     har: new Map(),
     urls: new Set(),
     errors: [],
@@ -433,8 +445,10 @@ async function stop() {
   state.recording = false;
   stopFrameTimer();
   await teardownTabs();
+  // finalizeAndExport owns persistence from here: it KEEPS the recording (IndexedDB
+  // + the crash snapshot) until a save actually succeeds, so a failed export can be
+  // retried instead of silently losing the take. Success/failure clears or marks it.
   await finalizeAndExport();
-  clearPersistedSession();
 }
 
 // Stop the overlay + detach the debugger on every tracked tab. (Stale tab ids — e.g.
@@ -449,73 +463,183 @@ async function teardownTabs() {
   state.tabIds.clear();
 }
 
-// Pull the video back from the offscreen recorder (or null if it's gone), assemble
-// the bundle from IndexedDB + state, and export it. Shared by a normal Finish and
-// by the crash-recovery salvage path.
+function exportFilename() {
+  const stamp = new Date(state.t0).toISOString().replace(/[:.]/g, "-");
+  return `capture-${stamp}.zip`;
+}
+
+// Finalize the recording into a saved bundle. The video and the bulk streams
+// (events.jsonl, frames) are far too big to move through a chrome.runtime message
+// (hard 64MiB cap) or a base64 data: URL — that cap is exactly what silently lost a
+// 17-min recording. So the zip is assembled and written WHERE the bytes already
+// live:
+//   • normal Finish → the OFFSCREEN document: it holds the video Blob, reads the
+//     bulk streams from IndexedDB itself, zips, and writes via File System Access
+//     (chosen folder) or an object-URL download — no size limit, nothing messaged.
+//   • crash salvage (no offscreen doc) → the SERVICE WORKER assembles a video-less
+//     bundle from IndexedDB and downloads it (bounded; no video, the big part).
+// Either way the take is only cleared after the save is confirmed.
 async function finalizeAndExport() {
-  const video = await stopVideo();
-  if (video?.micError && video.micError !== "mic not requested") {
+  if (await offscreenExists()) {
+    await exportViaOffscreen();
+  } else {
+    await salvageExport();
+  }
+}
+
+// Normal Finish: the offscreen doc owns the bytes, so it does the assembly + save.
+async function exportViaOffscreen() {
+  const video = await finalizeVideo(); // { mic, micError, hasVideo } — NO bytes crossed
+  if (video.micError && video.micError !== "mic not requested") {
     logError("offscreen-mic", { message: video.micError });
-    // The mic was wanted but didn't record (likely the grant was revoked). Clear the
-    // "granted once" fast-path flag so the popup re-prompts next time instead of
-    // silently producing another narration-less video.
+    // Mic was wanted but didn't record (grant likely revoked) — clear the fast-path
+    // flag so the popup re-prompts next time instead of producing silent video again.
     chrome.storage.local.remove("micGrantedOnce").catch(() => {});
   }
+  // Normal Finish: frame metadata + HAR are live in worker state, so we build the
+  // manifest WITHOUT pulling any frame/video bytes into the worker (the whole point).
+  const timeline = await db.readAll("timeline");
+  const harEntries = [...state.har.values()];
+  const manifest = buildManifest({
+    hasVideo: video.hasVideo,
+    narrationInVideo: video.mic,
+    micError: video.micError,
+    timeline,
+    frameList: state.frames,
+    harEntries,
+  });
+  const meta = metaFiles(manifest, timeline, harEntries, state.errors);
+  const filename = exportFilename();
+  const res = await requestOffscreenSave(meta, filename);
+  if (res.ok) {
+    await onExportSuccess();
+  } else {
+    await onExportFailure(manifest, res.reason || "save-failed", filename);
+  }
+}
 
-  // MV3 service workers have no URL.createObjectURL, so we build a base64 data: URL
-  // from the zip bytes — handed to either the offscreen FSA writer or chrome.downloads.
+// Salvage path (offscreen doc gone, e.g. browser restart): no video pipeline to
+// pull from, but the structured capture is safe in IndexedDB. Assemble a video-less
+// bundle in the worker and download it. The worker has no URL.createObjectURL, so it
+// uses a base64 data: URL — fine here because without the video the bundle is small.
+async function salvageExport() {
+  const filename = exportFilename();
+  let manifest = null;
   try {
-    const blob = await assembleBundle(video);
-    const bytes = new Uint8Array(await blob.arrayBuffer());
+    // After a worker restart, state may be empty — source everything from IndexedDB.
+    const timeline = await db.readAll("timeline");
+    const rrweb = await db.readAll("rrweb");
+    const frames = await db.readAll("frames");
+    const harEntries = state.har.size ? [...state.har.values()] : await db.readAll("har");
+    manifest = buildManifest({
+      hasVideo: false,
+      narrationInVideo: false,
+      micError: "no video context (salvage)",
+      timeline,
+      frameList: frameMeta(frames),
+      harEntries,
+    });
+    const files = [...metaFiles(manifest, timeline, harEntries, state.errors), ...streamFiles(timeline, rrweb, frames)];
+    const bytes = new Uint8Array(await makeZip(files).arrayBuffer());
     const url = `data:application/zip;base64,${base64FromBytes(bytes)}`;
-    const stamp = new Date(state.t0).toISOString().replace(/[:.]/g, "-");
-    const filename = `capture-${stamp}.zip`;
-    await exportBundle(url, filename);
+    await chrome.downloads.download({ url, filename, saveAs: false });
+    await onExportSuccess();
   } catch (e) {
-    console.error("bundle export failed:", e);
-  } finally {
-    setBadge("");
+    await onExportFailure(manifest || { _filename: filename }, "salvage-download-failed: " + (e?.message || e), filename);
   }
 }
 
-// Route the finished zip to its destination per the save mode:
-//   "folder" → write into the user's chosen folder via the offscreen FSA writer;
-//              fall back to a Downloads download if no folder is set or access
-//              lapsed (and flag the popup to re-pick so access is restored).
-//   "ask"    → chrome.downloads with the native Save dialog (pick anywhere + rename).
-async function exportBundle(url, filename) {
-  if (state.saveMode === "ask") {
-    await chrome.downloads.download({ url, filename, saveAs: true });
-    return;
-  }
-  const res = await saveToChosenFolder(url, filename);
-  if (res.ok) return;
-  // Couldn't use the chosen folder — never lose the recording: save to Downloads.
-  if (res.reason === "permission" || res.reason === "error" || res.reason === "timeout") {
-    // A folder WAS chosen but we couldn't write it — ask the popup to re-pick.
-    chrome.storage.local.set({ exportDirNeedsRegrant: true });
-  }
-  await chrome.downloads.download({ url, filename, saveAs: false });
+// The take saved cleanly — now it's safe to drop it and the recovery snapshot.
+async function onExportSuccess() {
+  await db.clearAll();
+  state.frames = [];
+  clearPersistedSession();
+  await chrome.storage.local.remove(["unsavedTake", "pendingExport", "lastExportFailed"]).catch(() => {});
+  setBadge("");
 }
 
-// Ask the offscreen document (a Window context that can createWritable) to write
-// the bundle into the chosen folder. Resolves {ok, reason}.
-function saveToChosenFolder(dataUrl, filename) {
+// The save FAILED. Do NOT clear anything — the recording stays in IndexedDB so it can
+// be retried or discarded deliberately. Mark it (badge + storage) so the next Start is
+// blocked from wiping it and the popup can surface a Retry/Discard banner. `pendingExport`
+// carries the already-built manifest so a retry (even after a worker restart) can
+// rebuild the bundle from IndexedDB without re-deriving worker state.
+async function onExportFailure(manifest, reason, filename) {
+  logError("export", { message: `bundle export failed (${reason}) — recording kept for retry` });
+  await chrome.storage.local
+    .set({
+      unsavedTake: true,
+      pendingExport: { manifest, filename },
+      lastExportFailed: { reason, filename, at: Date.now() },
+    })
+    .catch(() => {});
+  setBadge("!", "#c0392b");
+}
+
+// Ask the offscreen doc to assemble (its video Blob + the bulk streams it reads from
+// IndexedDB + these small meta files) and download. Resolves { ok, reason }. Only the
+// small text meta files cross the message boundary — well under 64MiB.
+function requestOffscreenSave(metaFiles, filename) {
   return new Promise((resolve) => {
     const listener = (msg) => {
-      if (msg.type === "offscreen-saved") {
+      if (msg.type === "offscreen-save-done") {
         chrome.runtime.onMessage.removeListener(listener);
+        clearTimeout(timer);
         resolve({ ok: !!msg.ok, reason: msg.reason || null });
       }
     };
     chrome.runtime.onMessage.addListener(listener);
-    chrome.runtime.sendMessage({ type: "offscreen-save-file", dataUrl, filename }).catch(() => {});
-    // If the offscreen doc is gone (data-only capture, killed worker), don't hang.
-    setTimeout(() => {
+    chrome.runtime.sendMessage({ type: "offscreen-save", metaFiles, filename }).catch(() => {});
+    // Zipping + writing a large bundle can take a while; allow generously before
+    // giving up (a timeout is treated as a failure → the take is kept for retry).
+    const timer = setTimeout(() => {
       chrome.runtime.onMessage.removeListener(listener);
-      resolve({ ok: false, reason: "timeout" });
-    }, 6000);
+      resolve({ ok: false, reason: "offscreen-timeout" });
+    }, 120000);
   });
+}
+
+// Retry a previously-failed export. The recording is still in IndexedDB; rebuild the
+// bundle from the stored manifest + the streams and download it. (The offscreen doc /
+// video are typically gone by now, so this produces the structured bundle without
+// video — better than losing everything. If video survived, a fresh Finish is better.)
+async function retryExport() {
+  let pending;
+  try {
+    ({ pendingExport: pending } = await chrome.storage.local.get("pendingExport"));
+  } catch {}
+  if (!pending) {
+    // Nothing recorded as pending but the flag may be stale — clear it.
+    await chrome.storage.local.remove(["unsavedTake", "lastExportFailed"]).catch(() => {});
+    setBadge("");
+    return { ok: false, error: "Nothing to retry." };
+  }
+  const { manifest, filename } = pending;
+  try {
+    const rrweb = await db.readAll("rrweb");
+    const frames = await db.readAll("frames");
+    const timeline = await db.readAll("timeline");
+    const harEntries = state.har.size ? [...state.har.values()] : await db.readAll("har");
+    const files = [...metaFiles(manifest, timeline, harEntries, state.errors), ...streamFiles(timeline, rrweb, frames)];
+    const bytes = new Uint8Array(await makeZip(files).arrayBuffer());
+    const url = `data:application/zip;base64,${base64FromBytes(bytes)}`;
+    await chrome.downloads.download({ url, filename, saveAs: false });
+    await onExportSuccess();
+    return { ok: true };
+  } catch (e) {
+    logError("export-retry", { message: "retry export failed: " + (e?.message || e) });
+    setBadge("!", "#c0392b");
+    return { ok: false, error: "Retry failed — the recording is still kept." };
+  }
+}
+
+// Deliberately throw away an unsaved take (the user chose Discard over Retry).
+async function discardTake() {
+  await db.clearAll();
+  state.frames = [];
+  clearPersistedSession();
+  await chrome.storage.local.remove(["unsavedTake", "pendingExport", "lastExportFailed"]).catch(() => {});
+  setBadge("");
+  return { ok: true };
 }
 
 // ---- overlay controls: pause / resume / restart / cancel -----------------
@@ -611,6 +735,7 @@ async function restart() {
   state.pausedAccum = 0; // fresh take → fresh clock, no banked pause time
   state.pauseStartedAt = 0;
   state.har = new Map(); // db.clearAll() above already wiped the frames store
+  state.frames = []; // and the frame metadata mirror
   state.errors = [];
   state.videoEndedEarly = false;
   // Reseed the URL set from the still-instrumented tabs' current pages.
@@ -653,7 +778,9 @@ async function cancel() {
   state.tabIds.clear();
   chrome.runtime.sendMessage({ type: "offscreen-cancel" }).catch(() => {}); // discard video, release streams
   await db.clearAll();
+  state.frames = [];
   clearPersistedSession(); // nothing to recover — drop the crash-recovery snapshot
+  await chrome.storage.local.remove(["unsavedTake", "pendingExport", "lastExportFailed"]).catch(() => {});
   setBadge("");
 }
 
@@ -784,6 +911,7 @@ async function captureFrame(reason = "") {
     // 30-min capture is hundreds of PNGs, and — more importantly — if the worker is
     // ever torn down, in-memory frames would vanish. IDB survives a worker restart.
     await db.append("frames", { t, file, dataUrl });
+    state.frames.push({ t, file }); // metadata mirror for the manifest (no bytes)
   } catch (e) {
     // captureVisibleTab can fail on chrome:// pages etc., or hit Chrome's
     // ~2/sec quota when an event frame lands next to a timer frame — non-fatal.
@@ -981,6 +1109,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       );
       return true;
     }
+    // Recover from a failed export (loss guard): re-save the kept take, or discard it.
+    if (c === "retry-export") {
+      rehydrated.then(() => retryExport()).then(sendResponse);
+      return true;
+    }
+    if (c === "discard-take") {
+      rehydrated.then(() => discardTake()).then(sendResponse);
+      return true;
+    }
     rehydrated.then(() => {
       if (c === "pause") pause();
       else if (c === "resume") resume();
@@ -1032,37 +1169,40 @@ async function startVideo(withMic) {
   }
 }
 
-// Resolves with { dataUrl, mic } — mic reports whether the recording actually
-// contains microphone narration (false if the user disabled it or it was
-// blocked), so the manifest can record the truth.
-function stopVideo() {
+// Stop the recorder and finalize the video Blob INSIDE the offscreen document — the
+// bytes stay there (it'll zip + save them). Resolves with only the small status the
+// worker needs for the manifest: { mic, micError, hasVideo }. No video bytes cross
+// the message boundary (that handoff is exactly what the 64MiB cap broke).
+function finalizeVideo() {
   return new Promise((resolve) => {
     const listener = (msg) => {
-      if (msg.type === "offscreen-video") {
+      if (msg.type === "offscreen-finalized") {
         chrome.runtime.onMessage.removeListener(listener);
-        resolve({ dataUrl: msg.dataUrl || null, mic: !!msg.mic, micError: msg.micError || null });
+        clearTimeout(timer);
+        resolve({ mic: !!msg.mic, micError: msg.micError || null, hasVideo: !!msg.hasVideo });
       }
     };
     chrome.runtime.onMessage.addListener(listener);
-    chrome.runtime.sendMessage({ type: "offscreen-stop" });
-    // don't hang export if video failed
-    setTimeout(() => resolve({ dataUrl: null, mic: false, micError: "offscreen timed out" }), 4000);
+    chrome.runtime.sendMessage({ type: "offscreen-finalize" }).catch(() => {});
+    // Don't hang export if the offscreen doc never answers (proceed video-less).
+    const timer = setTimeout(() => resolve({ mic: false, micError: "offscreen timed out", hasVideo: false }), 8000);
   });
 }
 
 // ---- bundle assembly -----------------------------------------------------
+//
+// Assembly is split so the heavy streams never touch the worker on a normal Finish:
+//   • buildManifest + metaFiles (here) produce the SMALL text files (manifest.json,
+//     network.har, transcript, errors, README/CLAUDE/AGENTS) from worker state.
+//   • the BULK files (timeline.json, events.jsonl, frames/*.png, video.webm) are
+//     added by the offscreen doc from IndexedDB + its video Blob (bundle-streams.js).
+// Inputs are passed in explicitly so the normal path can source frame metadata + HAR
+// from worker state (no byte loads) while salvage/retry source them from IndexedDB.
 
-async function assembleBundle(video) {
-  const videoDataUrl = video?.dataUrl || null;
-  const narrationInVideo = !!video?.mic;
-  const timeline = (await db.readAll("timeline")).map(({ seq, ...e }) => e);
-  const rrweb = (await db.readAll("rrweb")).map(({ seq, ...e }) => e);
-  // Frames live in IndexedDB (autoincrement seq = capture order). Read them back
-  // here for the manifest list, the counts, and the file bytes.
-  const frames = (await db.readAll("frames")).map(({ seq, ...f }) => f);
-  const duration = timeline.length ? timeline[timeline.length - 1].t : now();
-
-  const manifest = {
+function buildManifest({ hasVideo, narrationInVideo, micError, timeline, frameList, harEntries }) {
+  const last = timeline.length ? timeline[timeline.length - 1] : null;
+  const duration = last ? last.t : now();
+  return {
     bundle_version: "0.2",
     capture_id: `capture-${new Date(state.t0).toISOString()}`,
     t0_wall: new Date(state.t0).toISOString(),
@@ -1079,18 +1219,18 @@ async function assembleBundle(video) {
     // Capture + overlay are scoped to this surface, so `tabs` lists only its tabs.
     capture_surface: state.captureSurface || null,
     tabs: [...state.tabs.values()],
-    video: videoDataUrl ? "video.webm" : null,
+    video: hasVideo ? "video.webm" : null,
     // True if the screen share stopped on its own before the user finished (closed
     // the shared window / hit "Stop sharing") — video.webm ends early but the rest
     // of the capture (events, network, mic) ran to the end. See errors.json.
     video_ended_early: !!state.videoEndedEarly,
     // Whether video.webm contains the user's microphone narration (mixed in on
     // the same clock). If true, transcribing video.webm yields t0-aligned cues.
-    narration_in_video: videoDataUrl ? narrationInVideo : false,
+    narration_in_video: hasVideo ? !!narrationInVideo : false,
     // When narration is absent, why — so the bundle self-diagnoses instead of the
     // reason being trapped in the offscreen document's console. null if narration
     // recorded fine.
-    narration_error: narrationInVideo ? null : (video?.micError || null),
+    narration_error: narrationInVideo ? null : (micError || null),
     transcript: "transcript.vtt",
     browser: { name: "Chrome", version: navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] || "?" },
     tool_versions: { extension: "0.2.0", rrweb: "2.0.0" },
@@ -1104,31 +1244,31 @@ async function assembleBundle(video) {
       // not the pixels: a secret visible on screen is visible in video.webm/frames.
       visual_streams_redacted: false,
     },
-    frames: frames.map((f) => ({ t: f.t, file: f.file })),
+    frames: (frameList || []).map((f) => ({ t: f.t, file: f.file })),
     counts: {
       events: timeline.length,
-      network: [...state.har.values()].length,
-      frames: frames.length,
+      network: harEntries.length,
+      frames: (frameList || []).length,
       errors: state.errors.length,
     },
   };
+}
 
+// The small, worker-built bundle files (everything except the bulk streams + video).
+function metaFiles(manifest, timeline, harEntries, errors) {
   const har = {
     log: {
       version: "1.2",
       creator: { name: "browser-activity-capture", version: "0.1.0" },
       comment: `t0_wall=${manifest.t0_wall}. Auth headers and cookies redacted before write.`,
-      entries: [...state.har.values()].map(({ _t, _start, _tab, requestId, ...e }) => e),
+      entries: harEntries.map(({ _t, _start, _tab, requestId, ...e }) => e),
     },
   };
-
-  const files = [
+  return [
     { name: "manifest.json", data: JSON.stringify(manifest, null, 2) },
-    { name: "timeline.json", data: JSON.stringify(timeline, null, 2) },
-    { name: "events.jsonl", data: rrweb.map((e) => JSON.stringify(e)).join("\n") },
     { name: "network.har", data: JSON.stringify(har, null, 2) },
     { name: "transcript.vtt", data: buildTranscript(timeline) },
-    { name: "errors.json", data: JSON.stringify(state.errors, null, 2) },
+    { name: "errors.json", data: JSON.stringify(errors || [], null, 2) },
     { name: "README.md", data: bundleReadme(manifest) },
     // Self-driving instructions: the bundle alone is enough to analyze, with no
     // external pipeline. CLAUDE.md and AGENTS.md carry the same guidance for
@@ -1136,11 +1276,6 @@ async function assembleBundle(video) {
     { name: "CLAUDE.md", data: bundleClaudeMd(manifest) },
     { name: "AGENTS.md", data: bundleAgentsMd(manifest) },
   ];
-  for (const f of frames) files.push({ name: f.file, data: dataUrlToBytes(f.dataUrl) });
-  if (videoDataUrl) files.push({ name: "video.webm", data: dataUrlToBytes(videoDataUrl) });
-
-  await db.clearAll();
-  return makeZip(files);
 }
 
 // The extension captures narration timing as `speech` timeline events if a
@@ -1169,14 +1304,6 @@ function buildTranscript(timeline) {
 
 // bundleReadme, bundleClaudeMd, bundleAgentsMd are imported from ./bundle-docs.js
 // (pure manifest→markdown functions, unit-tested in tests/test_bundle_docs.mjs).
-
-function dataUrlToBytes(dataUrl) {
-  const b64 = dataUrl.split(",")[1];
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
 
 // On every worker cold start, recover a recording that was live when a previous
 // worker instance died (see rehydrate()). A no-op when nothing was recording.

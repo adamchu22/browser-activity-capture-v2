@@ -30,7 +30,6 @@ export function serializeSession(state) {
     task: state.task ?? null,
     purposes: Array.isArray(state.purposes) ? state.purposes : [],
     blocklist: Array.isArray(state.blocklist) ? state.blocklist : [],
-    saveMode: state.saveMode ?? "folder",
     micActive: !!state.micActive,
     videoEndedEarly: !!state.videoEndedEarly,
     captureSurface: state.captureSurface ?? null,
@@ -60,7 +59,6 @@ export function applySession(state, record) {
   state.task = record.task ?? null;
   state.purposes = Array.isArray(record.purposes) ? record.purposes : [];
   state.blocklist = Array.isArray(record.blocklist) ? record.blocklist : [];
-  state.saveMode = record.saveMode ?? "folder";
   state.micActive = !!record.micActive;
   state.videoEndedEarly = !!record.videoEndedEarly;
   state.captureSurface = record.captureSurface ?? null;

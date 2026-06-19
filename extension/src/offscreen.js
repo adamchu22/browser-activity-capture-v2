@@ -28,10 +28,13 @@
 // sound; that also sidesteps the tabCapture "audio is muted unless you pipe it
 // back" gotcha.)
 
-import { loadExportDir } from "./fsdir.js";
+import { makeZip } from "./zip.js";
+import { streamFiles } from "./bundle-streams.js";
+import * as db from "./db.js";
 
 let recorder = null;
 let chunks = [];
+let finalizedVideo = null; // the finished video Blob, held HERE until the bundle is zipped + saved
 let streams = []; // every MediaStream we open, so stop() can release them all
 let activeTracks = []; // the live screen+mic tracks, reused by restart without re-prompting
 let micRecorded = false; // did the final recording actually include the mic?
@@ -85,8 +88,8 @@ chrome.runtime.onMessage.addListener(async (msg) => {
       reportError("MediaRecorder start failed: " + (e?.message || e), e?.stack);
     }
   }
-  if (msg.type === "offscreen-stop") {
-    stopRecording();
+  if (msg.type === "offscreen-finalize") {
+    finalizeRecording();
   }
   // Overlay verbs, mirrored onto the MediaRecorder so the video pauses,
   // restarts, and discards in lockstep with the event/network streams.
@@ -106,34 +109,63 @@ chrome.runtime.onMessage.addListener(async (msg) => {
   if (msg.type === "offscreen-cancel") {
     cancelRecording();
   }
-  // Write the finished bundle into the user's chosen folder via the File System
-  // Access handle (this doc is a Window context, so it can createWritable(); the
-  // service worker can't). Replies offscreen-saved {ok, reason}; the worker falls
-  // back to a Downloads download when ok is false.
-  if (msg.type === "offscreen-save-file") {
-    saveToChosenDir(msg.dataUrl, msg.filename);
+  // Assemble the FULL bundle here and save it. This is the heart of the 64MiB fix:
+  // the video Blob never leaves this document and the bulk streams are read straight
+  // from IndexedDB, so nothing large is ever sent through a chrome.runtime message.
+  // The worker passes only the small text meta files; we add timeline.json,
+  // events.jsonl, the frame PNGs, and video.webm. Replies offscreen-save-done.
+  if (msg.type === "offscreen-save") {
+    assembleAndSave(msg.metaFiles, msg.filename);
   }
 });
 
-async function saveToChosenDir(dataUrl, filename) {
-  const reply = (r) => chrome.runtime.sendMessage({ type: "offscreen-saved", ...r });
+async function assembleAndSave(metaFiles, filename) {
+  const reply = (r) => chrome.runtime.sendMessage({ type: "offscreen-save-done", ...r });
+  let zipBlob;
   try {
-    const dir = await loadExportDir();
-    if (!dir) return reply({ ok: false, reason: "no-dir" }); // never picked → Downloads
-    // queryPermission (no gesture here): 'granted' if still authorized this session
-    // or persisted; otherwise it lapsed (e.g. browser restart) → caller re-prompts.
-    const perm = await dir.queryPermission({ mode: "readwrite" });
-    if (perm !== "granted") return reply({ ok: false, reason: "permission" });
-    const blob = await (await fetch(dataUrl)).blob(); // data: URL → bytes
-    const fileHandle = await dir.getFileHandle(filename, { create: true });
-    const writable = await fileHandle.createWritable();
-    await writable.write(blob);
-    await writable.close();
-    reply({ ok: true });
+    // The bulk streams live in IndexedDB (written by the worker as the recording ran).
+    const timeline = await db.readAll("timeline");
+    const rrweb = await db.readAll("rrweb");
+    const frames = await db.readAll("frames");
+    const files = [...metaFiles, ...streamFiles(timeline, rrweb, frames)];
+    if (finalizedVideo && finalizedVideo.size) {
+      files.push({ name: "video.webm", data: new Uint8Array(await finalizedVideo.arrayBuffer()) });
+    }
+    zipBlob = makeZip(files);
   } catch (e) {
-    reportError("fsdir-save failed: " + (e?.message || e), e?.stack);
-    reply({ ok: false, reason: "error" });
+    reportError("bundle assembly failed: " + (e?.message || e), e?.stack);
+    return reply({ ok: false, reason: "assemble-failed" });
   }
+
+  // Download to the browser's Downloads folder via an object URL from this DOM context
+  // (the service worker can't createObjectURL, and chrome.downloads isn't available to
+  // an offscreen doc). An object-URL <a download> streams the Blob with NO size limit —
+  // the fix for the lost 17-min recording — and needs no folder picker or Save dialog.
+  try {
+    triggerDownload(zipBlob, filename);
+    finalizedVideo = null;
+    return reply({ ok: true });
+  } catch (e) {
+    reportError("download failed: " + (e?.message || e), e?.stack);
+    return reply({ ok: false, reason: "download-failed" });
+  }
+}
+
+// Download a Blob from the offscreen document via a same-origin object URL + a
+// programmatic <a download> click. Revoked after a long delay so a large file has
+// time to finish streaming to disk before the URL is released.
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 300000);
 }
 
 async function startRecording(withMic) {
@@ -269,17 +301,26 @@ function stopMicMeter() {
   }
 }
 
-function stopRecording() {
+// Stop the recorder and hold the finished video Blob HERE (finalizedVideo) for the
+// upcoming offscreen-save. Reports only status to the worker — no bytes — so the
+// worker can build the manifest. The video bytes go into the zip in this document.
+function finalizeRecording() {
   if (!recorder) {
-    chrome.runtime.sendMessage({ type: "offscreen-video", dataUrl: null, mic: false, micError });
+    finalizedVideo = null;
+    chrome.runtime.sendMessage({ type: "offscreen-finalized", mic: false, micError, hasVideo: false });
     return;
   }
-  recorder.onstop = async () => {
-    const blob = new Blob(chunks, { type: "video/webm" });
-    const dataUrl = await blobToDataUrl(blob);
+  recorder.onstop = () => {
+    finalizedVideo = new Blob(chunks, { type: "video/webm" });
+    chunks = [];
     releaseStreams();
     recorder = null;
-    chrome.runtime.sendMessage({ type: "offscreen-video", dataUrl, mic: micRecorded, micError });
+    chrome.runtime.sendMessage({
+      type: "offscreen-finalized",
+      mic: micRecorded,
+      micError,
+      hasVideo: finalizedVideo.size > 0,
+    });
   };
   recorder.stop();
 }
@@ -316,6 +357,7 @@ function cancelRecording() {
     } catch {}
   }
   chunks = [];
+  finalizedVideo = null; // discard any finished take too
   releaseStreams();
   activeTracks = [];
   recorder = null;
@@ -326,12 +368,4 @@ function releaseStreams() {
   stopKeepAlive(); // recording is over — let the worker idle out normally
   streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
   streams = [];
-}
-
-function blobToDataUrl(blob) {
-  return new Promise((resolve) => {
-    const r = new FileReader();
-    r.onloadend = () => resolve(r.result);
-    r.readAsDataURL(blob);
-  });
 }

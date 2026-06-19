@@ -17,7 +17,6 @@ function liveState() {
     task: "test a checkout flow",
     purposes: ["ux", "improve"],
     blocklist: ["1password.com"],
-    saveMode: "folder",
     micActive: true,
     videoEndedEarly: false,
     captureSurface: "window",
@@ -60,7 +59,6 @@ test("serialize → JSON round-trip → apply restores an equivalent state", () 
   assert.equal(restored.task, "test a checkout flow");
   assert.deepEqual(restored.purposes, ["ux", "improve"]);
   assert.deepEqual(restored.blocklist, ["1password.com"]);
-  assert.equal(restored.saveMode, "folder");
   assert.equal(restored.micActive, true);
   assert.equal(restored.captureSurface, "window");
   assert.equal(restored.captureTabId, 7);
@@ -90,7 +88,6 @@ test("applySession tolerates a partial/empty record", () => {
   const restored = applySession({}, { recording: true });
   assert.equal(restored.recording, true);
   assert.equal(restored.t0, 0);
-  assert.equal(restored.saveMode, "folder");
   assert.ok(restored.tabIds instanceof Set);
   assert.equal(restored.tabIds.size, 0);
   assert.ok(restored.tabs instanceof Map);

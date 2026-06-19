@@ -235,7 +235,7 @@
       }
       #stop:hover { background: linear-gradient(180deg, rgba(255,255,255,0.12), transparent 50%), #202024; }
       #pause { flex: 1; }
-      #enableMic, #chooseFolder { width: 100%; }
+      #enableMic { width: 100%; }
       #enableMic { margin-top: 8px; }
 
       /* ── Collapsible sections ─────────────────────────────────── */
@@ -310,6 +310,21 @@
       </div>
     </div>
 
+    <!-- Loss guard: shown ONLY when the last recording's export failed. The take is
+         still safe in IndexedDB; the user retries the save or deliberately discards
+         it. Start stays blocked until one is chosen, so the take can't be overwritten.
+         (English-only by design — an error path, kept out of the i18n surface.) -->
+    <div id="exportFail" hidden
+         style="margin:6px 0 10px;padding:10px 12px;border:1px solid #b91c1c;border-radius:8px;background:rgba(185,28,28,0.12)">
+      <div id="exportFailMsg" style="font-size:12px;line-height:1.4;margin-bottom:8px">
+        Your last recording wasn’t saved. It’s still here — retry the save or discard it.
+      </div>
+      <div class="row">
+        <button id="retryExport" type="button">Retry save</button>
+        <button id="discardTake" type="button">Discard</button>
+      </div>
+    </div>
+
     <!-- Primary action lives at the top — everything below it is optional context. -->
     <button id="rec">
       <span class="rec-dot"></span>
@@ -358,11 +373,7 @@
       </div>
       <div class="field">
         <label data-i18n="onFinish">When a recording finishes</label>
-        <label class="check"><input type="radio" name="savemode" value="folder" checked /> <span data-i18n="saveFolder">Auto-save to a folder</span></label>
-        <button id="chooseFolder" type="button" style="margin-top:7px" data-i18n="chooseFolder">Choose folder…</button>
-        <div id="folderName" class="hint"></div>
-        <label class="check" style="margin-top:8px"><input type="radio" name="savemode" value="ask" /> <span data-i18n="saveAsk">Ask me where to save &amp; name it each time</span></label>
-        <div class="hint" data-i18n="askHint">“Ask” opens your file explorer to pick any location and rename — every time.</div>
+        <div class="hint" data-i18n="saveDownloads">The capture is saved to your browser’s Downloads folder.</div>
       </div>
       <div id="saved" class="hint" style="min-height:14px"></div>
     </details>

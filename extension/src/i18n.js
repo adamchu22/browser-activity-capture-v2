@@ -38,6 +38,7 @@
       blockHint:
         "Switching to one of these tabs auto-pauses the whole recording (video too) until you leave it. A parent domain (e.g. <code>1password.com</code>) also covers its subdomains.",
       onFinish: "When a recording finishes",
+      saveDownloads: "The capture is saved to your browser’s Downloads folder.",
       saveFolder: "Auto-save to a folder",
       chooseFolder: "Choose folder…",
       saveAsk: "Ask me where to save & name it each time",
@@ -94,6 +95,7 @@
       blockHint:
         "Cambiar a una de estas pestañas pausa automáticamente toda la grabación (también el video) hasta que la dejes. Un dominio principal (p. ej. <code>1password.com</code>) también cubre sus subdominios.",
       onFinish: "Cuando termina una grabación",
+      saveDownloads: "La captura se guarda en la carpeta de Descargas de tu navegador.",
       saveFolder: "Guardar automáticamente en una carpeta",
       chooseFolder: "Elegir carpeta…",
       saveAsk: "Preguntarme dónde guardar y nombrarlo cada vez",
@@ -150,6 +152,7 @@
       blockHint:
         "Mudar para uma dessas abas pausa automaticamente toda a gravação (o vídeo também) até você sair. Um domínio principal (ex. <code>1password.com</code>) também cobre seus subdomínios.",
       onFinish: "Quando uma gravação termina",
+      saveDownloads: "A captura é salva na pasta de Downloads do seu navegador.",
       saveFolder: "Salvar automaticamente em uma pasta",
       chooseFolder: "Escolher pasta…",
       saveAsk: "Perguntar onde salvar e nomear a cada vez",
