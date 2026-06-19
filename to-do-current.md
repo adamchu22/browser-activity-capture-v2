@@ -60,15 +60,26 @@ commits, 82 node / 125 python green. Diagnosis + durable lessons in `learnings.m
 
 Prioritized; pick a track and say "fix now" to action it (same batch-by-batch flow as A).
 
-**Track B — redaction leaks into STRUCTURED sinks (privacy; bundles get handed to other agents):**
-- [ ] **B1 — `contenteditable`/`role=textbox` → rrweb uncovered.** rrweb runs `maskAllInputs:true`
-      only (no contenteditable); `scrubNode` is shape-only. Free-form PII typed into Gmail/Slack/
-      Notion lands verbatim in `events.jsonl`. Add a `maskTextFn` or a contenteditable-aware pass.
-- [ ] **B2 — `describe()`/`accessibleName()` can pull a secret into `ctx` on the secret-input path**
-      via `aria-labelledby` → referenced `textContent`. Scrub name/section; suppress `ctx.name` when
-      `isSecretInput`.
-- [ ] **B3 — SPA `pushState`/`replaceState` emit no `nav` event** (`content.js` listens only for
-      `popstate`) → timeline URL context drifts on most modern apps; those URLs skip `redactUrl`.
+**Track B — redaction leaks into STRUCTURED sinks — ✅ DONE 2026-06-19 (built + unit-tested; NEEDS LIVE VERIFY).**
+Three bisected commits, 93 node / 125 python green. Diagnosis in `learnings.md` 2026-06-19.
+- [x] **B1 — `contenteditable`/`role=textbox` → rrweb uncovered.** rrweb's `maskAllInputs` covers
+      `<input>`/`<textarea>` only, so free-form text typed into Gmail/Slack/Notion landed verbatim in
+      `events.jsonl`. Fix: pass rrweb a `maskTextSelector` + `maskTextFn` (new pure `src/mask-text.js`,
+      mirrored into `content.js`) so editable text is masked on the snapshot AND every typing mutation
+      (rrweb re-tests via `closest()` per characterData change; masking inherits to descendants).
+- [x] **B2 — `describe()` can pull a secret into `ctx` via `aria-labelledby` → referenced
+      `textContent`.** Fix: new `redactCtx()` in `redact.js` scrubs href+name+section at the worker's
+      `appendTimeline` chokepoint; `content.js` drops `ctx.name` entirely on a secret input. Browser
+      harness gained a secret-input fixture.
+- [x] **B3 — SPA `pushState`/`replaceState`/hash changes emit no `nav` event.** content.js only
+      listens for `popstate`. The worker already sees these via `tabs.onUpdated` (changeInfo.url, no
+      status), so `navActions` now returns `emitnav` and the handler appends a redacted nav + frame.
+      Gated on absence of `changeInfo.status` so a full-page nav isn't double-logged.
+- [ ] **LIVE VERIFY (interactive — no unit test):** (a) type free-form text into a contenteditable
+      editor (Gmail/Slack/Notion compose) → it shows as `‹redacted›` in `events.jsonl`, never verbatim;
+      (b) on an SPA (e.g. a React-router app) click through routes → `timeline.json` has a `nav` event
+      per route change with the URL redacted; (c) a secret input with an `aria-labelledby` → its `ctx`
+      in `timeline.json` has no `name` and no token.
 
 **Track C — analyze pipeline never-crash / DoS on malformed-untrusted bundles (fully unit-testable):**
 - [ ] **C1 — `build_context` crashes on a truncated/non-UTF-8/empty `timeline.json`** (`pack.py:585`+)

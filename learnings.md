@@ -4,6 +4,48 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-19 (HARDENING Track B — redaction leaks into STRUCTURED sinks)
+
+Closed the three Track B items from the failure-mode review — secrets/PII reaching
+the structured outputs (events.jsonl, timeline.json) that get handed to other
+agents. Built + unit-tested (3 bisected commits, 93 node / 125 python green);
+needs a live verify. Durable lessons:
+
+- **rrweb `maskAllInputs` does NOT cover rich editors.** It masks `<input>`/
+  `<textarea>` values only — contenteditable and ARIA textboxes (Gmail, Slack,
+  Notion, most modern app bodies) record their text verbatim into `events.jsonl`,
+  including anything the user types. Fix: pass rrweb `maskTextSelector`
+  (`[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="searchbox"]`)
+  + a `maskTextFn`. Verified against the vendored rrweb that this masks **both** the
+  initial snapshot and every incremental typing mutation: the characterData path
+  re-runs the selector via `closest()` per change, and `needsMask` inherits to
+  descendants — so a match on an editor root covers its whole subtree. `maskTextFn`
+  only fires on already-masked text, so returning a clean `‹redacted›` marker is
+  safe and more legible than rrweb's default char-by-char `*`. Lesson: a library's
+  "mask inputs" flag is scoped to real form controls; rich editors are a separate
+  surface you must opt in for. (Pure bits in `src/mask-text.js`, mirrored into
+  `content.js` like the redact/annotate helpers.)
+- **Semantic context (`ctx`) is another URL/secret sink — enumerate its fields.**
+  `describe()` builds a ctx per event; `accessibleName()` follows `aria-labelledby`
+  to a referenced node's `textContent` and `sectionFor()` reads a landmark label /
+  nearest heading — any of which can carry a token. Only `ctx.href` was being
+  scrubbed. Fix: one `redactCtx()` (href+name+section) at the `appendTimeline`
+  chokepoint, plus `content.js` suppressing `ctx.name` entirely on a secret input
+  (so a labelledby on a password field can't leak its referenced text at all). Same
+  recurring lesson as the URL-sink and form-body leaks: **a value lands in more
+  fields than the obvious one — scrub them all at one chokepoint.**
+- **`tabs.onUpdated` is the worker-side signal for SPA navigation.** content.js
+  listens only for `popstate`, so `history.pushState`/`replaceState` and hash
+  changes emitted no `nav` event — the timeline's URL context drifted across a whole
+  SPA session and those URLs skipped `redactUrl`. Monkeypatching `history` from the
+  content script wouldn't work (isolated world — the page keeps its own `history`
+  reference). The clean fix is worker-side: Chrome fires `tabs.onUpdated` with
+  `changeInfo.url` and **no status transition** for an in-place URL change, so
+  `navActions` returns `emitnav` for that case and the worker appends a redacted nav
+  (going through the canonical `redactUrl`). Gated on the *absence* of
+  `changeInfo.status` because a full-page nav (status:loading/complete) is already
+  nav'd by the reloaded content script — gating on status avoids a double-log.
+
 ## 2026-06-19 (HARDENING PASS — a deep failure-mode review + Track A fixes; the "looks healthy while losing data" class)
 
 A focused 4-angle review (capture worker, content script, analyze pipeline,

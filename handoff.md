@@ -1,19 +1,38 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-19 (HARDENING Track A — a deep failure-mode review found a class of SILENT
-data-loss bugs on long/large captures; fixed + unit-tested in 5 bisected commits, 82 node / 125
-python green, NEEDS A LIVE VERIFY. Tracks B/C/D from the review are a prioritized backlog in
-`to-do-current.md`. Prior: 64MiB fix LIVE-VERIFIED (109 MB capture downloaded), Downloads-only save,
-loss guard, surface-scope + pause-network + mic.)_
+_Last updated: 2026-06-19 (HARDENING Track B — closed the three structured-sink redaction leaks
+(contenteditable→rrweb, aria-labelledby→ctx, SPA pushState nav); built + unit-tested in 3 bisected
+commits, 93 node / 125 python green, NEEDS A LIVE VERIFY. Prior same day: Track A silent data-loss
+fixes (also needs live verify); 64MiB fix LIVE-VERIFIED (109 MB capture downloaded).)_
 
-## ▶ NEXT — START TRACK D (AI-usability of outputs). Then Track B (redaction leaks) + C (analyze crash-proofing) remain; Track A still needs a live verify.
+## ▶ NEXT — Track C (analyze crash-proofing) or Track D (AI-usability). Tracks A + B both still need a LIVE VERIFY.
 
-**Track D is the agreed next step (Adam, 2026-06-19).** It's the "make the outputs totally usable for
-AI, don't overload with disconnected context" ask. Full D1–D7 checklist in `to-do-current.md` →
-"HARDENING backlog". Headline items: D1 capture HAR response bodies (unlocks the migration outcome),
-D2 one authoritative API-calls table, D3 de-duplicate Steps/Timeline/transcript (the exact overload
-worry), D4 demote raw `events.jsonl`, D6 surface the new capture-issue flags in pack.py. B + C stay
-queued; live-verify Track A when there's a Chrome session.
+Track B is done (built + unit-tested) — see the verify checklist in `to-do-current.md` → Track B.
+Remaining backlog tracks in `to-do-current.md` → "HARDENING backlog":
+- **Track C** — analyze pipeline never-crash on malformed/untrusted bundles (C1 guard `build_context`
+  loads, C2 subprocess timeouts, C3 O(n²) `nearest_frame`, C4 validator type guards + TOKEN_RE
+  lockstep). Fully unit-testable, no Chrome needed.
+- **Track D** — AI-usability of outputs (the "totally usable, don't overload" ask): D1 HAR response
+  bodies (unlocks the migration outcome), D2 one API-calls table, D3 de-dup Steps/Timeline/transcript,
+  D4 demote raw `events.jsonl`, D6 surface the new capture-issue flags in pack.py.
+- **Live verify** Tracks A + B together when there's a Chrome session (both are interactive-only).
+
+## ✅ DONE 2026-06-19 — HARDENING Track B (structured-sink redaction leaks) — built + unit-tested; NEEDS LIVE VERIFY
+
+The three Track B items — secrets/PII reaching the STRUCTURED outputs (events.jsonl, timeline.json)
+that get handed to other agents. 3 bisected commits, 93 node / 125 python green. Diagnosis +
+durable lessons in `learnings.md` 2026-06-19.
+- **B1** rrweb's `maskAllInputs` misses contenteditable / role=textbox → free-form text typed into
+  Gmail/Slack/Notion landed verbatim in events.jsonl. Now masked via `maskTextSelector` + `maskTextFn`
+  (new `src/mask-text.js`, mirrored into content.js) — snapshot AND typing mutations.
+- **B2** `describe()` could pull a secret into `ctx.name`/`section` via `aria-labelledby`→textContent.
+  New `redactCtx()` scrubs href+name+section at the worker chokepoint; content.js drops `ctx.name` on
+  secret inputs.
+- **B3** SPA `pushState`/hash changes emitted no `nav` event (content.js is popstate-only). The worker
+  now emits a redacted nav for an in-place URL change (`navActions` → `emitnav`, gated on no status).
+- **Live verify:** type into a contenteditable editor → `‹redacted›` in events.jsonl; click SPA routes
+  → a nav per route in timeline.json (URL redacted); a secret input with aria-labelledby → ctx has no
+  name/token.
 
 ## ✅ DONE 2026-06-19 — HARDENING Track A (silent data-loss) — built + unit-tested; NEEDS LIVE VERIFY
 
