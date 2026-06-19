@@ -81,15 +81,26 @@ Three bisected commits, 93 node / 125 python green. Diagnosis in `learnings.md` 
       per route change with the URL redacted; (c) a secret input with an `aria-labelledby` → its `ctx`
       in `timeline.json` has no `name` and no token.
 
-**Track C — analyze pipeline never-crash / DoS on malformed-untrusted bundles (fully unit-testable):**
-- [ ] **C1 — `build_context` crashes on a truncated/non-UTF-8/empty `timeline.json`** (`pack.py:585`+)
-      — unguarded `json.loads`/`read_text` despite the "never crash" promise. Guard every load.
-- [ ] **C2 — no `timeout=` on the transcribe/ffmpeg subprocesses** (`pack.py:825`, `transcribe.py:53`)
-      — a wedged ffmpeg hangs the pipeline forever; the "never fatal" contract doesn't cover hangs.
-- [ ] **C3 — `nearest_frame` is O(events × frames)** (4 call sites) — minutes of CPU at 100k events;
-      sort once + bisect.
-- [ ] **C4 — validator type guards + lockstep.** Non-dict / non-numeric timeline elements crash
-      `validate_bundle.py`; `TOKEN_RE` has drifted from `redact.js` (JWT `{10,}` vs `{6,}`).
+**Track C — analyze pipeline never-crash / DoS on malformed-untrusted bundles — ✅ DONE 2026-06-19
+(built + unit-tested; fully unit-testable, no live verify needed).** 5 bisected commits, 165 python /
+93 node green. Diagnosis in `learnings.md` 2026-06-19.
+- [x] **C1 — `build_context`/`build_pack` never crash on a malformed bundle.** New `_load_json`
+      (best-effort load + top-level type check vs a default) and `_read_text` (errors="replace") are
+      the chokepoint; timeline/manifest/HAR/errors/urls/tabs/frames sanitised to shape; `ms()` coerces
+      non-numeric `t`. (`tests/test_pack_robust.py`.)
+- [x] **C2 — `timeout=` on both transcribe subprocesses.** `pack.py` auto-transcribe child
+      (`TRANSCRIBE_TIMEOUT_S=1800`, catches `TimeoutExpired` → keeps stub) + `transcribe.py` ffmpeg
+      (`FFMPEG_TIMEOUT_S=900`). "Never fatal" now covers hangs. (tests in
+      `test_autotranscribe.py`/`test_selftest.py`.)
+- [x] **C3 — `nearest_frame` O(log n).** Cached sorted `(times, files)` index (memoised by object
+      identity) + bisect; the nearest time is always one of the two straddling the target. Also drops
+      non-dict frames / coerces non-numeric `t`. (`tests/test_nearest_frame.py`, incl. brute-force
+      cross-check.)
+- [x] **C4 — validator type guards + TOKEN_RE lockstep.** `validate_bundle.py` + `check_coverage.py`
+      guard non-dict manifest, non-dict/non-numeric/bool timeline elements, non-string frame `file`,
+      unhashable tab, non-UTF-8 files. Validator JWT pattern realigned to redact.js (`{6,}` + optional
+      3rd segment) so a short JWT the extension scrubs can't slip past the gate.
+      (`tests/test_validate_robust.py`.)
 
 **Track D — AI-usability of outputs (the "totally usable, don't overload" ask):**
 - [ ] **D1 — capture HAR response bodies** (size-capped, redacted, same-origin JSON) — the migration

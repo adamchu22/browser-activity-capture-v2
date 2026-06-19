@@ -4,6 +4,50 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-19 (HARDENING Track C — analyze pipeline never-crash on malformed bundles)
+
+The analyze side promises "never crash on a bad bundle" (a recipient may run it on
+an untrusted/partial zip), but several paths violated it. Fixed in 5 bisected
+commits (165 python / 93 node green); no Chrome needed. Durable lessons:
+
+- **A "never crash" contract needs a single load chokepoint, not scattered
+  `json.loads`.** `build_context`/`build_pack` had ~6 separate unguarded
+  `json.loads`/`read_text` calls — each a crash on a truncated / non-UTF-8 /
+  missing / wrong-type file. The clean fix is one `_load_json(path, default)` that
+  (a) tolerates missing/IO/parse errors AND (b) **type-checks the parsed top level
+  against the default's type** (a `timeline.json` that parses to `{}` instead of
+  `[]` is just as dangerous as one that doesn't parse). After that, every consumer
+  also has to drop wrong-shaped *elements* (`[e for e in timeline if isinstance(e,
+  dict)]`) and coerce numerics — the top-level guard alone isn't enough.
+
+- **"Never fatal" must explicitly include "never hang."** `maybe_transcribe` caught
+  every exception but had no `timeout=` on its `subprocess.run`, so a wedged ffmpeg/
+  engine blocked the build forever — a silent failure mode the broad `except`
+  couldn't catch. `subprocess.run(timeout=…)` kills the child and raises
+  `TimeoutExpired` (a `SubprocessError`); catch it for a clear message. Lesson: any
+  "best-effort, never fatal" subprocess needs a timeout, not just a try/except.
+
+- **O(events × frames) hides until the recording is long.** `nearest_frame`
+  re-scanned every frame on every event (4 call sites) — fine in tests, minutes of
+  CPU on a 100k-event capture. Sort the frame times once and bisect; the nearest in
+  a sorted list is always one of the two straddling the target. Memoised the sorted
+  index by `id(frames)` (with an identity recheck to defend against id reuse) so the
+  many calls in one build share it without threading a new arg through 4 signatures.
+
+- **The validator is the LAST tool you can let crash.** `validate_bundle.py`'s job
+  is to flag bad bundles, so it must survive the worst ones — yet it assumed a dict
+  manifest, dict timeline entries, numeric `t`, string frame `file`, hashable tab,
+  and UTF-8 files. `bool` is the sneaky one: `isinstance(True, int)` is True, so a
+  `"t": true` event passed the numeric check and silently sorted as 0/1 — guard with
+  `isinstance(t, bool) or not isinstance(t, (int, float))`.
+
+- **Two regexes that must agree WILL drift — assert it.** The validator's `TOKEN_RE`
+  (the redaction gate) and the extension's `redact.js` `TOKEN_VALUE_RE` (the scrubber)
+  were "kept in lockstep" by a comment, but the JWT shape had drifted (`{10,}` vs
+  `{6,}` + optional 3rd segment). Net effect: a short JWT the extension *would*
+  redact could leak through and the gate wouldn't notice. The gate must detect at
+  least everything the scrubber claims to remove, or it gives false assurance.
+
 ## 2026-06-19 (HARDENING Track B — redaction leaks into STRUCTURED sinks)
 
 Closed the three Track B items from the failure-mode review — secrets/PII reaching

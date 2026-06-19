@@ -1,21 +1,35 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-19 (HARDENING Track B — closed the three structured-sink redaction leaks
-(contenteditable→rrweb, aria-labelledby→ctx, SPA pushState nav); built + unit-tested in 3 bisected
-commits, 93 node / 125 python green, NEEDS A LIVE VERIFY. Prior same day: Track A silent data-loss
-fixes (also needs live verify); 64MiB fix LIVE-VERIFIED (109 MB capture downloaded).)_
+_Last updated: 2026-06-19 (HARDENING Track C — analyze pipeline never-crash on malformed/untrusted
+bundles; 5 bisected commits, 165 python / 93 node green, NO live verify needed (fully unit-tested).
+Prior same day: Track B structured-sink redaction leaks + Track A silent data-loss (both built +
+unit-tested, NEED A LIVE VERIFY); 64MiB fix LIVE-VERIFIED.)_
 
-## ▶ NEXT — Track C (analyze crash-proofing) or Track D (AI-usability). Tracks A + B both still need a LIVE VERIFY.
+## ▶ NEXT — Track D (AI-usability). Tracks A + B still need a LIVE VERIFY (interactive); Track C is fully done.
 
-Track B is done (built + unit-tested) — see the verify checklist in `to-do-current.md` → Track B.
-Remaining backlog tracks in `to-do-current.md` → "HARDENING backlog":
-- **Track C** — analyze pipeline never-crash on malformed/untrusted bundles (C1 guard `build_context`
-  loads, C2 subprocess timeouts, C3 O(n²) `nearest_frame`, C4 validator type guards + TOKEN_RE
-  lockstep). Fully unit-testable, no Chrome needed.
+Track C is done (built + unit-tested, no Chrome needed). Remaining backlog in `to-do-current.md` →
+"HARDENING backlog":
 - **Track D** — AI-usability of outputs (the "totally usable, don't overload" ask): D1 HAR response
   bodies (unlocks the migration outcome), D2 one API-calls table, D3 de-dup Steps/Timeline/transcript,
   D4 demote raw `events.jsonl`, D6 surface the new capture-issue flags in pack.py.
 - **Live verify** Tracks A + B together when there's a Chrome session (both are interactive-only).
+
+## ✅ DONE 2026-06-19 — HARDENING Track C (analyze never-crash) — built + unit-tested (NO live verify)
+
+The analyze pipeline (`pack.py`, `validate_bundle.py`, `check_coverage.py`, `transcribe.py`) is now
+hardened to never crash / never hang on a malformed or untrusted bundle. 5 bisected commits, 165
+python / 93 node green. Diagnosis + durable lessons in `learnings.md` 2026-06-19.
+- **C1** (`326af59`) `build_context`/`build_pack` used unguarded `json.loads`/`read_text`. New
+  `_load_json` (load + top-level type check vs default) + `_read_text` (errors="replace") chokepoint;
+  all sub-shapes (timeline/manifest/HAR/errors/urls/tabs/frames) sanitised; `ms()` coerces non-numeric.
+- **C3** (`f1dd7d0`) `nearest_frame` was O(events × frames). Now a cached sorted `(times, files)` index
+  (memoised by object identity) + bisect → O(log n) per call.
+- **C2** (`42f8d91`) `timeout=` added to both transcribe subprocesses (pack.py 1800s, ffmpeg 900s) so
+  "never fatal" also covers hangs; `TimeoutExpired` caught → keeps the stub transcript.
+- **C4** (`eb94fc1` guards + `3de3f23` lockstep) validator/coverage type guards (non-dict manifest,
+  non-dict/non-numeric/bool timeline elements, non-string frame file, unhashable tab, non-UTF-8 files);
+  validator JWT pattern realigned to redact.js (`{6,}` + optional 3rd seg) so a short JWT slips past
+  nothing.
 
 ## ✅ DONE 2026-06-19 — HARDENING Track B (structured-sink redaction leaks) — built + unit-tested; NEEDS LIVE VERIFY
 
