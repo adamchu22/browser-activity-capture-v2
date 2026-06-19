@@ -25,8 +25,20 @@ test("THE FIX: a tracked tab finishing a navigation → reattach", () => {
   assert.deepEqual(navActions({ status: "complete" }, base), ["reattach"]);
 });
 
-test("THE FIX: an in-place URL change (SPA pushState) on a tracked tab → reattach", () => {
-  assert.deepEqual(navActions({ url: "https://app/x" }, base), ["reattach"]);
+test("THE FIX: an in-place URL change (SPA pushState) on a tracked tab → reattach + emitnav", () => {
+  // No status transition = the content script isn't torn down and won't emit a nav,
+  // so the worker must log it (B3). reattach re-arms belt-and-suspenders.
+  assert.deepEqual(navActions({ url: "https://app/x" }, base), ["reattach", "emitnav"]);
+});
+
+test("B3: a full-page nav (status:loading + url) → reattach only, NOT emitnav", () => {
+  // The reloaded content script emits its own nav on startCapture, so emitting one
+  // here too would double-log. Gate emitnav on the absence of a status field.
+  assert.deepEqual(navActions({ status: "loading", url: "https://app/y" }, base), ["reattach"]);
+});
+
+test("B3: emitnav requires a tracked tab (an untracked SPA url change is ignored)", () => {
+  assert.deepEqual(navActions({ url: "https://app/z" }, { ...base, tracked: false, active: false }), []);
 });
 
 test("PRIVACY: a background (inactive) untracked tab loading → do NOTHING", () => {

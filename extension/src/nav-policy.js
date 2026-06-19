@@ -18,12 +18,24 @@
 //
 // See learnings.md 2026-06-17. Returns an array (actions are independent):
 //   "reattach"   — tracked tab (re)loaded / changed URL: re-arm content capture.
+//   "emitnav"    — tracked tab changed URL in place (SPA pushState / hash): the
+//                  worker must log a nav event because content.js won't.
 //   "instrument" — active, untracked tab finished loading: start capturing it.
 export function navActions(changeInfo, { recording, eligible, tracked, active }) {
   const actions = [];
   if (!recording || !eligible) return actions;
   if (tracked && (changeInfo.status === "complete" || changeInfo.url)) {
     actions.push("reattach");
+  }
+  // SPA route changes (history.pushState/replaceState) and hash changes fire
+  // onUpdated with changeInfo.url but NO status transition, and do NOT tear down
+  // the content script — and content.js only listens for `popstate`, so it never
+  // emits a nav for them. Without this the timeline loses every in-app route change
+  // on a modern SPA, and those URLs never reach redactUrl. A full-page nav carries
+  // changeInfo.status ("loading"/"complete") and the reloaded content script emits
+  // its own nav, so gate on the ABSENCE of status to avoid a duplicate.
+  if (tracked && changeInfo.url && !changeInfo.status) {
+    actions.push("emitnav");
   }
   if (!tracked && active && changeInfo.status === "complete") {
     actions.push("instrument");

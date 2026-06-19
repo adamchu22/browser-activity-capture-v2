@@ -891,6 +891,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   // attached. Fix for capture dying after the first navigation on server-
   // rendered apps (see nav-policy.js / learnings.md).
   if (actions.includes("reattach")) reattachTab(tabId, tab);
+  // "emitnav": an in-place URL change (SPA pushState/replaceState or a hash change).
+  // content.js only emits a nav on popstate, so without this the timeline loses the
+  // route change. appendTimeline redacts the URL; reattach already updated the
+  // legend/urls set. Grab a frame too, mirroring the click/nav frame trigger.
+  if (actions.includes("emitnav") && tab?.url) {
+    appendTimeline({ kind: "nav", url: tab.url, tab: tabId });
+    captureFrame("nav");
+  }
   // "instrument": the active tab finished loading and isn't tracked yet (e.g. the
   // recording tab navigated off a chrome:// page). Tabs the user switches into
   // are instrumented in onActivated below.
