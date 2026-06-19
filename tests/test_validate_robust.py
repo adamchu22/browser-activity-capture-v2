@@ -74,6 +74,32 @@ class TestValidateNeverCrashes(unittest.TestCase):
         self._validate({"manifest.json": '{"a":', "timeline.json": "[{"})
 
 
+class TestTokenLockstep(unittest.TestCase):
+    """C4 — the validator's TOKEN_RE must catch exactly what redact.js scrubs. The
+    JWT shape had drifted ({10,} vs redact.js {6,}), so a short JWT that the
+    extension would redact could slip past the gate unflagged."""
+
+    SHORT_JWT = "eyJabcdef.ghijklmn"  # 6/8-char segments — redact.js {6,} catches it
+    THREE_SEG_JWT = "eyJhdr123.eyJwl456.sigpart789"
+
+    def test_short_jwt_now_flagged(self):
+        self.assertRegex(self.SHORT_JWT, vb.TOKEN_RE)
+
+    def test_three_segment_jwt_flagged(self):
+        self.assertRegex(self.THREE_SEG_JWT, vb.TOKEN_RE)
+
+    def test_too_short_jwt_not_flagged(self):
+        # < 6 chars in a segment — neither tool treats this as a token.
+        self.assertNotRegex("eyJab.cd", vb.TOKEN_RE)
+
+    def test_end_to_end_short_jwt_fails_validation(self):
+        d = _bundle({
+            "manifest.json": '{"t0_wall":"x","duration_ms":1,"sync_mode":"self_record"}',
+            "timeline.json": f'[{{"t":1,"kind":"nav","url":"https://x/?jwt={self.SHORT_JWT}"}}]',
+        })
+        self.assertEqual(vb.validate(d), 1)  # FAIL — leaked token caught
+
+
 class TestAnalyzeCoverageNeverCrashes(unittest.TestCase):
     def test_non_dict_elements_skipped(self):
         r = cc.analyze_coverage([1, "x", None, {"t": 5, "kind": "click", "tab": 1}])

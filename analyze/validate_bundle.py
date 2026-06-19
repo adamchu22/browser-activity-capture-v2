@@ -49,7 +49,7 @@ SECRET_HEADER_RES = [
 # Case-insensitive and tolerant of a URL-encoded space.
 TOKEN_RE = re.compile(
     "|".join([
-        r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",      # JWT
+        r"eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]+)?",  # JWT
         r"Bearer(?:\s|%20|\+)+[A-Za-z0-9._-]{12,}",         # bearer token
         r"(?:AKIA|ASIA)[A-Z0-9]{16}",                       # AWS access key id
         r"[sr]k_(?:live|test)_[A-Za-z0-9]{16,}",            # Stripe secret/restricted key
