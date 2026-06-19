@@ -34,7 +34,7 @@ test("zipOverflow: exactly at the boundary fits", () => {
 });
 
 test("makeZip: normal bundle produces a valid local-file-header signature", async () => {
-  const blob = makeZip([
+  const blob = await makeZip([
     { name: "a.txt", data: "hello" },
     { name: "b.bin", data: new Uint8Array([1, 2, 3, 4]) },
   ]);
@@ -45,12 +45,20 @@ test("makeZip: normal bundle produces a valid local-file-header signature", asyn
   assert.deepEqual([...bytes.slice(-22, -18)], [0x50, 0x4b, 0x05, 0x06]);
 });
 
-test("makeZip: throws ZIP_TOO_LARGE (not a corrupt zip) when a file overflows 32-bit", () => {
+test("makeZip: rejects with ZIP_TOO_LARGE (not a corrupt zip) when a file overflows 32-bit", async () => {
   // A fake oversized entry: makeZip reads data.length, so a stub with a huge length
-  // exercises the guard without allocating 4 GiB.
+  // exercises the guard without allocating 4 GiB. makeZip is async → it rejects.
   const fakeHuge = { length: ZIP_MAX_BYTES + 10 };
-  assert.throws(
+  await assert.rejects(
     () => makeZip([{ name: "video.webm", data: fakeHuge }]),
     (e) => e.code === "ZIP_TOO_LARGE"
   );
+});
+
+test("makeZip: accepts a Blob part and CRCs it by streaming (matches the Uint8Array path)", async () => {
+  const payload = new Uint8Array(Array.from({ length: 20_000 }, (_, i) => i & 0xff));
+  const fromBytes = new Uint8Array(await (await makeZip([{ name: "v.bin", data: payload }])).arrayBuffer());
+  const fromBlob = new Uint8Array(await (await makeZip([{ name: "v.bin", data: new Blob([payload]) }])).arrayBuffer());
+  // Identical archives → identical CRC/sizes regardless of Uint8Array-vs-Blob input.
+  assert.deepEqual([...fromBytes], [...fromBlob]);
 });

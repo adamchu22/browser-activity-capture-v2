@@ -129,9 +129,12 @@ async function assembleAndSave(metaFiles, filename) {
     const frames = await db.readAll("frames");
     const files = [...metaFiles, ...streamFiles(timeline, rrweb, frames)];
     if (finalizedVideo && finalizedVideo.size) {
-      files.push({ name: "video.webm", data: new Uint8Array(await finalizedVideo.arrayBuffer()) });
+      // Pass the video Blob straight through (NOT new Uint8Array(arrayBuffer())): makeZip
+      // streams it in slices for the CRC, so the whole video is never pinned in the JS
+      // heap and the output Blob is disk-backed. This is what stops large captures OOMing.
+      files.push({ name: "video.webm", data: finalizedVideo });
     }
-    zipBlob = makeZip(files);
+    zipBlob = await makeZip(files);
   } catch (e) {
     reportError("bundle assembly failed: " + (e?.message || e), e?.stack);
     return reply({ ok: false, reason: "assemble-failed" });

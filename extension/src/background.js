@@ -540,7 +540,7 @@ async function salvageExport() {
       harEntries,
     });
     const files = [...metaFiles(manifest, timeline, harEntries, state.errors), ...streamFiles(timeline, rrweb, frames)];
-    const bytes = new Uint8Array(await makeZip(files).arrayBuffer());
+    const bytes = new Uint8Array(await (await makeZip(files)).arrayBuffer());
     const url = `data:application/zip;base64,${base64FromBytes(bytes)}`;
     await chrome.downloads.download({ url, filename, saveAs: false });
     await onExportSuccess();
@@ -620,7 +620,7 @@ async function retryExport() {
     const timeline = await db.readAll("timeline");
     const harEntries = state.har.size ? [...state.har.values()] : await db.readAll("har");
     const files = [...metaFiles(manifest, timeline, harEntries, state.errors), ...streamFiles(timeline, rrweb, frames)];
-    const bytes = new Uint8Array(await makeZip(files).arrayBuffer());
+    const bytes = new Uint8Array(await (await makeZip(files)).arrayBuffer());
     const url = `data:application/zip;base64,${base64FromBytes(bytes)}`;
     await chrome.downloads.download({ url, filename, saveAs: false });
     await onExportSuccess();

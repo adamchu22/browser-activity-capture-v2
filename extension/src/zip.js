@@ -40,11 +40,30 @@ export function zipOverflow(entries) {
   return null;
 }
 
-function crc32(bytes) {
-  let crc = ~0;
+function crc32Update(crc, bytes) {
   for (let i = 0; i < bytes.length; i++) {
     crc ^= bytes[i];
     for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return crc;
+}
+
+function crc32(bytes) {
+  return ~crc32Update(~0, bytes) >>> 0;
+}
+
+// CRC a Blob WITHOUT holding it all in memory — read it in slices and fold each
+// into the running CRC. This is what lets video.webm (the biggest artifact, often
+// GBs) be zipped as a Blob part: only one slice is ever resident, and the original
+// Blob (disk-backed by the browser) is handed straight to the output without a heap
+// copy. The old path did `new Uint8Array(await video.arrayBuffer())`, pinning the
+// whole video in the JS heap and OOMing large captures.
+async function crc32Blob(blob, sliceSize = 8 * 1024 * 1024) {
+  let crc = ~0;
+  for (let off = 0; off < blob.size; off += sliceSize) {
+    const end = Math.min(off + sliceSize, blob.size);
+    const buf = await blob.slice(off, end).arrayBuffer();
+    crc = crc32Update(crc, new Uint8Array(buf));
   }
   return ~crc >>> 0;
 }
@@ -55,17 +74,21 @@ function dosDateTime(d = new Date()) {
   return { time, date };
 }
 
-// files: Array<{ name: string, data: Uint8Array | string }>
-export function makeZip(files) {
-  // Encode names + string data once, then guard BEFORE writing a single byte. We
-  // have no Zip64 path, so anything past the 32-bit limits would corrupt the
-  // archive — throw instead so the caller keeps the take (see header note).
-  const prepared = files.map((f) => ({
-    nameBytes: enc.encode(f.name),
-    data: typeof f.data === "string" ? enc.encode(f.data) : f.data,
-  }));
+// files: Array<{ name: string, data: Uint8Array | string | Blob }>
+// Async because a Blob part (the video) is streamed in slices for its CRC so it's
+// never fully resident in the JS heap. Returns a Blob ready for chrome.downloads.
+export async function makeZip(files) {
+  // Encode names + string data once, size each part, then guard BEFORE writing a
+  // single byte. We have no Zip64 path, so anything past the 32-bit limits would
+  // corrupt the archive — throw instead so the caller keeps the take (see header).
+  const hasBlob = typeof Blob !== "undefined";
+  const prepared = files.map((f) => {
+    const data = typeof f.data === "string" ? enc.encode(f.data) : f.data;
+    const isBlob = hasBlob && data instanceof Blob;
+    return { nameBytes: enc.encode(f.name), data, isBlob, size: isBlob ? data.size : data.length };
+  });
   const overflow = zipOverflow(
-    prepared.map((p) => ({ nameLen: p.nameBytes.length, dataLen: p.data.length }))
+    prepared.map((p) => ({ nameLen: p.nameBytes.length, dataLen: p.size }))
   );
   if (overflow) {
     const err = new Error("ZIP_TOO_LARGE: " + overflow);
@@ -78,8 +101,8 @@ export function makeZip(files) {
   let offset = 0;
   const { time, date } = dosDateTime();
 
-  for (const { nameBytes, data } of prepared) {
-    const crc = crc32(data);
+  for (const { nameBytes, data, isBlob, size } of prepared) {
+    const crc = isBlob ? await crc32Blob(data) : crc32(data);
 
     const local = new DataView(new ArrayBuffer(30));
     local.setUint32(0, 0x04034b50, true); // local file header sig
@@ -89,12 +112,12 @@ export function makeZip(files) {
     local.setUint16(10, time, true);
     local.setUint16(12, date, true);
     local.setUint32(14, crc, true);
-    local.setUint32(18, data.length, true); // compressed size
-    local.setUint32(22, data.length, true); // uncompressed size
+    local.setUint32(18, size, true); // compressed size
+    local.setUint32(22, size, true); // uncompressed size
     local.setUint16(26, nameBytes.length, true);
     local.setUint16(28, 0, true); // extra len
 
-    chunks.push(new Uint8Array(local.buffer), nameBytes, data);
+    chunks.push(new Uint8Array(local.buffer), nameBytes, data); // data: Uint8Array OR Blob — both valid Blob parts
 
     const cen = new DataView(new ArrayBuffer(46));
     cen.setUint32(0, 0x02014b50, true); // central dir sig
@@ -105,13 +128,13 @@ export function makeZip(files) {
     cen.setUint16(12, time, true);
     cen.setUint16(14, date, true);
     cen.setUint32(16, crc, true);
-    cen.setUint32(20, data.length, true);
-    cen.setUint32(24, data.length, true);
+    cen.setUint32(20, size, true);
+    cen.setUint32(24, size, true);
     cen.setUint16(28, nameBytes.length, true);
     cen.setUint32(42, offset, true); // local header offset
     central.push({ header: new Uint8Array(cen.buffer), name: nameBytes });
 
-    offset += 30 + nameBytes.length + data.length;
+    offset += 30 + nameBytes.length + size;
   }
 
   const centralStart = offset;
