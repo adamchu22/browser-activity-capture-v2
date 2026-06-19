@@ -82,16 +82,30 @@ Three items came out of it — two from his narration, one I found reviewing the
         mid-life → next Start re-prompts. Confirm macOS Privacy → Microphone → Chrome/Comet ON.
         `mic-permission.*` AND `request-mic.*` are both in use — do NOT delete.
 
-## ⚖️ TODO 2026-06-18 — add license + third-party notices (audit done, files not written)
+## ⏸️ ON HOLD 2026-06-18 — license + third-party notices (audit done, files written THEN reverted)
 
-Adam wants to license the project. Provenance audit is **done** (findings below); the
-files just need writing + committing. Not legal advice — confirm with a lawyer before relying on it.
+**Status: deliberately deferred. Do NOT re-add license files until Adam says so.** The four files
+were written + committed once (proprietary `LICENSE`, `rrweb.LICENSE`, `Geist-LICENSE.txt`,
+`THIRD_PARTY_NOTICES.md`) then **reverted** (commits were local-only/unpushed, removed via
+`git reset --hard ff5f615` — no trace, no force-push). Audit below stays valid; only the act of
+publishing a license is on hold. Not legal advice — confirm with a lawyer before relying on it.
 
-**Decision (Adam, 2026-06-18):** proprietary / **all-rights-reserved**, permission-required —
-commercial use reserved to Adam; nobody may use without his explicit approval. NOTE: a true
-OSI open-source license *can't* restrict commercial use to one party, so this is source-available/
-proprietary, not "open source." (Alternatives if he changes his mind: PolyForm Noncommercial — free
-non-commercial use, commercial reserved; or BSL 1.1 — restricted now, opens after a change date.)
+**Why on hold (Adam, 2026-06-18):** "hold off on the license right now in case someone tries to sue
+me." The concern is legal exposure while the holding entity doesn't exist yet and ownership isn't
+settled. Holding off is low-cost: copyright is automatic, so the code is "all rights reserved" by
+default with no `LICENSE` file; the only deferred obligation is the rrweb/Geist third-party notices,
+which only bite at *distribution* time (and Adam isn't distributing yet).
+
+**Decision when resumed (Adam, 2026-06-18):** proprietary / **all-rights-reserved**, fully closed
+(not source-available) — Adam sees this as an embeddable/sellable component for AI-agent onboarding &
+self-serve feedback. Holder: **an entity Adam controls that doesn't exist yet**; until it does, the
+notice would read "Copyright (c) 2026 Adam Chubak" (author copyright vests automatically), then a
+one-page IP assignment (Adam → entity) on formation. (Alternatives if he changes his mind: PolyForm
+Noncommercial — source-visible, free non-commercial, commercial reserved; or BSL 1.1 — restricted
+now, opens after a change date.)
+
+**Resume trigger:** revisit before any distribution/handoff of the extension to a third party, OR
+once the holding entity + ownership are settled — whichever comes first.
 
 **Audit findings (what's ours vs third-party):**
 - ~7,727 lines of original JS/Python/HTML/CSS authored here + all docs = **ours** (copyrightable).
@@ -107,14 +121,15 @@ non-commercial use, commercial reserved; or BSL 1.1 — restricted now, opens af
   Matters because Screenity is GPL-3.0 — we're clear of copyleft.
 - Repo currently has **zero license files** → bundled rrweb/Geist are missing their required notices (the gap to fix).
 
-**Remaining steps:**
+**Steps when resumed (all previously written + verified, then reverted — re-do when Adam unblocks):**
 - [ ] Add top-level `LICENSE` — proprietary all-rights-reserved, "Copyright (c) 2026 Adam Chubak"
-      (confirm legal holder — person vs a company/Distru), permission-required for any use/copy/modify/distribute.
-- [ ] Add `extension/src/lib/rrweb.LICENSE` — exact rrweb MIT text (fetched & verified 2026-06-18).
+      (or the holding entity if it exists by then), permission-required for any use/copy/modify/distribute.
+- [ ] Add `extension/src/lib/rrweb.LICENSE` — exact rrweb MIT text (verified from the rrweb repo).
 - [ ] Add `extension/src/fonts/Geist-LICENSE.txt` — full Geist OFL 1.1 text
       (`curl -s https://unpkg.com/geist@1.3.1/LICENSE.txt`; verified 92 lines).
 - [ ] Add top-level `THIRD_PARTY_NOTICES.md` summarizing rrweb (MIT) + Geist (OFL 1.1) + the MIT pip deps.
-- [ ] Commit. (A `Geist-LICENSE.txt` was fetched then removed when this was deferred — just re-fetch.)
+- [ ] On entity formation: IP assignment Adam → entity, update the LICENSE notice.
+- [ ] Commit.
 
 ## ✅ Done 2026-06-18 — live-run #2 fixes (built + unit-tested; need a live verify)
 
