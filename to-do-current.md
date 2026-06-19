@@ -34,6 +34,13 @@ bundle → hand it to a fresh AI (e.g. Claude / Claude Code) → judge whether t
         property mapping, crucial data, network findings). Defining a purpose = small code change in
         `pack.py` `PURPOSES` + the popup options.
 
+**North star (Adam, 2026-06-18):** as each test proves out, codify *the right way to do that outcome*
+back into an `analyze/skills/<purpose>` skill (the repo already ships `analyze-capture`,
+`competitive-research`, `ui-improvement`). The goal: the repo accumulates a **library of agent skills
+that teach a receiving AI how to use a bundle** — so the package gets better at driving the next agent.
+Durable cross-project write-up lives in the LLM Wiki: `[[Self-Driving Capture Bundle]]` +
+`[[AI Onboarding Agent - System Migration]]`.
+
 ## ▶ TODO 2026-06-18 — CODE: make capture a CONNECTOR to AI tools (Claude / Claude Code) — NEEDS A PLAN
 
 The one code change Adam wants queued (NOT building yet). Today you record a bundle and drag it into a
