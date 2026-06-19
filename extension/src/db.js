@@ -65,6 +65,19 @@ export async function readAll(store) {
   });
 }
 
+// Count records in a store without loading them — used to build manifest counts
+// (e.g. frames) cheaply, so the worker never pulls hundreds of frame PNGs into
+// memory just to total them.
+export async function count(store) {
+  const db = await open();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readonly");
+    const req = tx.objectStore(store).count();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
 export async function clearAll() {
   const db = await open();
   return new Promise((resolve, reject) => {
