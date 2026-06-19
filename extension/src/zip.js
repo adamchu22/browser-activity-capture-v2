@@ -3,11 +3,42 @@
 // A Capture Bundle is just files, so a stored zip is enough and keeps the
 // extension dependency-free. Produces a Blob ready for chrome.downloads.
 //
-// Supports files large enough that we set the data-descriptor / Zip64 bits only
-// if needed; for the MVP (text + a handful of PNGs + one webm) standard 32-bit
-// offsets are fine.
+// 32-BIT ONLY (no Zip64 yet). Every size/offset field below is a `setUint32` and
+// the file count a `setUint16`. A long screen recording can push video.webm +
+// frames past 4 GiB — at which point those fields would WRAP mod 2^32 and silently
+// produce a corrupt, unreadable zip that still reports success (the worst kind of
+// data loss, since the caller then clears the take). So we FAIL LOUD instead:
+// makeZip throws ZIP_TOO_LARGE before writing, the caller treats it like any export
+// failure (the loss guard keeps the take in IndexedDB for retry/discard), and the
+// user is told rather than handed a broken file. Implementing real Zip64 is the
+// eventual fix; until then, fail-loud is the bulletproof behaviour.
 
 const enc = new TextEncoder();
+
+// 32-bit ZIP field limits. A STORE archive must keep every individual file size,
+// the central-directory offset, and the file count within these, or it corrupts.
+export const ZIP_MAX_BYTES = 0xffffffff; // 4 GiB - 1
+export const ZIP_MAX_FILES = 0xffff; // 65535
+
+// Pure overflow check (no allocation) so it's unit-testable with fake sizes.
+// `entries` = [{ nameLen, dataLen }]. Returns a human-readable reason string if a
+// 32-bit STORE zip of these entries would overflow, or null if it fits.
+export function zipOverflow(entries) {
+  if (entries.length > ZIP_MAX_FILES) {
+    return `too many files (${entries.length} > ${ZIP_MAX_FILES})`;
+  }
+  let offset = 0; // running local-header offset; also the central-directory start
+  for (const e of entries) {
+    if (e.dataLen > ZIP_MAX_BYTES) {
+      return `a file is too large for a 32-bit zip (${e.dataLen} bytes > 4 GiB)`;
+    }
+    offset += 30 + e.nameLen + e.dataLen;
+    if (offset > ZIP_MAX_BYTES) {
+      return `archive too large for a 32-bit zip (${offset} bytes > 4 GiB)`;
+    }
+  }
+  return null;
+}
 
 function crc32(bytes) {
   let crc = ~0;
@@ -26,14 +57,28 @@ function dosDateTime(d = new Date()) {
 
 // files: Array<{ name: string, data: Uint8Array | string }>
 export function makeZip(files) {
+  // Encode names + string data once, then guard BEFORE writing a single byte. We
+  // have no Zip64 path, so anything past the 32-bit limits would corrupt the
+  // archive — throw instead so the caller keeps the take (see header note).
+  const prepared = files.map((f) => ({
+    nameBytes: enc.encode(f.name),
+    data: typeof f.data === "string" ? enc.encode(f.data) : f.data,
+  }));
+  const overflow = zipOverflow(
+    prepared.map((p) => ({ nameLen: p.nameBytes.length, dataLen: p.data.length }))
+  );
+  if (overflow) {
+    const err = new Error("ZIP_TOO_LARGE: " + overflow);
+    err.code = "ZIP_TOO_LARGE";
+    throw err;
+  }
+
   const chunks = [];
   const central = [];
   let offset = 0;
   const { time, date } = dosDateTime();
 
-  for (const f of files) {
-    const nameBytes = enc.encode(f.name);
-    const data = typeof f.data === "string" ? enc.encode(f.data) : f.data;
+  for (const { nameBytes, data } of prepared) {
     const crc = crc32(data);
 
     const local = new DataView(new ArrayBuffer(30));
