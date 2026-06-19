@@ -164,7 +164,10 @@ def is_low_signal(url: str, blocklist: list[str]) -> bool:
     return any(b in h or ("/" in b and b in hp) for b in blocklist)
 
 
-def ms(t: int) -> str:
+def ms(t) -> str:
+    # Coerce non-numeric / float `t` (a malformed bundle, or a float from _num) and
+    # clamp negatives so this formatter never raises on untrusted input.
+    t = max(0, int(_num(t)))
     return f"{t // 60000:02d}:{(t % 60000) // 1000:02d}.{t % 1000:03d}"
 
 
@@ -260,6 +263,32 @@ def _num(v, default=0.0):
         return float(v)
     except (TypeError, ValueError):
         return default
+
+
+def _read_text(path: Path) -> str:
+    """Read a text file without ever raising — a missing file or non-UTF-8 bytes (a
+    truncated / garbage bundle) yield "" rather than crashing the pack build."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _load_json(path: Path, default):
+    """Load JSON from an UNTRUSTED bundle without ever raising. A missing file,
+    non-UTF-8 bytes, truncated/malformed JSON, or a value whose top-level type
+    doesn't match `default` (e.g. a `timeline.json` that isn't a list) all fall back
+    to `default`. This is the single chokepoint that enforces pack.py's "never crash
+    on a malformed bundle" contract — callers can then assume the shape."""
+    try:
+        if not path.exists():
+            return default
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return default
+    if default is not None and not isinstance(data, type(default)):
+        return default
+    return data
 
 
 def _draw_region(e: dict) -> str:
@@ -582,28 +611,43 @@ def build_annotated_frames_html(events: list[dict], frames: list[dict]) -> str:
 
 def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     blocklist = blocklist or []
-    manifest = json.loads((bundle / "manifest.json").read_text()) if (bundle / "manifest.json").exists() else {}
-    timeline = json.loads((bundle / "timeline.json").read_text())
-    transcript = (bundle / "transcript.vtt").read_text() if (bundle / "transcript.vtt").exists() else ""
+    # Untrusted bundle: every load is best-effort and type-checked so a malformed /
+    # truncated / non-UTF-8 file can't crash the build (the "never crash" contract).
+    manifest = _load_json(bundle / "manifest.json", {})
+    timeline = _load_json(bundle / "timeline.json", [])
+    transcript = _read_text(bundle / "transcript.vtt")
+
+    # Drop any non-dict timeline elements so every downstream `e.get(...)` is safe.
+    timeline = [e for e in timeline if isinstance(e, dict)]
 
     # Merge narration cues into the action timeline so "click X" and what the user
-    # said while doing it sit next to each other on one clock.
+    # said while doing it sit next to each other on one clock. _num coerces a
+    # non-numeric `t` so the sort can't raise on mixed types.
     speech = parse_vtt_cues(transcript)
-    timeline = sorted(timeline + speech, key=lambda e: e.get("t", 0))
+    timeline = sorted(timeline + speech, key=lambda e: _num(e.get("t", 0)))
 
     network_summary = ""
     har_path = bundle / "network.har"
     if har_path.exists():
-        har = json.loads(har_path.read_text())
+        har = _load_json(har_path, {})
+        log = har.get("log")
+        entries = log.get("entries") if isinstance(log, dict) else None
         rows, collapsed = [], []
-        for entry in har.get("log", {}).get("entries", []):
-            req = entry.get("request", {})
-            url = req.get("url", "")
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            req = entry.get("request") or {}
+            if not isinstance(req, dict):
+                req = {}
+            url = req.get("url") or ""
+            if not isinstance(url, str):
+                url = ""
             if blocklist and is_low_signal(url, blocklist):
                 collapsed.append(host(url))
                 continue
-            rows.append(f"- {req.get('method','')} {url} → "
-                        f"{entry.get('response',{}).get('status','')}")
+            resp = entry.get("response")
+            status = resp.get("status", "") if isinstance(resp, dict) else ""
+            rows.append(f"- {req.get('method','')} {url} → {status}")
         if collapsed:
             uniq = []
             for h in collapsed:
@@ -615,7 +659,8 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
 
     # The manifest's urls_visited list also picks up tracker/ad request URLs; drop the
     # low-signal ones (and note how many) so this list reads as real destinations.
-    urls = manifest.get("urls_visited", [])
+    # Keep only string entries — a malformed manifest could hold non-strings here.
+    urls = [u for u in (manifest.get("urls_visited") or []) if isinstance(u, str)]
     kept_urls = [u for u in urls if not (blocklist and is_low_signal(u, blocklist))]
     dropped = len(urls) - len(kept_urls)
     urls_block = "\n".join("- " + u for u in kept_urls) or "- (none recorded)"
@@ -623,8 +668,9 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
         urls_block += f"\n- _({dropped} low-signal URL(s) hidden)_"
 
     # Multi-tab legend (v2 bundles). Map each tab id to a short ordinal (#1, #2…)
-    # used both here and as the timeline's tab-switch markers.
-    tabs = manifest.get("tabs", [])
+    # used both here and as the timeline's tab-switch markers. Non-dict tab entries
+    # are dropped so the comprehensions below can't crash.
+    tabs = [t for t in (manifest.get("tabs") or []) if isinstance(t, dict)]
     tab_labels = {t["id"]: f"#{i + 1}" for i, t in enumerate(tabs) if "id" in t}
     tab_urls = {t["id"]: t.get("url", "") for t in tabs if "id" in t}
     tabs_block = ""
@@ -633,20 +679,14 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
                 for i, t in enumerate(tabs)]
         tabs_block = "\n## Tabs (recorded in parallel)\n" + "\n".join(rows) + "\n"
 
-    frames = manifest.get("frames", [])
+    frames = [f for f in (manifest.get("frames") or []) if isinstance(f, dict)]
     frame_index = "\n".join(
-        f"- `{ms(f.get('t', 0))}` → `frames/{Path(f.get('file', '')).name}`" for f in frames
+        f"- `{ms(f.get('t', 0))}` → `frames/{Path(f.get('file') or '').name}`" for f in frames
     )
 
     # Surface capture problems up top: anything in errors.json plus the specific
     # narration failure reason, so a bad run is obvious without digging.
-    errors = []
-    err_path = bundle / "errors.json"
-    if err_path.exists():
-        try:
-            errors = json.loads(err_path.read_text())
-        except json.JSONDecodeError:
-            errors = []
+    errors = [e for e in _load_json(bundle / "errors.json", []) if isinstance(e, dict)]
     issue_lines = [f"- `{ms(e.get('t', 0))}` **{e.get('where','?')}**: {e.get('message','')}" for e in errors]
     if manifest.get("narration_error"):
         issue_lines.insert(0, f"- **narration**: {manifest['narration_error']} (no voice in video.webm)")
@@ -794,10 +834,7 @@ def maybe_transcribe(bundle: Path, enabled: bool = True) -> None:
         text = tpath.read_text(encoding="utf-8", errors="replace") if tpath.exists() else ""
         if not _transcript_is_stub(text):
             return  # a real transcript is already here — don't touch it
-        manifest = {}
-        mpath = bundle / "manifest.json"
-        if mpath.exists():
-            manifest = json.loads(mpath.read_text(encoding="utf-8"))
+        manifest = _load_json(bundle / "manifest.json", {})
         if manifest.get("narration_in_video") is False:
             return  # the manifest says the video has no mic audio
         # .name strips any directory — a hostile manifest can't point `video` at a
@@ -856,9 +893,10 @@ def build_pack(bundle: Path, out: Path, blocklist: list[str] | None = None,
 
     # The "draw on screen" view — markers on the clicked elements. Only written when
     # there's something to annotate.
-    manifest = json.loads((bundle / "manifest.json").read_text()) if (bundle / "manifest.json").exists() else {}
-    timeline = json.loads((bundle / "timeline.json").read_text()) if (bundle / "timeline.json").exists() else []
-    annotated = build_annotated_frames_html(timeline, manifest.get("frames", []))
+    manifest = _load_json(bundle / "manifest.json", {})
+    timeline = [e for e in _load_json(bundle / "timeline.json", []) if isinstance(e, dict)]
+    frames = [f for f in (manifest.get("frames") or []) if isinstance(f, dict)]
+    annotated = build_annotated_frames_html(timeline, frames)
     if annotated:
         (out / "frames-annotated.html").write_text(annotated, encoding="utf-8")
 
