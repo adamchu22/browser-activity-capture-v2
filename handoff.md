@@ -6,7 +6,14 @@ python green, NEEDS A LIVE VERIFY. Tracks B/C/D from the review are a prioritize
 `to-do-current.md`. Prior: 64MiB fix LIVE-VERIFIED (109 MB capture downloaded), Downloads-only save,
 loss guard, surface-scope + pause-network + mic.)_
 
-## ▶ NEXT — live-verify HARDENING Track A, then pick Track B (redaction leaks), C (analyze crash-proofing), or D (AI-usability)
+## ▶ NEXT — START TRACK D (AI-usability of outputs). Then Track B (redaction leaks) + C (analyze crash-proofing) remain; Track A still needs a live verify.
+
+**Track D is the agreed next step (Adam, 2026-06-19).** It's the "make the outputs totally usable for
+AI, don't overload with disconnected context" ask. Full D1–D7 checklist in `to-do-current.md` →
+"HARDENING backlog". Headline items: D1 capture HAR response bodies (unlocks the migration outcome),
+D2 one authoritative API-calls table, D3 de-duplicate Steps/Timeline/transcript (the exact overload
+worry), D4 demote raw `events.jsonl`, D6 surface the new capture-issue flags in pack.py. B + C stay
+queued; live-verify Track A when there's a Chrome session.
 
 ## ✅ DONE 2026-06-19 — HARDENING Track A (silent data-loss) — built + unit-tested; NEEDS LIVE VERIFY
 
