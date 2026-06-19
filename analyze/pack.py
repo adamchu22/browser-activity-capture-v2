@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import re
 import shutil
@@ -199,16 +200,46 @@ def parse_vtt_cues(text: str) -> list[dict]:
     return cues
 
 
-def nearest_frame(t: int, frames: list[dict], window_ms: int = 2000) -> str | None:
+# A (sorted_times, files) index over a frame list, cached by object identity so the
+# many nearest_frame() calls in one build don't each re-sort. Cleared whenever a new
+# frame list is seen — a single build uses one list, so this stays tiny.
+_FRAME_IDX_CACHE: dict[int, tuple] = {}
+
+
+def _frame_index(frames: list[dict]) -> tuple[list[float], list]:
+    """Sorted (times, files) for `frames`, built once and memoised by identity.
+    Non-dict elements and non-numeric `t` are coerced/dropped so it never raises."""
+    key = id(frames)
+    hit = _FRAME_IDX_CACHE.get(key)
+    if hit is not None and hit[0] is frames:
+        return hit[1], hit[2]
+    pairs = sorted((_num(f.get("t", 0)), f.get("file"))
+                   for f in frames if isinstance(f, dict))
+    times = [p[0] for p in pairs]
+    files = [p[1] for p in pairs]
+    _FRAME_IDX_CACHE.clear()  # one build = one frame list; don't grow unbounded
+    _FRAME_IDX_CACHE[key] = (frames, times, files)
+    return times, files
+
+
+def nearest_frame(t, frames: list[dict], window_ms: int = 2000) -> str | None:
     """The screenshot captured closest in time to an event (frames are grabbed at
     click/nav/hover moments, so this binds an action to what was on screen then).
-    Returns the frame file, or None if none is within window_ms."""
-    best, best_dt = None, window_ms + 1
-    for f in frames:
-        dt = abs(f.get("t", 0) - t)
-        if dt < best_dt:
-            best, best_dt = f, dt
-    return (best.get("file") if best else None) if best_dt <= window_ms else None
+    Returns the frame file, or None if none is within window_ms. O(log n) via a
+    cached sorted index + bisect (was O(n) per call → O(events × frames) overall)."""
+    times, files = _frame_index(frames)
+    if not times:
+        return None
+    t = _num(t)
+    i = bisect.bisect_left(times, t)
+    # The nearest time in a sorted list is always one of the two straddling `t`.
+    best_dt, best_file = window_ms + 1, None
+    for j in (i - 1, i):
+        if 0 <= j < len(times):
+            dt = abs(times[j] - t)
+            if dt < best_dt:
+                best_dt, best_file = dt, files[j]
+    return best_file if best_dt <= window_ms else None
 
 
 def narration_near(t: int, speech: list[dict], before_ms: int = 5000,
