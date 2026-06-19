@@ -1,9 +1,40 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-18 (lost-recording bug FIXED + live-verified; feedback round — capture/overlay
-scoped to the shared surface, pause pauses network, mic permission granted inline. Mic permission
-issue LIVE-VERIFIED FIXED (Adam). NEXT: the one live-verify left is surface SCOPE (tab/window share);
-the monitor-multi-display refinement is the only scoping code leftover, low priority.)_
+_Last updated: 2026-06-19 (fixed the 64MiB data-loss bug — a 17-min recording wouldn't save —
+LIVE-VERIFIED (Adam: a 109 MB capture downloaded). Then per Adam, SIMPLIFIED the save path to
+Downloads-only: removed the folder picker + "ask where to save" (FSA), so it's bulletproof. Loss
+guard (keep take until saved) still in. Prior: surface-scope + pause-network + mic done/verified.)_
+
+## ✅ DONE + LIVE-VERIFIED (2026-06-19) — 17-min recording never saved (the 64MiB sendMessage cap)
+
+Adam recorded 17 min, hit Finish, nothing saved. Error: `runtime.sendMessage … Message exceeded
+maximum allowed size of 64MiB`. **Root cause:** the export shipped the whole bundle (video + frames,
+base64) through `chrome.runtime.sendMessage`, hard-capped at 64MiB; short clips fit, a 17-min one
+didn't. The throw was only `console.error`'d → silent loss. The later 1-sec test's `start()` then
+`clearAll()`'d the take → unrecoverable. Full diagnosis in `learnings.md` 2026-06-19.
+
+**Fix (built + unit-tested, 72 node / 125 python green; LIVE-VERIFIED — a 109 MB capture downloaded):**
+- **Assemble + save the zip in the OFFSCREEN doc**, not the worker. The video Blob stays there; the
+  offscreen reads the bulk streams (timeline/events/frames) from IndexedDB itself, zips, and downloads
+  via an object-URL `<a download>` (no size limit). Only small text meta files cross a message. New
+  handshake: `offscreen-finalize`→`offscreen-finalized` (status only, no bytes),
+  `offscreen-save`→`offscreen-save-done`. (`offscreen.js`, `background.js`.)
+- **Shared pure `bundle-streams.js`** (`streamFiles`/`frameMeta`/`dataUrlToBytes`, 7 tests) used by the
+  offscreen path AND the worker salvage path so they can't drift. `state.frames` keeps frame metadata
+  only, so the worker builds the manifest without loading any PNG bytes. `db.count()` added.
+- **Save path SIMPLIFIED to Downloads-only (Adam, 2026-06-19):** removed the File System Access folder
+  picker AND the "ask where to save" native dialog. Every export now object-URL-downloads to the
+  browser's Downloads folder — bulletproof, no size limit, no dialog. Deleted `fsdir.js`; dropped
+  `saveMode`/`exportDirName`/`exportDirNeedsRegrant`; the popup Settings now just says "saved to
+  Downloads." (Salvage path, offscreen gone, still uses `chrome.downloads` with a data URL.)
+- **Loss guard (Adam's call):** the take is cleared ONLY after a save is confirmed. On failure the
+  worker keeps IndexedDB + sets `unsavedTake`/`pendingExport` + badge `!`; the next Start is **blocked**;
+  the popup shows a Retry / Discard banner (`retry-export` / `discard-take` commands). Still needs a
+  live check (force a failure → badge `!`, Retry/Discard work, next Start blocked).
+  Files: `extension/src/{offscreen.js,background.js,bundle-streams.js,db.js,popup.js,popup.html,i18n.js}`,
+  removed `fsdir.js`.
+
+
 
 ## ✅ DONE (2026-06-18) — feedback round after the recovery verify (scope, pause-network, mic)
 

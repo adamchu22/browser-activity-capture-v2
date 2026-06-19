@@ -4,6 +4,66 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-19 (DATA-LOSS BUG — a 17-min recording never saved: the 64MiB message cap)
+
+Adam recorded 17 min (no pauses), hit Finish — nothing saved/downloaded. A 1-sec test
+right after downloaded fine. Two errors in `chrome://extensions`:
+- `bundle export failed: TypeError … runtime.sendMessage … Message exceeded maximum
+  allowed size of 64MiB.` (background.js, the export) — **the cause of the loss.**
+- `offscreen microphone capture failed (recording video only)` — separate, non-fatal
+  (mic grant unavailable → video-only). Not what lost the file.
+
+- **Root cause: the whole bundle was moved through `chrome.runtime.sendMessage`, which
+  Chrome hard-caps at 64MiB.** The export had TWO binary-over-message hops: the offscreen
+  doc sent the video back to the worker as a base64 data URL (`offscreen-video`), and the
+  worker sent the assembled zip to the offscreen doc to write into the chosen folder
+  (`offscreen-save-file`). Both base64-inflate (~+33%). A 1-sec clip is a few hundred KB →
+  fine; a 17-min capture blew past 64MiB → the send threw, the error was only
+  `console.error`'d, and Finish silently produced nothing.
+- **Why recovery was impossible:** after the failed export the data was still in IndexedDB
+  + the offscreen doc — but the next recording's `start()` runs `db.clearAll()` +
+  `closeOffscreen()`, so the 1-sec test **overwrote** the 17-min take. (Same destruction
+  pattern as the 2026-06-18 lost-recording bug.)
+
+**Fix — assemble + save the zip WHERE the bytes already live, never message them:**
+- **Offscreen documents can only use `chrome.runtime` messaging** — NOT `chrome.downloads`
+  (verified: developer.chrome.com/docs/extensions/reference/api/offscreen). And a service
+  worker has no `URL.createObjectURL`. So the only context that both holds the video and
+  can write a large file is the **offscreen document** (a Window: it has
+  `URL.createObjectURL` + a DOM for a programmatic `<a download>`).
+- **New flow:** the video Blob stays in the offscreen doc. On Finish the worker sends
+  `offscreen-finalize` (offscreen stops the recorder, keeps the Blob, replies only
+  `{mic, micError, hasVideo}` — no bytes). The worker builds the SMALL text files
+  (manifest/network.har/transcript/errors/README/CLAUDE/AGENTS) and sends them via
+  `offscreen-save`. The offscreen doc reads the BULK streams (timeline.json, events.jsonl,
+  frames) straight from IndexedDB, adds its video Blob, `makeZip`s, and **downloads via an
+  object-URL `<a download>`** (Downloads folder, no size limit). Only small text crosses a
+  message. Shared pure `bundle-streams.js` (`streamFiles`/`frameMeta`/`dataUrlToBytes`,
+  tested) is used by BOTH the offscreen path and the worker's salvage path so they can't
+  drift. The worker keeps `state.frames` (metadata only, `{t,file}`) so it builds the
+  manifest without ever loading frame PNGs into the SW — the bloat that this bug was.
+- **LIVE-VERIFIED (Adam, 2026-06-19): a 109 MB capture downloaded.** Confirms both that the
+  offscreen object-URL `<a download>` works from an offscreen doc (the one bit I was unsure
+  of) and that a bundle far over 64MiB now exports fine.
+- **Then simplified to Downloads-only (Adam's call):** the first cut also kept a File System
+  Access "save to a chosen folder" path + an "ask where to save" native dialog. Adam: drop
+  both, "just keep it bulletproof to Downloads." So `fsdir.js` is deleted and `saveMode` /
+  the folder picker are gone — every export object-URL-downloads to Downloads. Lesson: the
+  object-URL `<a download>` from the offscreen doc is the simplest reliable large-file sink;
+  FSA's only edge (arbitrary folder) wasn't worth the picker + lapsed-permission complexity.
+- **Loss guard (Adam's call):** the take is **only cleared after a save is confirmed**. On
+  failure the worker keeps IndexedDB + sets `unsavedTake`/`pendingExport` + badge `!`; the
+  next `start()` is **blocked** so it can't overwrite the take; the popup shows a Retry /
+  Discard banner (`retry-export` re-saves from IndexedDB; `discard-take` deletes). Salvage
+  (offscreen gone) still assembles a video-less bundle in the worker via `chrome.downloads`.
+  Still needs a live check (force a failure → badge `!`, Retry/Discard work, next Start blocked).
+- **Durable lesson (wiki candidate):** in MV3, never move large binary through
+  `chrome.runtime.sendMessage` (64MiB cap) or a base64 data: URL. Assemble/write large
+  artifacts in a Window context (offscreen/page) that has `createObjectURL`; the SW
+  coordinates with small messages only. Pairs with the existing MV3 lesson that an offscreen
+  MediaRecorder survives a worker death — the offscreen doc is also the right place to hold
+  and write the bytes.
+
 ## 2026-06-18 (CAPTURE BUG — a 30-min recording was lost when the service worker died mid-pause)
 
 The most serious data-loss bug yet. Adam recorded ~30 min sharing a single window,

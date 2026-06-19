@@ -6,6 +6,30 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (61 tests; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
+## ✅ Done + LIVE-VERIFIED 2026-06-19 — 17-min recording never saved (the 64MiB sendMessage cap)
+
+Adam recorded 17 min, hit Finish, nothing downloaded (a 1-sec test right after worked). Error:
+`runtime.sendMessage … Message exceeded maximum allowed size of 64MiB`. The export moved the whole
+bundle (video + frames, base64) through a message; Chrome caps messages at 64MiB, so only long
+recordings failed — and the failure was swallowed (`console.error`), then the next take's `clearAll()`
+overwrote it. Diagnosis + the durable MV3 lesson are in `learnings.md` 2026-06-19. Built + unit-tested
+(72 node / 125 python green); **LIVE-VERIFIED — a 109 MB capture downloaded.**
+- [x] **Assemble + write the zip in the offscreen doc** (video Blob never leaves it; bulk streams read
+      from IndexedDB there; object-URL `<a download>`). Only small text crosses a message. New
+      `offscreen-finalize`/`offscreen-save` handshake. **Verified (109 MB downloaded).**
+- [x] **Shared `bundle-streams.js`** (offscreen + worker-salvage, can't drift) + `state.frames`
+      metadata + `db.count()` so the worker never loads frame bytes.
+- [x] **Save path SIMPLIFIED to Downloads-only (Adam):** removed the FSA folder picker + the "ask where
+      to save" dialog; deleted `fsdir.js`; dropped `saveMode`. Every export downloads to Downloads.
+- [x] **Loss guard:** keep the take until a save is confirmed; on failure block the next Start + show a
+      popup Retry/Discard banner (`retry-export`/`discard-take`); badge `!`.
+- [ ] **Remaining live check (low priority):** force an export failure → badge `!`, popup Retry/Discard
+      work, next Start blocked until resolved. Hard to trigger by hand (only fires if a download/assembly
+      throws); it's a defensive net, the happy path is verified.
+- [x] **Mic re-checked OK (Adam, 2026-06-19)** — the one-off `microphone capture failed (video only)`
+      from the bug run didn't recur; a normal mic check was clean (no regression from 2026-06-18).
+- Note: the popup Retry/Discard banner is **English-only** (kept off the i18n surface as an error path).
+
 ## ▶ TODO 2026-06-18 — validate the capture→bundle→AI OUTCOME flow for 3 purposes (PROCESS tests, not code)
 
 These test the core value prop, NOT code. The recording captures intent — the "what is this for?"
