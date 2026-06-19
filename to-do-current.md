@@ -6,6 +6,47 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (61 tests; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
+## ▶ TODO 2026-06-18 — validate the capture→bundle→AI OUTCOME flow for 3 purposes (PROCESS tests, not code)
+
+These test the core value prop, NOT code. The recording captures intent — the "what is this for?"
+purpose, picked at capture time and embedded in the self-driving bundle — so a **fresh AI handed the
+bundle, with no us in the loop**, can review it and produce the outcome the user wanted. We're judging
+the PROCESS and the OUTPUT QUALITY. Each test = record a real session with the purpose set → export the
+bundle → hand it to a fresh AI (e.g. Claude / Claude Code) → judge whether the deliverable matches intent.
+
+- [ ] **1. Documentation building** (purpose `docs` → `SOP.md`). Record a real process / feature
+      walkthrough, narrating the *why*. Check a fresh AI turns the bundle into clear, human-followable
+      documentation — preconditions, happy path, decision points — without us explaining anything.
+- [ ] **2. Skill building for process replacement** (purpose `skill` → `SKILL.md` +
+      `automation.suggestions.md`). Record a manual process you'd normally do by hand (Adam's example: a
+      spreadsheet workflow, keystrokes and all). Check the AI can produce EITHER (a) a skill it runs *in
+      your place* next time, or (b) an automation that *replaces* the manual steps — capturing exact
+      selectors / URLs / inputs and the success signal.
+- [ ] **3. System-to-system migration feedback** — the **AI-onboarding-agent feature Adam most wants to
+      practice on.** Example: migrating a user from one CRM to another. Record a walkthrough of the SOURCE
+      system; check the AI can review the bundle and (a) explain how the source works, (b) identify the
+      important **properties / fields / data** that must carry over to the target, and (c) use the
+      **network requests (HAR)** to infer the data model and what's crucial to map.
+  - [ ] **Open question — purpose mapping (decide before running test 3).** This doesn't cleanly fit an
+        existing purpose (`skill`/`docs`/`ux`/`ui`/`improve`/`research`/`general`). Options: reuse
+        `research` (its lens already pulls flow + architecture from HAR — Adam leaned this way), or add a
+        new `migration` purpose with its own lens + deliverable (e.g. `migration-map.md`: source→target
+        property mapping, crucial data, network findings). Defining a purpose = small code change in
+        `pack.py` `PURPOSES` + the popup options.
+
+## ▶ TODO 2026-06-18 — CODE: make capture a CONNECTOR to AI tools (Claude / Claude Code) — NEEDS A PLAN
+
+The one code change Adam wants queued (NOT building yet). Today you record a bundle and drag it into a
+repo / hand it to an AI. Instead: make the product a **connector** so an AI tool (Claude, Claude Code)
+can **trigger a capture session on the spot** — open the target webpage, start screen capture, and
+observe the session **live, mid-task**, so it sees what's happening as it happens. Removes the manual
+export-and-drag step; a session can launch on demand.
+- Likely shape: an **MCP server / connector** the AI calls to start/stop a capture and receive the
+  bundle (or a live stream) directly. (Unconfirmed — needs design.)
+- This is a real feature, not a quick fix → **SCOPE IT FIRST.** Plan must cover: who triggers it, the
+  trigger/handshake, live-stream vs. post-hoc bundle, and the security/permission story of letting a
+  tool launch a screen recording. Do NOT start building until the plan + Adam sign off.
+
 ## ✅ Done 2026-06-18 — lost-recording bug fixed (MV3 worker died mid-pause); needs live verify
 
 Adam lost a ~30 min capture: paused (sharing one window) to work elsewhere, returned to a dead overlay
