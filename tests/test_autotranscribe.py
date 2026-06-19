@@ -6,6 +6,7 @@ Run from the project root:  python3 -m unittest discover -s tests
 """
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -66,6 +67,21 @@ class TestMaybeTranscribe(unittest.TestCase):
             self.assertIn("--engine", cmd)
             self.assertEqual(cmd[cmd.index("--engine") + 1], "parakeet")
             self.assertTrue(str(cmd[1]).endswith("transcribe.py"))
+            # C2: the transcribe subprocess is bounded so a wedged engine can't hang
+            # the pack forever.
+            self.assertEqual(run_mock.call_args.kwargs.get("timeout"), pack.TRANSCRIBE_TIMEOUT_S)
+
+    def test_transcribe_timeout_is_not_fatal(self):
+        # C2: a wedged transcribe/ffmpeg (TimeoutExpired) must be caught, not raised —
+        # "never fatal" has to cover hangs, not just crashes.
+        with tempfile.TemporaryDirectory() as tmp:
+            b = _bundle(tmp)
+            timeout = subprocess.TimeoutExpired(cmd="transcribe", timeout=pack.TRANSCRIBE_TIMEOUT_S)
+            with mock.patch.object(pack.shutil, "which", return_value="/usr/bin/ffmpeg"), \
+                    mock.patch.object(pack, "_venv_python", return_value=None), \
+                    mock.patch.object(pack, "_engine_for", return_value="parakeet"), \
+                    mock.patch.object(pack.subprocess, "run", side_effect=timeout):
+                pack.maybe_transcribe(b, True)  # must not raise
 
     def test_uses_whisper_when_thats_what_is_installed(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -48,12 +48,19 @@ MODEL_CACHES = [
 ]
 
 
+# Audio extraction is fast (a stream copy/decode), but a corrupt or truncated
+# video can wedge ffmpeg — bound it so the pipeline can't hang forever. run() kills
+# the child and raises TimeoutExpired on overrun.
+FFMPEG_TIMEOUT_S = 900
+
+
 def extract_audio(video: Path, wav: Path) -> None:
     # 16 kHz mono is what these models want; -y overwrites the temp file.
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
          "-i", str(video), "-ar", "16000", "-ac", "1", str(wav)],
         check=True,
+        timeout=FFMPEG_TIMEOUT_S,
     )
 
 

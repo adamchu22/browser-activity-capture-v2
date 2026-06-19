@@ -6,6 +6,7 @@ neither installed.
 Run from the project root:  python3 -m unittest discover -s tests
 """
 
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -15,6 +16,25 @@ ANALYZE = Path(__file__).resolve().parent.parent / "analyze"
 sys.path.insert(0, str(ANALYZE))
 
 import transcribe  # noqa: E402
+
+
+class TestExtractAudioTimeout(unittest.TestCase):
+    def test_passes_timeout_to_ffmpeg(self):
+        # C2: a corrupt video must not let ffmpeg wedge the pipeline forever.
+        run_mock = mock.MagicMock()
+        with mock.patch.object(transcribe.subprocess, "run", run_mock):
+            transcribe.extract_audio(Path("in.webm"), Path("out.wav"))
+        self.assertEqual(run_mock.call_args.kwargs.get("timeout"), transcribe.FFMPEG_TIMEOUT_S)
+        # bound is sane (positive, generous)
+        self.assertGreater(transcribe.FFMPEG_TIMEOUT_S, 0)
+
+    def test_timeout_propagates(self):
+        # extract_audio doesn't swallow it; the caller (selftest / pack subprocess)
+        # decides. Just confirm the signal isn't lost.
+        boom = subprocess.TimeoutExpired(cmd="ffmpeg", timeout=transcribe.FFMPEG_TIMEOUT_S)
+        with mock.patch.object(transcribe.subprocess, "run", side_effect=boom):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                transcribe.extract_audio(Path("in.webm"), Path("out.wav"))
 
 
 class TestAvailableEngine(unittest.TestCase):

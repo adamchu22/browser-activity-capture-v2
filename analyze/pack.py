@@ -844,6 +844,13 @@ def _engine_for(py: str) -> str | None:
         return None
 
 
+# Hard ceiling on the local transcribe subprocess. "Never fatal" must also mean
+# "never hang" — a wedged ffmpeg/engine would otherwise block the pack forever. A
+# long recording legitimately takes minutes (model load + audio length), so this is
+# generous; on timeout the child is killed and the build continues with the stub.
+TRANSCRIBE_TIMEOUT_S = 1800
+
+
 def maybe_transcribe(bundle: Path, enabled: bool = True) -> None:
     """Best-effort: if transcript.vtt is still the stub and the bundle has narration
     audio, run the LOCAL transcriber so the pack carries narration without a manual
@@ -891,12 +898,16 @@ def maybe_transcribe(bundle: Path, enabled: bool = True) -> None:
         print(f"transcribing narration locally ({engine} via {Path(py).name})… first run may "
               "load a model.", file=sys.stderr)
         res = subprocess.run([py, script, str(bundle), "--engine", engine],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, timeout=TRANSCRIBE_TIMEOUT_S)
         if res.returncode != 0:
             tail = (res.stderr or res.stdout or "").strip()[-300:]
             print(f"note: auto-transcribe failed (engine {engine}). Built with the stub "
                   f"transcript; run `analyze/transcribe.py <bundle>` in the .venv. {tail}",
                   file=sys.stderr)
+    except subprocess.TimeoutExpired:
+        # run() kills the child on timeout; just note it and keep the stub.
+        print(f"note: auto-transcribe timed out after {TRANSCRIBE_TIMEOUT_S}s — built with the "
+              "stub transcript; run `analyze/transcribe.py <bundle>` in the .venv.", file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — best-effort; any failure must not break the pack
         print(f"note: auto-transcribe failed ({type(e).__name__}: {e}). Built with the stub "
               f"transcript; run `analyze/transcribe.py <bundle>` in the .venv to add narration.",
