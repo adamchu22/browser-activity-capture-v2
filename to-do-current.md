@@ -72,11 +72,15 @@ Three items came out of it — two from his narration, one I found reviewing the
     extension-origin iframe with `allow="microphone"`, `request-mic.html/js`), not a separate window,
     and the iframe auto-dismisses after the choice — Adam disliked the lingering window. The window
     (`mic-permission.*`) is now only the fallback for restricted (`chrome://`) tabs.
-  - [ ] **Live-verify (Comet + Chrome):** on a normal web page, Enable-mic/Start → the mic prompt
-        appears **in that tab** (no separate window) and goes away after you choose → records narration;
-        EVERY subsequent Start → no prompt at all. On a `chrome://` tab it should fall back to the
-        window. Revoke the mic mid-life → next Start re-prompts. Confirm macOS Privacy → Microphone →
-        Chrome/Comet ON. `mic-permission.*` AND `request-mic.*` are both in use — do NOT delete.
+  - [x] ~~**Live-verify (Comet + Chrome)**~~ — DONE 2026-06-18 (Adam): the microphone permission
+        issue is solved — the in-tab prompt works and Start no longer re-asks once granted. (Adam
+        confirmed the core flow; the individual edge sub-checks below — `chrome://` window fallback,
+        revoke→re-prompt — were not separately exercised, but the reported nag is gone.) The original
+        check, for reference: on a normal web page, Enable-mic/Start → the mic prompt appears **in that
+        tab** (no separate window) and goes away after you choose → records narration; EVERY subsequent
+        Start → no prompt at all. On a `chrome://` tab it falls back to the window. Revoke the mic
+        mid-life → next Start re-prompts. Confirm macOS Privacy → Microphone → Chrome/Comet ON.
+        `mic-permission.*` AND `request-mic.*` are both in use — do NOT delete.
 
 ## ⚖️ TODO 2026-06-18 — add license + third-party notices (audit done, files not written)
 

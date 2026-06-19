@@ -1,8 +1,9 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-18 (lost-recording bug FIXED + live-verified; then a feedback round — capture/
-overlay now scoped to the shared surface, pause pauses network, mic permission granted inline. NEXT:
-live-verify scope + mic; the monitor-multi-display refinement is the only scoping leftover.)_
+_Last updated: 2026-06-18 (lost-recording bug FIXED + live-verified; feedback round — capture/overlay
+scoped to the shared surface, pause pauses network, mic permission granted inline. Mic permission
+issue LIVE-VERIFIED FIXED (Adam). NEXT: the one live-verify left is surface SCOPE (tab/window share);
+the monitor-multi-display refinement is the only scoping code leftover, low priority.)_
 
 ## ✅ DONE (2026-06-18) — feedback round after the recovery verify (scope, pause-network, mic)
 
