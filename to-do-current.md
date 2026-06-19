@@ -30,6 +30,72 @@ overwrote it. Diagnosis + the durable MV3 lesson are in `learnings.md` 2026-06-1
       from the bug run didn't recur; a normal mic check was clean (no regression from 2026-06-18).
 - Note: the popup Retry/Discard banner is **English-only** (kept off the i18n surface as an error path).
 
+## ✅ Done 2026-06-19 — HARDENING Track A (silent data-loss) — built + unit-tested; NEEDS LIVE VERIFY
+
+From a deep 4-angle failure-mode review (capture worker / content / analyze / AI-usability).
+Track A = the silent data-loss class (recording shows REC while data is lost). 5 bisected
+commits, 82 node / 125 python green. Diagnosis + durable lessons in `learnings.md` 2026-06-19.
+- [x] **A1 — zip.js fail-loud on >4GiB.** Was 32-bit-only (`setUint32`/`setUint16`) with a
+      false "Zip64" comment → silent corruption past 4 GiB, then the take is cleared. Now a pure
+      `zipOverflow()` guard makes `makeZip` throw `ZIP_TOO_LARGE`; the loss guard keeps the take.
+- [x] **A3 — stream the video Blob into the zip (no OOM).** Assembly pinned the whole video in
+      the JS heap (`arrayBuffer()`); `makeZip` is now async + takes a Blob part, CRC'd in 8 MiB
+      slices, output disk-backed. Did NOT use FSA `createWritable` (would reintroduce the save
+      dialog Adam removed). Residual: frame PNGs still load together — follow-up.
+- [x] **A2 — surface IndexedDB quota exhaustion.** Quota failures were swallowed → capture
+      truncates silently. Now `noteWriteFailure()` → sticky `storageFull` + errors.json + badge
+      `!` + `manifest.storage_full`. Plus a `FRAME_CAP` (~5h) bounds runaway disk.
+- [x] **A4 — bound the crash snapshot + `unlimitedStorage`.** The recovery snapshot's unbounded
+      `errors`/`urls` could exceed the storage quota → a failed `set()` silently disarmed recovery.
+      Capped (50/1000) + `unlimitedStorage` added + the failed `set()` is now surfaced.
+- [x] **A5 — diagnose no-tab go-live + mid-recording mic loss.** goLive with no instrumented tab
+      now logs; a mic track ending mid-recording is surfaced (`manifest.narration_truncated`).
+- [ ] **LIVE VERIFY (interactive — no unit test):** (a) record a long/large capture (>4 GiB if you
+      can) → it either exports OR fails loudly with the take kept (badge `!`, Retry/Discard) — never
+      a corrupt zip; (b) a normal capture still exports (the async makeZip + Blob path); (c)
+      `manifest.json` has `storage_full:false`, `narration_truncated:false` on a clean run; (d)
+      revoke the mic mid-recording → `errors.json` notes it + `narration_truncated:true`.
+
+## ▶ TODO 2026-06-19 — HARDENING backlog (Tracks B/C/D from the same review) — NOT yet built
+
+Prioritized; pick a track and say "fix now" to action it (same batch-by-batch flow as A).
+
+**Track B — redaction leaks into STRUCTURED sinks (privacy; bundles get handed to other agents):**
+- [ ] **B1 — `contenteditable`/`role=textbox` → rrweb uncovered.** rrweb runs `maskAllInputs:true`
+      only (no contenteditable); `scrubNode` is shape-only. Free-form PII typed into Gmail/Slack/
+      Notion lands verbatim in `events.jsonl`. Add a `maskTextFn` or a contenteditable-aware pass.
+- [ ] **B2 — `describe()`/`accessibleName()` can pull a secret into `ctx` on the secret-input path**
+      via `aria-labelledby` → referenced `textContent`. Scrub name/section; suppress `ctx.name` when
+      `isSecretInput`.
+- [ ] **B3 — SPA `pushState`/`replaceState` emit no `nav` event** (`content.js` listens only for
+      `popstate`) → timeline URL context drifts on most modern apps; those URLs skip `redactUrl`.
+
+**Track C — analyze pipeline never-crash / DoS on malformed-untrusted bundles (fully unit-testable):**
+- [ ] **C1 — `build_context` crashes on a truncated/non-UTF-8/empty `timeline.json`** (`pack.py:585`+)
+      — unguarded `json.loads`/`read_text` despite the "never crash" promise. Guard every load.
+- [ ] **C2 — no `timeout=` on the transcribe/ffmpeg subprocesses** (`pack.py:825`, `transcribe.py:53`)
+      — a wedged ffmpeg hangs the pipeline forever; the "never fatal" contract doesn't cover hangs.
+- [ ] **C3 — `nearest_frame` is O(events × frames)** (4 call sites) — minutes of CPU at 100k events;
+      sort once + bisect.
+- [ ] **C4 — validator type guards + lockstep.** Non-dict / non-numeric timeline elements crash
+      `validate_bundle.py`; `TOKEN_RE` has drifted from `redact.js` (JWT `{10,}` vs `{6,}`).
+
+**Track D — AI-usability of outputs (the "totally usable, don't overload" ask):**
+- [ ] **D1 — capture HAR response bodies** (size-capped, redacted, same-origin JSON) — the migration
+      outcome (#3) most-wanted hinges on inferring the data model from request/response shapes, and
+      the HAR has no bodies. Needs response-body redaction (overlaps the open P4c item below).
+- [ ] **D2 — one authoritative API-calls table in `context.md`** binding method+URL+request body+
+      status+response body+triggering `t` (today split lossily across Timeline and Network sections).
+- [ ] **D3 — de-duplicate Steps/Timeline/transcript** (narration appears 3×; events listed twice) —
+      make Timeline a delta over Steps. This is the exact "overload with disconnected context" worry.
+- [ ] **D4 — demote/omit raw `events.jsonl`** from the pack (largest file, noise for these outcomes).
+- [ ] **D5 — guarantee narration into the self-driving zip** (transcribe at export / always pack) so
+      the zip path doesn't ship a stub the receiving AI can't fill; bundle the method skills too.
+- [ ] **D6 — surface the new capture-issue flags** (`storage_full`, `narration_truncated`,
+      `video_ended_early`) in pack.py's `## ⚠ Capture issues` so the AI knows the bundle is partial.
+- [ ] **D7 — regenerate `analyze/example-output/`** from a v2 bundle (it's a v1 sample — no Purpose/
+      Steps/Tabs/Annotations, so it under-represents current capabilities to any evaluator).
+
 ## ▶ TODO 2026-06-18 — validate the capture→bundle→AI OUTCOME flow for 3 purposes (PROCESS tests, not code)
 
 These test the core value prop, NOT code. The recording captures intent — the "what is this for?"

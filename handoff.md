@@ -1,9 +1,32 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-19 (fixed the 64MiB data-loss bug — a 17-min recording wouldn't save —
-LIVE-VERIFIED (Adam: a 109 MB capture downloaded). Then per Adam, SIMPLIFIED the save path to
-Downloads-only: removed the folder picker + "ask where to save" (FSA), so it's bulletproof. Loss
-guard (keep take until saved) still in. Prior: surface-scope + pause-network + mic done/verified.)_
+_Last updated: 2026-06-19 (HARDENING Track A — a deep failure-mode review found a class of SILENT
+data-loss bugs on long/large captures; fixed + unit-tested in 5 bisected commits, 82 node / 125
+python green, NEEDS A LIVE VERIFY. Tracks B/C/D from the review are a prioritized backlog in
+`to-do-current.md`. Prior: 64MiB fix LIVE-VERIFIED (109 MB capture downloaded), Downloads-only save,
+loss guard, surface-scope + pause-network + mic.)_
+
+## ▶ NEXT — live-verify HARDENING Track A, then pick Track B (redaction leaks), C (analyze crash-proofing), or D (AI-usability)
+
+## ✅ DONE 2026-06-19 — HARDENING Track A (silent data-loss) — built + unit-tested; NEEDS LIVE VERIFY
+
+A 4-angle review (capture worker / content / analyze / AI-usability) found that the remaining
+failure surface is concentrated in LONG/LARGE recordings and several failures are SILENT (REC shows,
+keepalive runs, data is quietly lost). Track A (the silent data-loss class) is fixed — 5 bisected
+commits (A1 `d8c8fc2`, A3 `b3d9eb2`, A2 `8babffa`, A4 `4beb3a9`, A5 `807759f`). Full diagnosis +
+durable lessons in `learnings.md` 2026-06-19; the live-verify checklist + the B/C/D backlog are in
+`to-do-current.md`.
+- **A1** zip.js was 32-bit-only with a false "Zip64" comment → silent corruption past 4 GiB then the
+  take is cleared. Now `makeZip` throws `ZIP_TOO_LARGE` (loss guard keeps the take).
+- **A3** assembly pinned the whole video in heap → OOM on large captures. `makeZip` is async + takes
+  the video as a Blob part (streamed for CRC, disk-backed output). Did NOT reintroduce FSA.
+- **A2** IndexedDB quota failures were swallowed → silent truncation. Now surfaced (errors.json +
+  badge `!` + `manifest.storage_full`); a `FRAME_CAP` bounds runaway disk.
+- **A4** the crash snapshot could overflow storage and disarm recovery → capped + `unlimitedStorage`.
+- **A5** no-instrumented-tab go-live + a mid-recording mic loss are now diagnosed
+  (`manifest.narration_truncated`).
+- **Live verify:** record a long capture → exports OR fails loudly with the take kept (never a corrupt
+  zip); a normal capture still exports; clean manifest has `storage_full:false`/`narration_truncated:false`.
 
 ## ✅ DONE + LIVE-VERIFIED (2026-06-19) — 17-min recording never saved (the 64MiB sendMessage cap)
 

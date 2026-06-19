@@ -4,6 +4,59 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-19 (HARDENING PASS — a deep failure-mode review + Track A fixes; the "looks healthy while losing data" class)
+
+A focused 4-angle review (capture worker, content script, analyze pipeline,
+AI-usability) to find where the tool breaks/loses data. Findings cluster around the
+two things the tool exists for — **long/large recordings** and **AI-usable output** —
+and the worst ones are SILENT: the recording shows REC and the keepalive runs while
+data is quietly lost. Track A (silent data-loss) was built + unit-tested this session
+(5 bisected commits, 82 node / 125 python green). Durable lessons:
+
+- **A STORE zip writer is 32-bit unless you build Zip64.** `zip.js` wrote every
+  size/offset with `setUint32` and the file count with `setUint16`, while a comment
+  claimed a "Zip64 … only if needed" path that **did not exist**. Past 4 GiB (a
+  multi-hour capture) the fields wrap mod 2³² → a silently-corrupt zip that reports
+  `ok:true`, after which the caller clears the take. Fix: a pure `zipOverflow()` guard;
+  `makeZip` throws `ZIP_TOO_LARGE` before writing so the loss guard keeps the take.
+  Lesson: a "handles large files" claim in a comment is not code — verify the field
+  widths. Real Zip64 is the eventual fix; fail-loud is the bulletproof interim.
+- **Never pin a whole media Blob in the JS heap to zip it.** Offscreen assembly did
+  `new Uint8Array(await video.arrayBuffer())` — the entire video resident on top of the
+  disk-backed Blob and again in the output Blob (~2–3× the capture), OOMing large
+  captures inside the try (take kept but un-exportable; every retry OOMs). Fix:
+  `makeZip` is async and accepts a **Blob part**, streaming it in 8 MiB slices to fold
+  the CRC32 (one slice resident) and handing the original disk-backed Blob to the
+  output. Deliberately did NOT use FSA `createWritable` — it reintroduces the save
+  dialog Adam removed (Downloads-only). Residual: frame PNGs still load together
+  (`streamFiles`); video dominates size in a normal screen capture. (Wiki candidate:
+  pairs with the MV3 "assemble large artifacts in a Window context" lesson.)
+- **Swallowed write failures hide a truncating capture.** Once IndexedDB hits quota,
+  EVERY write (frames/timeline/rrweb/HAR) fails, but the catches were
+  `console.debug`/`.catch(()=>{})` — so capture silently stops while the UI says REC.
+  Fix: one `noteWriteFailure()` chokepoint trips a sticky `storageFull`, logs to
+  errors.json, flips the badge, and surfaces `manifest.storage_full`. Lesson: a
+  swallowed catch on a persistence path is a silent-data-loss bug; quota errors must be
+  surfaced, not absorbed.
+- **The crash-recovery snapshot can itself overflow storage and disarm recovery.** The
+  `chrome.storage.local` session snapshot carried unbounded `errors`+`urls`; on a long
+  session the `set()` rejected and `.catch(()=>{})` hid it, so a later worker death
+  rehydrated stale/empty state. Fix: cap errors→50 / urls→1000, add `unlimitedStorage`,
+  and surface the failed `set()` (NOT via logError — that re-calls persistSession →
+  spin on a full disk). Lesson: the thing that protects you from data loss can be the
+  thing that loses it; bound what you persist and never silence its failure.
+- **Two more silent gaps:** goLive could go live with **no instrumented tab** (Start
+  tab closed during the picker → video-only, nothing logged) — now logged. A **mic
+  track ending mid-recording** was undetected (only the video track had an `ended`
+  listener) — now surfaced as `manifest.narration_truncated` + errors.json. Lesson:
+  every track/stream that can end independently needs its own `ended` handler.
+- **Still OPEN (backlog in to-do-current.md):** Track B (structured-sink redaction
+  leaks: contenteditable→rrweb, aria-labelledby→ctx, SPA pushState nav), Track C
+  (analyze never-crash: guard build_context loads, subprocess timeouts, O(n²)
+  nearest_frame, validator type guards, TOKEN_RE lockstep drift), Track D (AI-usability:
+  HAR response bodies for the migration outcome, one API-calls table, de-dup
+  Steps/Timeline/transcript, demote raw events.jsonl).
+
 ## 2026-06-19 (DATA-LOSS BUG — a 17-min recording never saved: the 64MiB message cap)
 
 Adam recorded 17 min (no pauses), hit Finish — nothing saved/downloaded. A 1-sec test
