@@ -49,6 +49,7 @@ const state = {
   urls: new Set(),
   errors: [], // { t, where, message, stack } — surfaced into the bundle
   micActive: false, // is the mic actually being recorded? drives the overlay level meter
+  storageFull: false, // an IndexedDB write hit the quota → capture is silently truncating
   // Frame METADATA only ({ t, file }) — the PNG bytes live in IndexedDB. This lets
   // the worker build manifest.frames without ever loading hundreds of screenshots
   // into memory (that bloat is exactly what the offscreen assembly now avoids).
@@ -69,6 +70,28 @@ function logError(where, info = {}) {
   state.errors.push({ t: state.t0 ? now() : 0, where, message, stack: info.stack || null });
   console.warn(`[capture-error] ${where}: ${message}`);
   persistSession();
+}
+
+// An IndexedDB write failed. The dangerous case is QuotaExceededError: once the
+// quota is hit EVERY subsequent write (frames, timeline, rrweb, HAR) starts
+// failing, so the recording keeps showing REC and the keepalive keeps the worker
+// warm while it has quietly STOPPED persisting data — at export you'd get a
+// silently-truncated bundle with no explanation. So the first time a write fails on
+// quota, surface it loudly: flag it (lands in the manifest), log it (errors.json),
+// and flip the badge so the user knows to finish and export now. Non-quota write
+// blips (a transient tx abort) are left to the per-site catch — they self-heal.
+function noteWriteFailure(where, e) {
+  const quota =
+    e && (e.name === "QuotaExceededError" || /quota|storage/i.test(e.message || ""));
+  if (quota && !state.storageFull) {
+    state.storageFull = true;
+    logError(where, {
+      message:
+        "browser storage is full — capture can no longer be saved and is being truncated; finish and export now",
+      stack: e?.stack,
+    });
+    setBadge("!", "#c0392b");
+  }
 }
 
 // Uncaught failures in the service worker itself.
@@ -325,6 +348,8 @@ async function start(triggerTabId, task, purposes) {
   const { blocklist, micEnabled } = await getSettings();
   await db.clearAll();
   state.frames = []; // fresh take → drop the previous take's frame metadata
+  state.storageFull = false; // fresh take → reset the IDB-quota tripwire + frame cap
+  frameCapLogged = false;
   // Reset any offscreen doc left over from a previous (possibly worker-killed) session
   // so a stale getDisplayMedia stream is released and we don't stack a second picker.
   await closeOffscreen();
@@ -883,7 +908,13 @@ chrome.windows.onFocusChanged.addListener(() => {
 // of the DOM event stream. The full-screen video is still the ground truth; this
 // keeps the timeline navigable. 3s × ~6 min ≈ 120 frames ≈ ~16 MB (PNG).
 const FRAME_INTERVAL_MS = 3000;
+// Sanity ceiling on frame count. At 3s/frame this is ~5 hours of recording; frames
+// are the biggest IndexedDB consumer (~130 KB PNG each), so this bounds runaway disk
+// use on a forgotten-running capture. The full-screen video is still the ground
+// truth past this point — we just stop minting new screenshots and say so once.
+const FRAME_CAP = 6000;
 let frameTimer = null;
+let frameCapLogged = false;
 
 function startFrameTimer() {
   stopFrameTimer();
@@ -896,6 +927,13 @@ function stopFrameTimer() {
 
 async function captureFrame(reason = "") {
   if (!state.recording || state.paused) return;
+  if (state.frames.length >= FRAME_CAP) {
+    if (!frameCapLogged) {
+      frameCapLogged = true;
+      logError("frame-cap", { message: `frame cap (${FRAME_CAP}) reached — relying on video.webm for the rest; structured capture continues` });
+    }
+    return;
+  }
   try {
     // captureVisibleTab shoots the active tab of the focused window. Only shoot the
     // surface we're recording: skip a focused tab/window outside the captured scope
@@ -915,6 +953,9 @@ async function captureFrame(reason = "") {
   } catch (e) {
     // captureVisibleTab can fail on chrome:// pages etc., or hit Chrome's
     // ~2/sec quota when an event frame lands next to a timer frame — non-fatal.
+    // But a STORAGE QuotaExceededError here is different: it means IndexedDB is full
+    // and the whole capture is now silently truncating — surface that loudly.
+    noteWriteFailure("frame-write", e);
     console.debug("frame capture skipped:", reason, e?.message);
   }
 }
@@ -951,7 +992,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       response: {},
     };
     state.har.set(requestId, entry);
-    db.put("har", entry).catch(() => {}); // mirror to IDB so network survives a worker restart
+    db.put("har", entry).catch((e) => noteWriteFailure("har-write", e)); // mirror to IDB so network survives a worker restart
   }
 
   if (method === "Network.responseReceived") {
@@ -965,7 +1006,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       content: { mimeType: r.mimeType },
     };
     entry.time = Math.round((params.timestamp - entry._start) * 1000);
-    db.put("har", entry).catch(() => {}); // upsert the now-complete entry
+    db.put("har", entry).catch((e) => noteWriteFailure("har-write", e)); // upsert the now-complete entry
     // Also surface the request as a timeline event for the merged view.
     appendTimeline({
       kind: "network",
@@ -1004,7 +1045,14 @@ async function appendTimeline(event) {
   // describe() copies a link's raw href into ctx — redact it too, else a secret in
   // an <a href="…?token=…"> (clicked/hovered/annotated) leaks into timeline.json.
   if (event.ctx?.href) event = { ...event, ctx: { ...event.ctx, href: redactUrl(event.ctx.href) } };
-  await db.append("timeline", { t: now(), ...event });
+  // Guard the write: an IndexedDB quota failure here would otherwise throw up into
+  // whatever message handler called us. Swallow it like the other write sites, but
+  // surface a quota exhaustion (capture is truncating) instead of dropping silently.
+  try {
+    await db.append("timeline", { t: now(), ...event });
+  } catch (e) {
+    noteWriteFailure("timeline-write", e);
+  }
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -1049,7 +1097,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // (events.jsonl) bypasses the URL/body scrubbers, so scrub the whole serialized
     // node for token shapes here. Same net as redactBody; lockstep with the
     // validator's TOKEN_RE. See learnings.md 2026-06-17.
-    if (state.recording && !state.paused) db.append("rrweb", { t: now(), node: scrubNode(msg.node), tab: sender.tab?.id });
+    if (state.recording && !state.paused)
+      db.append("rrweb", { t: now(), node: scrubNode(msg.node), tab: sender.tab?.id }).catch((e) => noteWriteFailure("rrweb-write", e));
   }
   if (msg.type === "capture-error") {
     logError(msg.where || "unknown", { message: msg.message, stack: msg.stack });
@@ -1224,6 +1273,10 @@ function buildManifest({ hasVideo, narrationInVideo, micError, timeline, frameLi
     // the shared window / hit "Stop sharing") — video.webm ends early but the rest
     // of the capture (events, network, mic) ran to the end. See errors.json.
     video_ended_early: !!state.videoEndedEarly,
+    // True if IndexedDB hit its quota mid-recording — the structured streams
+    // (timeline/events/frames/network) are TRUNCATED past that point. The video may
+    // still be complete (it's held in the offscreen doc, not IDB). See errors.json.
+    storage_full: !!state.storageFull,
     // Whether video.webm contains the user's microphone narration (mixed in on
     // the same clock). If true, transcribing video.webm yields t0-aligned cues.
     narration_in_video: hasVideo ? !!narrationInVideo : false,
