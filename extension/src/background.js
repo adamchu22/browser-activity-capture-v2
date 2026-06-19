@@ -49,6 +49,7 @@ const state = {
   urls: new Set(),
   errors: [], // { t, where, message, stack } — surfaced into the bundle
   micActive: false, // is the mic actually being recorded? drives the overlay level meter
+  micEndedEarly: false, // mic track ended mid-recording → narration is truncated
   storageFull: false, // an IndexedDB write hit the quota → capture is silently truncating
   // Frame METADATA only ({ t, file }) — the PNG bytes live in IndexedDB. This lets
   // the worker build manifest.frames without ever loading hundreds of screenshots
@@ -357,6 +358,7 @@ async function start(triggerTabId, task, purposes) {
   await db.clearAll();
   state.frames = []; // fresh take → drop the previous take's frame metadata
   state.storageFull = false; // fresh take → reset the IDB-quota tripwire + frame cap
+  state.micEndedEarly = false;
   frameCapLogged = false;
   // Reset any offscreen doc left over from a previous (possibly worker-killed) session
   // so a stale getDisplayMedia stream is released and we don't stack a second picker.
@@ -462,6 +464,15 @@ async function goLive() {
   const liveTab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
   state.captureWindowId = liveTab?.windowId ?? null;
   if (tabId != null) await instrumentTab(tabId);
+  else
+    // No eligible tab to instrument at go-live (e.g. the user closed the Start tab
+    // during the picker/countdown and is now on a chrome:// page). Video still records,
+    // but DOM/click/network capture won't begin until they switch into a normal tab —
+    // surface it so the gap is diagnosable from errors.json instead of looking healthy.
+    logError("golive", {
+      message:
+        "went live with no instrumented tab — video is recording but clicks/DOM/network won't capture until you switch into a normal web tab",
+    });
   chrome.runtime.sendMessage({ type: "offscreen-go" }).catch(() => {}); // recorder.start()
   await captureFrame("recording started");
   startFrameTimer();
@@ -1124,6 +1135,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     state.videoEndedEarly = true;
     logError("offscreen-video", { message: "screen share ended mid-recording" });
   }
+  // The microphone track ended mid-recording (revoked / unplugged). Narration is
+  // truncated from here; drop the level meter and flag the bundle so the analyst
+  // knows the transcript stops short of the video.
+  if (msg.type === "mic-track-ended") {
+    state.micActive = false;
+    state.micEndedEarly = true;
+    logError("offscreen-mic", { message: "microphone ended mid-recording — narration truncated" });
+    broadcastOverlay();
+  }
   // The offscreen doc finished the screen picker (the user picked, or cancelled →
   // video:false). Run the countdown, then go live. Sent once per recording.
   if (msg.type === "offscreen-armed") {
@@ -1292,6 +1312,9 @@ function buildManifest({ hasVideo, narrationInVideo, micError, timeline, frameLi
     // reason being trapped in the offscreen document's console. null if narration
     // recorded fine.
     narration_error: narrationInVideo ? null : (micError || null),
+    // True if the mic was recording but its track ended before the user finished —
+    // narration exists but is TRUNCATED (transcript stops short of the video). See errors.json.
+    narration_truncated: !!state.micEndedEarly,
     transcript: "transcript.vtt",
     browser: { name: "Chrome", version: navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] || "?" },
     tool_versions: { extension: "0.2.0", rrweb: "2.0.0" },

@@ -225,6 +225,17 @@ async function startRecording(withMic) {
         tracks.push(...micTracks);
         micRecorded = true;
         startMicMeter(micStream); // feed the on-screen overlay's "is it hearing me?" meter
+        // If the mic is revoked / unplugged mid-recording, the audio track fires
+        // `ended` and the narration goes silent for the rest of the take while the
+        // manifest would still claim narration_in_video:true (the analyst transcribes
+        // silence with no clue why). Surface it like the video-track handler: report it
+        // (errors.json) and tell the worker so it drops the level meter + flags the bundle.
+        micTracks.forEach((t) => {
+          t.addEventListener("ended", () => {
+            reportError("microphone stopped mid-recording (narration truncated from here)");
+            chrome.runtime.sendMessage({ type: "mic-track-ended" }).catch(() => {});
+          });
+        });
       } else {
         micError = "getUserMedia returned no audio tracks";
       }
