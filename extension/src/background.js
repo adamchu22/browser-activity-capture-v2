@@ -119,7 +119,15 @@ function persistSession() {
   persistTimer = setTimeout(() => {
     persistTimer = null;
     const rec = serializeSession(state);
-    if (rec) chrome.storage.local.set({ [SESSION_KEY]: rec }).catch(() => {});
+    if (rec)
+      chrome.storage.local.set({ [SESSION_KEY]: rec }).catch((e) => {
+        // The crash-recovery snapshot failed to persist (most likely the storage
+        // quota — unlimitedStorage + the capped snapshot make this rare). Don't route
+        // through logError: that calls persistSession again → a tight retry loop on a
+        // full disk. Just warn + flag so a later restart isn't silently unrecoverable.
+        state.persistFailed = true;
+        console.warn("[capture] session snapshot persist failed:", e?.message || e);
+      });
     else chrome.storage.local.remove(SESSION_KEY).catch(() => {});
   }, 250);
 }

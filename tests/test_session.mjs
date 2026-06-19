@@ -94,6 +94,26 @@ test("applySession tolerates a partial/empty record", () => {
   assert.deepEqual(restored.purposes, []);
 });
 
+test("the snapshot caps errors + urls so a long session can't overflow storage quota", () => {
+  const src = liveState();
+  // A pathological session: an error storm + thousands of navigations.
+  src.errors = Array.from({ length: 5000 }, (_, i) => ({ t: i, where: "x", message: "e" + i, stack: null }));
+  src.urls = new Set(Array.from({ length: 5000 }, (_, i) => `https://e/${i}`));
+  const rec = serializeSession(src);
+  assert.equal(rec.errors.length, 50, "errors capped to the most-recent 50");
+  assert.equal(rec.urls.length, 1000, "urls capped to the most-recent 1000");
+  // Capped to the MOST RECENT, not the oldest.
+  assert.equal(rec.errors[rec.errors.length - 1].message, "e4999");
+  assert.equal(rec.urls[rec.urls.length - 1], "https://e/4999");
+});
+
+test("storageFull round-trips so a recovered recording stays flagged as truncated", () => {
+  const src = liveState();
+  src.storageFull = true;
+  const restored = applySession({}, JSON.parse(JSON.stringify(serializeSession(src))));
+  assert.equal(restored.storageFull, true);
+});
+
 test("a paused recording round-trips its pause accounting (clock stays aligned)", () => {
   const src = liveState();
   const restored = applySession({}, serializeSession(src));

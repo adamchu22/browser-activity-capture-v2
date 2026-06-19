@@ -13,6 +13,17 @@
 // Pure + dependency-free so it can be unit-tested without chrome.* — see
 // tests/test_session.mjs. Sets/Maps become arrays on the way out and back.
 
+// Caps on the two unbounded collections in the snapshot. chrome.storage.local has a
+// per-extension quota (a few MB without unlimitedStorage); a long, error-heavy or
+// many-nav session could push the snapshot past it, and the persist would then start
+// FAILING — silently disarming the very crash recovery this exists for. errors and
+// urls are the only fields that grow without bound (tabs is bounded by tabs entered),
+// so cap them to the most-recent N. The full lists still live in IndexedDB-adjacent
+// state for the export; this snapshot only needs enough to keep CONTROLLING and
+// finalising the recording after a restart.
+const MAX_SNAPSHOT_ERRORS = 50;
+const MAX_SNAPSHOT_URLS = 1000;
+
 // Serialize the durable slice of `state`, or null when there's nothing to persist
 // (no live recording — arming/idle states are intentionally not recoverable).
 export function serializeSession(state) {
@@ -36,10 +47,11 @@ export function serializeSession(state) {
     captureTabId: state.captureTabId ?? null,
     captureWindowId: state.captureWindowId ?? null,
     activeTabId: state.activeTabId ?? null,
+    storageFull: !!state.storageFull,
     tabIds: [...(state.tabIds || [])],
     tabs: state.tabs ? [...state.tabs.values()] : [],
-    urls: [...(state.urls || [])],
-    errors: Array.isArray(state.errors) ? state.errors : [],
+    urls: [...(state.urls || [])].slice(-MAX_SNAPSHOT_URLS),
+    errors: (Array.isArray(state.errors) ? state.errors : []).slice(-MAX_SNAPSHOT_ERRORS),
   };
 }
 
@@ -60,6 +72,7 @@ export function applySession(state, record) {
   state.purposes = Array.isArray(record.purposes) ? record.purposes : [];
   state.blocklist = Array.isArray(record.blocklist) ? record.blocklist : [];
   state.micActive = !!record.micActive;
+  state.storageFull = !!record.storageFull;
   state.videoEndedEarly = !!record.videoEndedEarly;
   state.captureSurface = record.captureSurface ?? null;
   state.captureTabId = record.captureTabId ?? null;

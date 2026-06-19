@@ -10,6 +10,7 @@
     "debugger",
     "downloads",
     "storage",
+    "unlimitedStorage",
     "offscreen"
   ],
   "host_permissions": [
