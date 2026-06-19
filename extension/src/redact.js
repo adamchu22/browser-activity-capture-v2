@@ -91,6 +91,24 @@ export function redactUrl(url) {
   return scrubTokens(masked);
 }
 
+// Redact the semantic-context object (`ctx`) a timeline event carries from
+// describe(). Three of its string fields can leak a secret:
+//   • href — a link's raw URL can hold a token in its query (?jwt=…).
+//   • name — accessibleName() follows aria-labelledby to a referenced element's
+//     textContent, which can contain a token-shaped secret.
+//   • section — sectionFor() does the same via a landmark's aria-labelledby or the
+//     nearest heading text.
+// content.js already suppresses ctx.name entirely on a secret input; this is the
+// worker-side, canonical token-shape scrub for everything that does come through.
+export function redactCtx(ctx) {
+  if (!ctx || typeof ctx !== "object") return ctx;
+  const out = { ...ctx };
+  if (typeof out.href === "string") out.href = redactUrl(out.href);
+  if (typeof out.name === "string") out.name = scrubTokens(out.name);
+  if (typeof out.section === "string") out.section = scrubTokens(out.section);
+  return out;
+}
+
 // Decide the masked form for a single value given the field it came from.
 export function maskValue(fieldName, value) {
   if (value == null || value === "") return value;

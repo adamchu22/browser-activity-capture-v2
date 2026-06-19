@@ -16,7 +16,7 @@
 //   - video is recorded in an offscreen document via MediaRecorder
 //   - full request/response bodies come from the CDP Network domain (chrome.debugger)
 
-import { redactHeaders, redactBody, redactUrl, scrubTokens } from "./redact.js";
+import { redactHeaders, redactBody, redactUrl, scrubTokens, redactCtx } from "./redact.js";
 import { makeZip } from "./zip.js";
 import { streamFiles, frameMeta } from "./bundle-streams.js";
 import * as db from "./db.js";
@@ -1061,9 +1061,11 @@ async function appendTimeline(event) {
   // Single chokepoint: any event carrying a URL gets it scrubbed before disk, so a
   // token in a query string can't ride into the timeline (nav + network events).
   if (event.url) event = { ...event, url: redactUrl(event.url) };
-  // describe() copies a link's raw href into ctx — redact it too, else a secret in
-  // an <a href="…?token=…"> (clicked/hovered/annotated) leaks into timeline.json.
-  if (event.ctx?.href) event = { ...event, ctx: { ...event.ctx, href: redactUrl(event.ctx.href) } };
+  // describe() copies a link's raw href + an aria-labelledby–derived name/section
+  // into ctx — any of which can carry a token. Scrub all three at this one
+  // chokepoint, else a secret in an <a href="…?token=…"> or a labelledby-referenced
+  // node leaks into timeline.json. (content.js also drops ctx.name on secret inputs.)
+  if (event.ctx) event = { ...event, ctx: redactCtx(event.ctx) };
   // Guard the write: an IndexedDB quota failure here would otherwise throw up into
   // whatever message handler called us. Swallow it like the other write sites, but
   // surface a quota exhaustion (capture is truncating) instead of dropping silently.

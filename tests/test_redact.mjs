@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { redactUrl, scrubTokens, redactBody } from "../extension/src/redact.js";
+import { redactUrl, scrubTokens, redactBody, redactCtx } from "../extension/src/redact.js";
 
 const JWT = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIn0.abc-def_123";
 const hasToken = (s) => /eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/.test(s) || /Bearer\s/.test(s);
@@ -124,4 +124,33 @@ test("scrubbing a serialized rrweb node clears a token in a DOM attribute", () =
   const scrubbed = JSON.parse(scrubTokens(JSON.stringify(node)));
   assert.ok(!hasToken(JSON.stringify(scrubbed)), "no token anywhere in the node");
   assert.equal(scrubbed.tagName, "img", "structure preserved");
+});
+
+// --- Track B / B2: redactCtx — the describe() semantic-context object ---------
+// accessibleName() follows aria-labelledby to a referenced node's textContent, and
+// sectionFor() reads a landmark's label / nearest heading — either can pull a
+// token-shaped secret into ctx.name / ctx.section. ctx.href can hold a token in a
+// link's query. redactCtx is the worker-side canonical scrub for all three.
+
+test("redactCtx scrubs a token pulled into the accessible name", () => {
+  const out = redactCtx({ role: "textbox", name: `Your code: ${JWT}` });
+  assert.ok(!hasToken(JSON.stringify(out)), "no token in ctx.name");
+  assert.equal(out.role, "textbox", "non-secret fields untouched");
+});
+
+test("redactCtx scrubs a token in the section label", () => {
+  const out = redactCtx({ section: `Bearer ${"a".repeat(20)}` });
+  assert.ok(!hasToken(JSON.stringify(out)), "no token in ctx.section");
+});
+
+test("redactCtx masks a secret in a link href", () => {
+  const out = redactCtx({ href: `/r?access_token=${JWT}` });
+  assert.ok(!hasToken(JSON.stringify(out)), "no token in ctx.href");
+});
+
+test("redactCtx leaves benign context alone and tolerates non-objects", () => {
+  const benign = { role: "button", name: "Issue refund", section: "Order actions" };
+  assert.deepEqual(redactCtx(benign), benign);
+  assert.equal(redactCtx(null), null);
+  assert.equal(redactCtx(undefined), undefined);
 });

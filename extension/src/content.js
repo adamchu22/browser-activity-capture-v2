@@ -259,7 +259,11 @@
     const d = { tag };
     const role = roleOf(el);
     if (role) d.role = role;
-    const name = accessibleName(el);
+    // accessibleName() follows aria-labelledby to a referenced element's
+    // textContent. On a SECRET field that reference can pull sensitive text into
+    // ctx.name, so suppress the name entirely for secret inputs — the role/section
+    // still give the analyst enough ("type into the secret field in 'Login'").
+    const name = isSecretInput(el) ? "" : accessibleName(el);
     if (name) d.name = name;
     if (tag === "input" || tag === "textarea" || tag === "select") {
       const t = el.getAttribute?.("type");

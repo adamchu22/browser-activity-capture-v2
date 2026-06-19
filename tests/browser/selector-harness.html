@@ -60,6 +60,12 @@
     <option selected>Submitted</option>
   </select>
 
+  <!-- B2: a secret input whose aria-labelledby points at text holding a token.
+       describe() must NOT pull that into ctx.name (it suppresses name on a
+       secret input), so the secret can't leak into timeline.json via ctx. -->
+  <span id="otp-label">One-time code eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhIjoiYiJ9.sig-xyz_123</span>
+  <input type="password" aria-labelledby="otp-label" data-ctx="secret-input" />
+
   <script>
     // --- chrome.runtime stub: collect timeline events, auto-start recording ---
     window.__events = [];
@@ -122,6 +128,7 @@
         reason: clickCtx('[data-ctx="reason-input"]'),
         link: clickCtx('[data-ctx="track-link"]'),
         select: clickCtx('[data-ctx="state-select"]'),
+        secret: clickCtx('[data-ctx="secret-input"]'),
       };
       const ctxChecks = {
         button_role: ctx.refund.role === "button",
@@ -134,6 +141,10 @@
         link_section_from_heading: ctx.link.section === "Shipping",
         select_role: ctx.select.role === "combobox",
         select_selected: ctx.select.selected === "Submitted",
+        // B2: a secret input keeps its role/inputType but drops the (token-bearing)
+        // aria-labelledby name, so no secret rides into ctx.name.
+        secret_name_suppressed: !ctx.secret.name,
+        secret_no_token: !/eyJ[A-Za-z0-9_-]{6,}\./.test(JSON.stringify(ctx.secret)),
       };
 
       window.__results = {
