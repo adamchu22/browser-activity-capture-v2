@@ -91,21 +91,23 @@ were written + committed once (proprietary `LICENSE`, `rrweb.LICENSE`, `Geist-LI
 publishing a license is on hold. Not legal advice — confirm with a lawyer before relying on it.
 
 **Why on hold (Adam, 2026-06-18):** "hold off on the license right now in case someone tries to sue
-me." The concern is legal exposure while the holding entity doesn't exist yet and ownership isn't
-settled. Holding off is low-cost: copyright is automatic, so the code is "all rights reserved" by
-default with no `LICENSE` file; the only deferred obligation is the rrweb/Geist third-party notices,
-which only bite at *distribution* time (and Adam isn't distributing yet).
+me... we want me limited just in case." Adam wants an **LLC in place first** so liability is limited
+(the LLC, not Adam personally, would hold + license the project) before any license is published or
+the tool is distributed. Holding off is low-cost: copyright is automatic, so the code is "all rights
+reserved" by default with no `LICENSE` file; the only deferred obligation is the rrweb/Geist
+third-party notices, which only bite at *distribution* time (and Adam isn't distributing yet).
 
 **Decision when resumed (Adam, 2026-06-18):** proprietary / **all-rights-reserved**, fully closed
 (not source-available) — Adam sees this as an embeddable/sellable component for AI-agent onboarding &
-self-serve feedback. Holder: **an entity Adam controls that doesn't exist yet**; until it does, the
-notice would read "Copyright (c) 2026 Adam Chubak" (author copyright vests automatically), then a
-one-page IP assignment (Adam → entity) on formation. (Alternatives if he changes his mind: PolyForm
-Noncommercial — source-visible, free non-commercial, commercial reserved; or BSL 1.1 — restricted
-now, opens after a change date.)
+self-serve feedback. Holder: **the LLC Adam will form** (doesn't exist yet). The LLC holds + licenses
+the project; the LICENSE notice reads "Copyright (c) 2026 <LLC name>" once formed, with a one-page IP
+assignment (Adam → LLC) to move the author copyright into it. (Alternatives if he changes his mind:
+PolyForm Noncommercial — source-visible, free non-commercial, commercial reserved; or BSL 1.1 —
+restricted now, opens after a change date.)
 
-**Resume trigger:** revisit before any distribution/handoff of the extension to a third party, OR
-once the holding entity + ownership are settled — whichever comes first.
+**Resume trigger: when Adam forms the LLC.** That's the gate — license + third-party notices get
+written/committed then, with the LLC as holder. (Also revisit sooner if the extension is ever handed
+to a third party before the LLC exists, since the rrweb/Geist notices are required at distribution.)
 
 **Audit findings (what's ours vs third-party):**
 - ~7,727 lines of original JS/Python/HTML/CSS authored here + all docs = **ours** (copyrightable).
