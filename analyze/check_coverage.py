@@ -37,8 +37,17 @@ DEFAULT_FRAME_GAP_MS = 60_000
 
 
 def _fmt(ms):
-    s = max(0, int(ms // 1000))
+    s = max(0, int(_num(ms) // 1000))
     return f"{s // 60}:{s % 60:02d}"
+
+
+def _num(v, default=0.0):
+    """Coerce to float, falling back to `default` — so a non-numeric timestamp in an
+    untrusted bundle can't crash arithmetic/sorting here."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def analyze_coverage(timeline, frames=None, duration_ms=None,
@@ -50,9 +59,13 @@ def analyze_coverage(timeline, frames=None, duration_ms=None,
     """
     by_tab = {}
     for e in timeline:
+        if not isinstance(e, dict):
+            continue  # untrusted bundle: skip non-object timeline entries
         tab = e.get("tab")
+        if not isinstance(tab, (str, int, type(None))):  # keep the dict key hashable
+            tab = None
         kind = e.get("kind")
-        t = e.get("t", 0)
+        t = _num(e.get("t", 0))
         slot = by_tab.setdefault(tab, {"content": [], "network": []})
         if kind in CONTENT_KINDS:
             slot["content"].append(t)
@@ -83,14 +96,14 @@ def analyze_coverage(timeline, frames=None, duration_ms=None,
     # Frame coverage: with the periodic timer, frames should be regular. A big
     # gap means visual coverage lapsed (often the same root cause).
     if frames:
-        fts = sorted(f.get("t", 0) for f in frames)
+        fts = sorted(_num(f.get("t", 0)) for f in frames if isinstance(f, dict))
         prev = 0
         biggest = 0
         for t in fts:
             biggest = max(biggest, t - prev)
             prev = t
         if duration_ms is not None:
-            biggest = max(biggest, duration_ms - prev)
+            biggest = max(biggest, _num(duration_ms) - prev)
         if biggest > frame_gap_ms:
             warnings.append(
                 f"largest gap between frames is {_fmt(biggest)} "
@@ -100,19 +113,36 @@ def analyze_coverage(timeline, frames=None, duration_ms=None,
     return {"ok": not failures, "failures": failures, "warnings": warnings, "tabs": tabs}
 
 
+def _parse(raw):
+    """Best-effort JSON parse — bytes or str, never raises (untrusted bundle)."""
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+
+
 def _load(bundle):
-    """Load timeline + frames-from-manifest from a bundle dir or zip."""
+    """Load timeline + frames-from-manifest from a bundle dir or zip. Tolerates a
+    malformed/missing file: the loaders fall back to safe shapes so the CLI can't
+    crash on an untrusted bundle."""
     p = Path(bundle)
+    timeline = manifest = None
     if p.is_dir():
-        timeline = json.loads((p / "timeline.json").read_text())
-        manifest = json.loads((p / "manifest.json").read_text())
+        timeline = _parse((p / "timeline.json").read_bytes()) if (p / "timeline.json").exists() else None
+        manifest = _parse((p / "manifest.json").read_bytes()) if (p / "manifest.json").exists() else None
     elif zipfile.is_zipfile(p):
         with zipfile.ZipFile(p) as z:
-            timeline = json.loads(z.read("timeline.json"))
-            manifest = json.loads(z.read("manifest.json"))
+            names = set(z.namelist())
+            timeline = _parse(z.read("timeline.json")) if "timeline.json" in names else None
+            manifest = _parse(z.read("manifest.json")) if "manifest.json" in names else None
     else:
         sys.exit(f"not a bundle dir or zip: {bundle}")
-    return timeline, manifest.get("frames", []), manifest.get("duration_ms")
+    if not isinstance(timeline, list):
+        timeline = []
+    if not isinstance(manifest, dict):
+        manifest = {}
+    frames = manifest.get("frames")
+    return timeline, (frames if isinstance(frames, list) else []), manifest.get("duration_ms")
 
 
 def main(argv):

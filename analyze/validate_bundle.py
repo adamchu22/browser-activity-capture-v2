@@ -81,9 +81,11 @@ class Bundle:
         return name in self.names
 
     def text(self, name: str) -> str:
-        if self.zip:
-            return self.zip.read(name).decode("utf-8")
-        return (self.path / name).read_text(encoding="utf-8")
+        # errors="replace": a non-UTF-8 byte in an untrusted bundle must not crash
+        # the validator (load_json catches the resulting JSON error; the redaction
+        # scan still runs over the decoded text).
+        raw = self.zip.read(name) if self.zip else (self.path / name).read_bytes()
+        return raw.decode("utf-8", errors="replace")
 
     def frame_files(self) -> set[str]:
         return {n for n in self.names if n.startswith("frames/") and n.endswith(".png")}
@@ -128,12 +130,15 @@ def check_manifest(m: dict, b: Bundle, r: Report):
             r.err(f"manifest.json missing `{key}`")
     if m.get("sync_mode") not in (None, "self_record", "loom_offset"):
         r.warn(f"manifest sync_mode `{m.get('sync_mode')}` is unexpected")
-    red = m.get("redaction") or {}
+    red = m.get("redaction")
+    if not isinstance(red, dict):
+        red = {}
     if not red.get("password_fields_masked"):
         r.warn("manifest does not assert password_fields_masked — confirm redaction ran")
     else:
         r.ok("manifest declares redaction policy")
-    return m.get("frames", [])
+    frames = m.get("frames")
+    return frames if isinstance(frames, list) else []
 
 
 def check_timeline(events, r: Report):
@@ -144,15 +149,23 @@ def check_timeline(events, r: Report):
     bad_kinds, unsorted = set(), False
     referenced_frames = []
     for i, e in enumerate(events):
+        if not isinstance(e, dict):
+            r.err(f"timeline event #{i} is not an object")
+            continue
         if "t" not in e or "kind" not in e:
             r.err(f"timeline event #{i} missing `t` or `kind`")
             continue
-        if e["kind"] not in KNOWN_KINDS:
-            bad_kinds.add(e["kind"])
-        if e["t"] < last_t:
+        t = e["t"]
+        if isinstance(t, bool) or not isinstance(t, (int, float)):
+            r.err(f"timeline event #{i} has a non-numeric `t`")
+            continue
+        kind = e["kind"]
+        if isinstance(kind, str) and kind not in KNOWN_KINDS:
+            bad_kinds.add(kind)
+        if t < last_t:
             unsorted = True
-        last_t = e["t"]
-        if e.get("frame"):
+        last_t = t
+        if isinstance(e.get("frame"), str) and e["frame"]:
             referenced_frames.append(e["frame"])
     if bad_kinds:
         r.warn(f"timeline has unknown event kinds: {sorted(bad_kinds)}")
@@ -165,7 +178,11 @@ def check_timeline(events, r: Report):
 
 def check_frames(manifest_frames, referenced, b: Bundle, r: Report):
     on_disk = b.frame_files()
-    wanted = {f["file"] if isinstance(f, dict) else f for f in manifest_frames}
+    wanted = set()
+    for f in manifest_frames:
+        name = f.get("file") if isinstance(f, dict) else f
+        if isinstance(name, str):
+            wanted.add(name)
     wanted |= set(referenced)
     missing = {w for w in wanted if w and w not in on_disk}
     if missing:
@@ -236,11 +253,14 @@ def validate(path: Path) -> int:
             r.warn(f"no `{name}` (optional, but the extension normally emits it)")
 
     manifest = load_json(b, "manifest.json", r)
+    if manifest is not None and not isinstance(manifest, dict):
+        r.err("manifest.json is not a JSON object")
+        manifest = None
     timeline = load_json(b, "timeline.json", r)
-    manifest_frames = check_manifest(manifest, b, r) if manifest else []
+    manifest_frames = check_manifest(manifest, b, r) if isinstance(manifest, dict) else []
     _, referenced = check_timeline(timeline, r) if timeline else ([], [])
     check_frames(manifest_frames, referenced, b, r)
-    if manifest and isinstance(timeline, list):
+    if isinstance(manifest, dict) and isinstance(timeline, list):
         check_coverage_gap(timeline, manifest, r)
     if b.has("network.har"):
         load_json(b, "network.har", r) and r.ok("network.har parses")
