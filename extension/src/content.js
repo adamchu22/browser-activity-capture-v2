@@ -72,6 +72,19 @@
     return String(value).replace(TOKEN_VALUE_RE, "‹redacted:secret›");
   }
 
+  // --- editable-text masking for rrweb (mirror of src/mask-text.js) ----------
+  //
+  // VERBATIM copy from src/mask-text.js (the tested module) — content.js is a
+  // classic script and can't import. rrweb's maskAllInputs covers <input>/<textarea>
+  // but NOT contenteditable / ARIA textboxes (Gmail, Slack, Notion), so free-form
+  // text typed there would land in events.jsonl in the clear. Keep in sync.
+  const EDITABLE_TEXT_SELECTOR =
+    '[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="searchbox"]';
+  function maskEditableText(text) {
+    if (typeof text !== "string" || !text.trim()) return text;
+    return "‹redacted›";
+  }
+
   // --- unique selector (finder-style) -------------------------------------
   //
   // The old impl returned id / name / tag only, so real pages logged useless
@@ -969,6 +982,12 @@
         emit: emitRaw,
         maskAllInputs: true, // belt-and-suspenders with our own masking
         maskInputOptions: { password: true },
+        // maskAllInputs misses rich editors (contenteditable / role=textbox), so
+        // free-form text typed into Gmail/Slack/Notion would serialize verbatim.
+        // Mask text inside any editable region — on the snapshot and on every
+        // typing mutation (rrweb re-tests via closest() per characterData change).
+        maskTextSelector: EDITABLE_TEXT_SELECTOR,
+        maskTextFn: maskEditableText,
       });
     }
   }
