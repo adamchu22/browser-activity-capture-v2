@@ -210,8 +210,8 @@ the items here need a real Chrome run or a human eyeball because they're shadow-
 visual and can't be unit-tested. Do them in order.
 
 ### Step 0 — Pre-flight (sanity, ~10s)
-- [ ] `python3 -m unittest discover -s tests` → **109 passed** (1 skipped).
-- [ ] `node --test tests/test_*.mjs` → **43 passed**.
+- [ ] `python3 -m unittest discover -s tests` → **165 passed** (1 skipped).
+- [ ] `node --test tests/test_*.mjs` → **93 passed**.
 - [ ] Load the extension: `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
       (If rrweb is missing, vendor it — see `extension/FIRST-CAPTURE.md` §0.)
 
@@ -487,14 +487,17 @@ the analyze side (`manifest["video"]`, frame `file`) basename-stripped; document
 aren't pixel-redacted. Residual low-severity recommendations are in `to-do-current.md` ("Security
 follow-ups"). See `learnings.md` for the full list.
 
-`python3 -m unittest discover -s tests` — 109 tests (glossary, network-noise collapse,
+`python3 -m unittest discover -s tests` — 165 tests (glossary, network-noise collapse,
 multi-tab rendering, semantic labels + step segmentation + frame annotation, purpose steer,
 bundled skills incl. competitive-research, coverage diagnostic, `test_annotations.py` (13):
 annotation:select/draw in the timeline, steps, the `## ✦ Annotations` section, and the
 frames-annotated.html marks; and `test_autotranscribe.py` (12): the stub-detection + the
-best-effort auto-transcribe gates, transcriber mocked). Stdlib only, all green.
-`node --test tests/test_*.mjs` — 43 tests: redact (URL/value/form-body/case/provider-keys/
-fragment, 13), nav-policy, bundle-docs, and `test_annotate.mjs` (7, the Draw `drawGeom` math). The content.js
+best-effort auto-transcribe gates, transcriber mocked; plus the later hardening tests —
+`test_pack_robust.py`, `test_nearest_frame.py`, `test_validate_robust.py` (Track C never-crash) and
+the Track A/B additions). Stdlib only, all green.
+`node --test tests/test_*.mjs` — 93 tests: redact (URL/value/form-body/case/provider-keys/
+fragment, 13), nav-policy, bundle-docs, `test_annotate.mjs` (7, the Draw `drawGeom` math), plus the
+Track A/B suites (zip, bundle-streams, mask-text, capture-scope, clock, session, blocklist). The content.js
 unique-selector AND semantic-context (`describe()`) logic is verified in real Chromium via
 `tests/browser/selector-harness.html` (browser, not unittest) — `allUnique`, `allIdentify`,
 and `allCtxPass` all true. The overlay + annotation tools are shadow-DOM + chrome.* dependent,

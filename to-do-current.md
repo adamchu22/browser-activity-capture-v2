@@ -3,7 +3,7 @@
 v2 reworks capture to **full-screen video + all-tabs instrumentation** and adds an
 **intent-capture layer** (stated task goal, semantic element context, narrated-step
 segmentation, frame annotation / "draw on screen"). Code is built and unit-tested
-(61 tests; DOM capture also harness-verified); the extension still needs a live-Chrome
+(165 python / 93 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
 ## ✅ Done + LIVE-VERIFIED 2026-06-19 — 17-min recording never saved (the 64MiB sendMessage cap)
