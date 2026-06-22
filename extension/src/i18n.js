@@ -65,6 +65,11 @@
       micDone: "Granted. You can close this window and press Start — your voice will be included.",
       micBlocked:
         "Microphone blocked: {e}. Check the mic icon in the address bar, or macOS System Settings → Privacy & Security → Microphone (allow Chrome), then try again.",
+      micGranted: "Microphone enabled ✓ — you can press Start.",
+      micNoPrompt:
+        "Your browser didn't show a microphone prompt. Open this site/extension's permissions and set Microphone to Allow (in Comet: the site-permissions panel in the address bar), then click Enable again.",
+      micManualHint:
+        "No prompt? Set Microphone to Allow in your browser's site/extension permissions, then Try again.",
       cdBold: "Say out loud what you're about to do.",
       cdSmall: "Your narration gives the AI the most context.",
     },
@@ -122,6 +127,11 @@
       micDone: "Concedido. Puedes cerrar esta ventana y presionar Iniciar — tu voz se incluirá.",
       micBlocked:
         "Micrófono bloqueado: {e}. Revisa el icono del micrófono en la barra de direcciones, o Ajustes del Sistema de macOS → Privacidad y seguridad → Micrófono (permitir Chrome), luego intenta de nuevo.",
+      micGranted: "Micrófono activado ✓ — puedes presionar Iniciar.",
+      micNoPrompt:
+        "Tu navegador no mostró la solicitud de micrófono. Abre los permisos de este sitio/extensión y pon Micrófono en Permitir (en Comet: el panel de permisos del sitio en la barra de direcciones), luego pulsa Activar de nuevo.",
+      micManualHint:
+        "¿Sin solicitud? Pon Micrófono en Permitir en los permisos del sitio/extensión de tu navegador y vuelve a intentarlo.",
       cdBold: "Di en voz alta lo que vas a hacer.",
       cdSmall: "Tu narración le da a la IA el máximo contexto.",
     },
@@ -179,6 +189,11 @@
       micDone: "Concedido. Você pode fechar esta janela e pressionar Iniciar — sua voz será incluída.",
       micBlocked:
         "Microfone bloqueado: {e}. Verifique o ícone do microfone na barra de endereços, ou Ajustes do Sistema do macOS → Privacidade e Segurança → Microfone (permitir o Chrome), depois tente novamente.",
+      micGranted: "Microfone ativado ✓ — você pode pressionar Iniciar.",
+      micNoPrompt:
+        "Seu navegador não mostrou o pedido de microfone. Abra as permissões deste site/extensão e defina Microfone como Permitir (no Comet: o painel de permissões do site na barra de endereços), depois clique em Ativar novamente.",
+      micManualHint:
+        "Sem pedido? Defina Microfone como Permitir nas permissões do site/extensão do navegador e tente novamente.",
       cdBold: "Diga em voz alta o que você vai fazer.",
       cdSmall: "Sua narração dá à IA o máximo de contexto.",
     },

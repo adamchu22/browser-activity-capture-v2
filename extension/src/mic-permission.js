@@ -38,7 +38,9 @@ async function request() {
     done.hidden = false;
   } catch (e) {
     status.className = "err";
-    status.textContent = T("micBlocked", { e: e?.message || e });
+    // micBlocked covers the address-bar / macOS path; micManualHint adds the
+    // set-Microphone-to-Allow recourse for browsers (e.g. Comet) that never show a prompt.
+    status.textContent = T("micBlocked", { e: e?.message || e }) + " " + T("micManualHint");
     retry.hidden = false;
   }
 }

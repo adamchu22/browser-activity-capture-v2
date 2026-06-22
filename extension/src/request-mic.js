@@ -10,14 +10,23 @@
 // page to remove the iframe, so nothing lingers on screen after the user chooses.
 (async () => {
   let ok = false;
+  let error = null;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((t) => t.stop()); // we only needed the grant
     await chrome.storage.local.set({ micGrantedOnce: true });
     ok = true;
-  } catch {
+  } catch (e) {
     // Denied, or the page blocks the mic via Permissions-Policy — leave the flag unset.
+    error = e?.name || String(e);
   }
+  // Tell the POPUP the real outcome (success or failure) so it can give feedback and,
+  // on failure, fall back to the grant window + guidance instead of silently doing
+  // nothing — the gap that stranded Comet users where this prompt never surfaces. The
+  // background worker ignores this message type; the popup listens for it.
+  try {
+    chrome.runtime.sendMessage({ type: "mic-grant-result", ok, error });
+  } catch {}
   // Ask the injector (content script in the page) to remove this iframe now we're done.
   try {
     window.parent.postMessage({ __bacMicDone: true, ok }, "*");

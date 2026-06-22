@@ -218,25 +218,52 @@ $("stop").addEventListener("click", async () => {
 // Mic narration needs the extension origin to hold microphone permission. An
 // offscreen doc can't prompt for it, so we surface the state here; the grant is
 // requested in the current tab via promptForMic() (on Start or the Enable button).
+//
+// We drive this off `micReady()` (the persisted micGrantedOnce flag — the SAME signal
+// Start gates on), NOT navigator.permissions.query. In some Chromium forks (Comet)
+// permissions.query reports "granted" while getUserMedia still can't capture, which
+// used to HIDE the Enable button and leave the user with no recourse. Keying off the
+// real grant flag keeps a clickable Enable affordance until the mic actually works.
 async function refreshMicState() {
   const micWanted = $("mic").checked;
-  let granted = false;
-  try {
-    const p = await navigator.permissions.query({ name: "microphone" });
-    granted = p.state === "granted";
-    p.onchange = refreshMicState;
-  } catch {
-    granted = false; // can't tell → assume not granted, let the user enable it
-  }
-  $("enableMic").hidden = granted || !micWanted;
-  $("micState").textContent = !micWanted ? "" : granted ? T("micOn") : T("micOff");
+  const ready = await micReady();
+  $("enableMic").hidden = ready || !micWanted;
+  $("micState").textContent = !micWanted ? "" : ready ? T("micOn") : T("micOff");
 }
 
-// Enable mic: prompt in the current tab (silent if already granted); the worker's
-// per-recording check + the persisted flag keep it from re-asking afterwards.
+// Enable mic: prompt in the current tab (silent if already granted). The outcome comes
+// back asynchronously via the "mic-grant-result" message below (success → flag set →
+// micState flips; failure → window fallback + guidance), so the click gives immediate
+// feedback rather than appearing to do nothing.
 $("enableMic").addEventListener("click", async () => {
-  if (!(await micReady())) await promptForMic();
+  if (await micReady()) {
+    refreshMicState();
+    return;
+  }
+  $("status").textContent = T("stMicPrompt");
+  await promptForMic();
+});
+
+// The injected mic iframe (request-mic.js) reports whether the grant actually took.
+// On success the flag is set (storage.onChanged refreshes the UI). On failure — denied,
+// or the browser never surfaced a prompt (the Comet case) — open the dedicated grant
+// window and show the manual "set Microphone to Allow" guidance, so a failed in-tab
+// prompt is never a silent dead end.
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type !== "mic-grant-result") return;
+  if (msg.ok) {
+    $("status").textContent = T("micGranted");
+  } else {
+    openMicGrant();
+    $("status").textContent = T("micNoPrompt");
+  }
   refreshMicState();
+});
+
+// Keep the mic UI in sync the instant a grant is recorded (or cleared by the worker
+// when a recording's mic fails) — from this popup, the grant window, or anywhere.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && "micGrantedOnce" in changes) refreshMicState();
 });
 $("mic").addEventListener("change", () => {
   refreshMicState();
