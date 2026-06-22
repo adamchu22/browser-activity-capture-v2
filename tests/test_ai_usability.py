@@ -222,5 +222,58 @@ class TestPartialCaptureFlags(unittest.TestCase):
         self.assertLess(ctx.index("storage_full"), ctx.index("boom"))  # summary flag first
 
 
+# ---- D5 — guarantee narration travels into the pack ----------------------
+
+STUB_VTT = "WEBVTT\n\nNOTE No narration captured in this stream. Audio is in video.webm.\n"
+REAL_VTT = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHere is what I'm doing.\n"
+
+
+class TestNarrationCarry(unittest.TestCase):
+    def _bundle(self, vtt, *, narration_in_video=True, with_video=True, video="video.webm"):
+        d = Path(tempfile.mkdtemp())
+        m = {"capture_id": "c", "t0_wall": "now", "duration_ms": 10, "sync_mode": "self_record",
+             "narration_in_video": narration_in_video, "video": video}
+        (d / "manifest.json").write_text(json.dumps(m))
+        (d / "timeline.json").write_text(json.dumps([ev(0, "click", selector="#x")]))
+        (d / "transcript.vtt").write_text(vtt)
+        if with_video:
+            (d / "video.webm").write_bytes(b"\x1aE\xdf\xa3fake-webm")  # stand-in audio source
+        return d
+
+    def _pack(self, bundle):
+        out = Path(tempfile.mkdtemp()) / "pack"
+        pack.build_pack(bundle, out, transcribe=False)  # no ASR engine path in tests
+        return out
+
+    def test_stub_transcript_carries_video_into_pack(self):
+        out = self._pack(self._bundle(STUB_VTT))
+        self.assertTrue((out / "bundle" / "video.webm").exists())  # audio preserved for recovery
+        # README + context.md both point at the recovery path so it's not a silent inclusion.
+        self.assertIn("video.webm", (out / "README.md").read_text())
+        self.assertIn("Recover it with ffmpeg", (out / "context.md").read_text())
+
+    def test_real_transcript_does_not_carry_video(self):
+        out = self._pack(self._bundle(REAL_VTT))
+        self.assertFalse((out / "bundle" / "video.webm").exists())  # words already in transcript.vtt
+        self.assertNotIn("Recover it with ffmpeg", (out / "context.md").read_text())
+
+    def test_no_carry_when_manifest_says_no_narration(self):
+        out = self._pack(self._bundle(STUB_VTT, narration_in_video=False))
+        self.assertFalse((out / "bundle" / "video.webm").exists())
+
+    def test_no_crash_when_video_missing(self):
+        out = self._pack(self._bundle(STUB_VTT, with_video=False))
+        self.assertFalse((out / "bundle" / "video.webm").exists())  # nothing to carry, no error
+
+    def test_hostile_video_path_is_basename_stripped(self):
+        # A tampered manifest can't make us copy a file from outside the bundle.
+        b = self._bundle(STUB_VTT, video="../../../etc/passwd")
+        # the real audio still lives at bundle/video.webm; the basename of the hostile path
+        # ("passwd") doesn't exist in the bundle, so nothing is copied — and nothing escapes.
+        out = self._pack(b)
+        self.assertFalse((out / "bundle" / "passwd").exists())
+        self.assertFalse((out / "bundle" / "video.webm").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

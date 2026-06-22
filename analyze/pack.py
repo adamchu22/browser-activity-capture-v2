@@ -838,6 +838,18 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
         + "\n".join(anno_lines) + "\n"
     ) if anno_lines else ""
 
+    # If the transcript is a stub but the narration is in the audio, say so right in the
+    # Narration section so the reader knows the words aren't lost and how to recover them.
+    narration_recovery = ""
+    if (_transcript_is_stub(transcript)
+            and manifest.get("narration_in_video") is not False
+            and (bundle / Path(manifest.get("video") or "video.webm").name).exists()):
+        narration_recovery = (
+            "\n_The transcript above is a stub — the spoken narration is an Opus audio track "
+            "in `video.webm`. Recover it with ffmpeg + a local ASR model (the exact steps are "
+            "in this bundle's `CLAUDE.md`/`AGENTS.md`), then treat the cues as t0-aligned._\n"
+        )
+
     return f"""# Analysis context — {manifest.get('capture_id', bundle.name)}
 {task_block}{purpose_block}
 Captured {manifest.get('t0_wall','?')} · duration {manifest.get('duration_ms','?')} ms ·
@@ -870,7 +882,7 @@ _Verbatim narration with its own cue times. The same narration is bound to each 
 ```
 {transcript.strip()}
 ```
-
+{narration_recovery}
 ## Frames
 Screenshots at key moments — open these from the pack's `frames/` directory.
 Open **`frames-annotated.html`** to see each click/hover drawn on the page (a ring at
@@ -1037,6 +1049,29 @@ def build_pack(bundle: Path, out: Path, blocklist: list[str] | None = None,
         if (bundle / name).exists():
             shutil.copyfile(bundle / name, raw / name)
 
+    # Narration guarantee (D5): if the transcript is STILL a stub after maybe_transcribe
+    # (no local ASR engine was available to fill it) but the recording HAS narration audio,
+    # carry video.webm into the pack so the words aren't lost — a downstream agent can
+    # recover them (ffmpeg + a local ASR model; see context.md's Narration note). When
+    # auto-transcribe already filled the transcript, the words are in transcript.vtt and we
+    # skip copying the (large) video. This closes the gap where a pack built without an
+    # engine shipped neither the narration text nor the audio to recover it.
+    video_carried = None
+    if (_transcript_is_stub(_read_text(bundle / "transcript.vtt"))
+            and manifest.get("narration_in_video") is not False):
+        # .name strips any directory — a hostile manifest can't point `video` outside the bundle.
+        video_src = bundle / Path(manifest.get("video") or "video.webm").name
+        if video_src.exists():
+            shutil.copyfile(video_src, raw / video_src.name)
+            video_carried = video_src.name
+
+    narration_note = (
+        f"\nNarration: `transcript.vtt` is a stub (no local ASR engine ran), so the audio "
+        f"was carried in as `bundle/{video_carried}` — recover the words with ffmpeg + a "
+        f"local ASR model (the steps are in the bundle's `CLAUDE.md`/`AGENTS.md`).\n"
+        if video_carried else ""
+    )
+
     (out / "README.md").write_text(
         f"""# Analysis pack — {bundle.name}
 
@@ -1061,7 +1096,7 @@ Note: the raw rrweb DOM-replay stream (`events.jsonl`) is intentionally NOT incl
 it's the largest file and pure noise for these outcomes (the structured actions are in
 `context.md` and `bundle/timeline.json`). It remains in the original capture zip if you
 need full DOM replay.
-""",
+{narration_note}""",
         encoding="utf-8",
     )
 

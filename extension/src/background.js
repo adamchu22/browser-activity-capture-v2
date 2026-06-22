@@ -1379,10 +1379,12 @@ function buildTranscript(timeline) {
   const cues = timeline.filter((e) => e.kind === "speech");
   if (!cues.length)
     return (
-      "WEBVTT\n\nNOTE No narration captured in this stream. The spoken audio is in " +
-      "video.webm — to fill this transcript, run `python analyze/pack.py <bundle>` " +
-      "(or analyze/transcribe.py <bundle>) in the repo .venv. One-time setup: " +
-      "analyze/setup.sh (Mac/Linux) or setup.ps1 (Windows); after that it's automatic.\n"
+      "WEBVTT\n\nNOTE No narration captured in this stream. The spoken audio is an Opus " +
+      "track in video.webm (aligned to t0). To recover it WITHOUT this repo, see " +
+      "CLAUDE.md / AGENTS.md in this bundle — they give the self-contained steps " +
+      "(ffmpeg extract + a local ASR model). If you DO have the repo, " +
+      "`python analyze/pack.py <bundle>` (or analyze/transcribe.py <bundle>) in the .venv " +
+      "fills this automatically (one-time setup: analyze/setup.sh / setup.ps1).\n"
     );
   const fmt = (t) => {
     const s = Math.floor(t / 1000);
