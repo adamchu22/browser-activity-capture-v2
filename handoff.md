@@ -1,9 +1,10 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-22 (Track D D5 — narration guaranteed into the pack; pack.py carries video.webm
-when the transcript is still a stub, built + unit-tested, 188 python / 93 node green. Plus the Comet
-mic-grant recourse fix — built, NEEDS A LIVE COMET VERIFY. Earlier today: HARDENING Track D analyze-side
-— D2/D3/D4/D6, all in `pack.py`. Track D remaining: D1 (needs a plan) + D7. Prior: Track C analyze
+_Last updated: 2026-06-22 (the rate/limit issue RESOLVED — Chrome's captureVisibleTab screenshot
+rate-limit was misclassified as storage-full; fixed by splitting captureFrame's try block + a hardened,
+unit-tested `write-failure.js` classifier; 100 node / 188 python green. Prior today: Track D D5 —
+narration guaranteed into the pack; the Comet mic-grant recourse fix — built, NEEDS A LIVE COMET VERIFY;
+Track D analyze-side D2/D3/D4/D6. Track D remaining: D1 (needs a plan) + D7. Earlier: Track C analyze
 never-crash (done); Tracks A + B (built + unit-tested, NEED A LIVE VERIFY); 64MiB fix LIVE-VERIFIED.)_
 
 ## ▶ NEEDS A LIVE COMET VERIFY — mic-grant recourse (built 2026-06-22)
@@ -18,15 +19,24 @@ now keys the "Enable microphone…" button off the real `micGrantedOnce` flag (n
 `request-mic.js`, `mic-permission.js`, `i18n.js`. Diagnosis + lessons in `learnings.md` 2026-06-22;
 the Comet verify checklist is in `to-do-current.md` (under the mic-permission block).
 
-## ▶ NEXT — a RATE/LIMIT issue from a longer run (details incoming from Adam in a new chat).
+## ✅ DONE 2026-06-22 — the RATE/LIMIT issue (screenshot rate-limit misclassified as storage-full)
 
-**Top priority, set 2026-06-22 (Adam).** On a longer recording run he hit "some kind of rate issue
-and limit" he wants solved before anything else. **Details pending — Adam will provide them in a new
-chat; do NOT guess the cause.** (Plausible suspects to confirm against his report, not assume: Chrome's
-`captureVisibleTab` ~2/sec quota for frames; an IndexedDB/storage limit on a long run; or an API rate
-limit somewhere — wait for his specifics.) Fix this FIRST.
+The "rate issue and limit" from the longer run was Chrome's `captureVisibleTab` ~2/sec screenshot
+rate limit being **misclassified as "storage full."** Its error message contains "quota"
+(`MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota`), and `noteWriteFailure`'s `/quota|storage/i`
+classifier matched it → a healthy 17.7-min recording got a red `!` badge, a false truncation error,
+`manifest.storage_full = true`. **No data lost.** Fixed two ways (built + unit-tested, 100 node / 188
+python green; diagnosis + lesson in `learnings.md` 2026-06-22):
+- **Split `captureFrame`'s try block** — screenshot vs IndexedDB write now have separate catches; a
+  rate-limit/`chrome://` screenshot failure returns early and never reaches `noteWriteFailure`.
+- **Hardened + extracted classifier** — new pure `extension/src/write-failure.js` `isStorageQuotaError`
+  (matches `QuotaExceededError` name, excludes the rate-limit message, never bare "quota"). Unit test
+  `tests/test_write_failure.mjs` (7). True storage-full path (Track A2) preserved.
+- Optional live verify: force rapid event frames → no `!` badge, `storage_full` stays false; a real
+  IDB quota error still surfaces loudly. The standalone `ISSUE-…misclassified-as-storage-full.md` is
+  resolved (can be removed).
 
-Then — Track D leftovers (D1 / D7); Tracks A + B still need a LIVE VERIFY (interactive):
+## ▶ NEXT — Track D leftovers (D1 / D7); Tracks A + B still need a LIVE VERIFY (interactive):
 - **D1 — HAR response bodies** (unlocks the migration outcome). Adam: important, we WILL fix it, but
   it's after the rate/limit issue. **NEEDS A PLAN** — an extension capture-path change that adds a NEW
   sink where secrets can land (needs response-body redaction) AND a live-Chrome verify. The analyze

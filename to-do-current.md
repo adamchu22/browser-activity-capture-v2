@@ -6,13 +6,27 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (188 python / 93 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
-## ▶ TOP PRIORITY 2026-06-22 — a rate/limit issue on a longer run (details incoming)
+## ✅ Done 2026-06-22 — the rate/limit issue (screenshot rate-limit misclassified as storage-full)
 
-Adam hit "some kind of rate issue and limit" on a longer recording run and wants it solved before
-anything else (ahead of D1). **Details are pending — Adam will provide them in a new chat. Do NOT
-guess the cause or start fixing until he describes it.** Possible suspects to check against his actual
-report (do not assume): Chrome's `captureVisibleTab` ~2/sec quota (frames), an IndexedDB/storage
-limit on a long capture, or an external API rate limit. This is the next thing up.
+**Resolved.** The "rate issue and limit" from the longer run was Chrome's `captureVisibleTab` ~2/sec
+screenshot rate limit being **misclassified as "storage full."** Its error message contains the word
+"quota" (`MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota`), and `noteWriteFailure`'s `/quota|storage/i`
+classifier matched it — so a healthy 17.7-min recording got a red `!` badge, a false truncation error,
+and `manifest.storage_full = true`. **No data was lost** (439 of 464 frames captured after the
+"error"). Built + unit-tested (100 node / 188 python green). Diagnosis + the durable lesson ("never
+substring-match 'quota' to mean disk-full") in `learnings.md` 2026-06-22.
+- [x] **Split `captureFrame`'s try block** — the screenshot (`captureVisibleTab`) and the IndexedDB
+      write (`db.append`) now have SEPARATE try blocks, so a rate-limit/`chrome://` screenshot failure
+      returns early and never reaches `noteWriteFailure`; only a real IDB write failure does.
+- [x] **Harden + extract the classifier** — new pure `extension/src/write-failure.js`
+      `isStorageQuotaError(e)`: matches `name === "QuotaExceededError"`, EXCLUDES the
+      `MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND` message, requires a real storage word in the message
+      fallback (never bare "quota"). `noteWriteFailure` uses it. Unit-tested (`tests/test_write_failure.mjs`, 7).
+- [x] **True storage-full path preserved** — a genuine `QuotaExceededError` still flips the badge `!`
+      + `manifest.storage_full` (Track A2). The issue file `ISSUE-frame-ratelimit-misclassified-as-storage-full.md`
+      can be removed (resolved here).
+- [ ] **Live verify (interactive, optional):** force rapid event frames → capture continues, NO `!`
+      badge, `manifest.storage_full` stays `false`; a real IDB quota error still surfaces loudly.
 
 ## ✅ Done + LIVE-VERIFIED 2026-06-19 — 17-min recording never saved (the 64MiB sendMessage cap)
 

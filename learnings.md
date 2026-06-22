@@ -4,6 +4,43 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-22 (screenshot rate-limit misclassified as "storage full" — built + unit-tested)
+
+On a 17.7-min recording, `manifest.storage_full` flipped to `true`, `errors.json` logged
+"browser storage is full … being truncated; finish and export now," and the badge went red `!`
+— but **nothing was lost**: 439 of 464 frames were captured AFTER the "error," with no gaps. A
+real `QuotaExceededError` fails EVERY subsequent IndexedDB write, so a true full disk would have
+yielded ~25 frames total, not 464. The stack told the real story: `Error: This request exceeds
+the MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota.` — Chrome's `captureVisibleTab` ~2/sec
+**screenshot rate limit**, a self-healing throttle, NOT storage.
+
+Root cause: `noteWriteFailure()` classified a write failure as fatal storage-full with
+`/quota|storage/i.test(message)`. Chrome's rate-limit message contains the word **"quota"**, so a
+harmless throttle matched and tripped the Track A2 truncation alarm. Worse, the `captureVisibleTab`
+catch — which already *documents* that the ~2/sec error is non-fatal — still routed it through
+`noteWriteFailure`, which then misread it.
+
+**Lesson — never substring-match "quota" to mean "disk full."** Multiple unrelated Chrome APIs
+use "quota" for rate limits (captureVisibleTab, and others). The reliable storage-full signal is the
+DOM error **name** `QuotaExceededError`, not the message text. Two compounding fixes (defense in depth):
+
+- **Classify at the call site (the real fix).** `captureFrame` ran the screenshot and the IndexedDB
+  write in ONE try block, so the screenshot's rate-limit error fell into the write's catch. Split
+  into two try blocks: a `captureVisibleTab` failure now returns early and NEVER reaches
+  `noteWriteFailure` (the full-screen video stays ground truth for those skipped moments); only a
+  `db.append` failure routes to `noteWriteFailure`. Two operations that fail for different reasons
+  should never share a catch.
+- **Harden + extract the classifier.** New pure `extension/src/write-failure.js`
+  `isStorageQuotaError(e)`: matches `name === "QuotaExceededError"`, explicitly EXCLUDES the
+  `MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND` message, and its message fallback requires a real
+  storage word (`storage`/`indexeddb`/`disk space`) — never bare "quota". So even if a future code
+  path routes a rate-limit error here, it won't misfire. Unit-tested (`tests/test_write_failure.mjs`,
+  7) incl. the exact rate-limit string and the real-quota true-positive. The true storage-full path
+  (real `QuotaExceededError` → badge `!` + `manifest.storage_full`) is preserved.
+
+Live verify (interactive, no unit test): force rapid event frames → capture continues, NO `!` badge,
+`manifest.storage_full` stays `false`; a genuine IndexedDB quota error still flips it loudly.
+
 ## 2026-06-22 (Comet mic-grant had no recourse — built; NEEDS A LIVE COMET VERIFY)
 
 Adam: mic narration works in Chrome but not in Comet; clicking to enable "does nothing,"
