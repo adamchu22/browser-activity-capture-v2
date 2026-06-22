@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -34,7 +35,11 @@ _VTT_TIME = re.compile(r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->")
 BRIEF = Path(__file__).parent / "BRIEF.md"
 NETFILTER = Path(__file__).parent / "netfilter.json"
 SKILLS_DIR = Path(__file__).parent / "skills"  # preloaded, bundled into each pack
-RAW_FILES = ["manifest.json", "timeline.json", "transcript.vtt", "network.har", "events.jsonl", "errors.json"]
+# Raw structured files copied into the pack's bundle/ dir. events.jsonl (the raw rrweb
+# DOM-replay stream) is deliberately EXCLUDED: it's by far the largest file and is noise
+# for the analysis outcomes (the structured actions are already in timeline.json + the
+# API-calls table). It stays in the original capture zip for anyone who needs DOM replay.
+RAW_FILES = ["manifest.json", "timeline.json", "transcript.vtt", "network.har", "errors.json"]
 
 # Which activity skills to bundle for a given purpose. `analyze-capture` (the
 # consumption procedure) is always included; this maps the rest. Add a purpose→skill
@@ -365,6 +370,11 @@ def render_timeline(events: list[dict], blocklist: list[str] | None = None,
             run.clear()
 
     for e in events:
+        # Narration is NOT repeated here — it's bound to its action in `## Steps` and
+        # printed verbatim in `## Narration`. Keeping it out of the timeline de-duplicates
+        # the three-times-over narration that made the context overload.
+        if e.get("kind") == "speech":
+            continue
         if (e.get("kind") == "network" and blocklist
                 and is_low_signal(e.get("url", ""), blocklist)):
             run.append(e)
@@ -379,8 +389,6 @@ def render_timeline(events: list[dict], blocklist: list[str] | None = None,
         kind = e.get("kind", "?")
         if kind == "nav":
             body = f"→ navigate {e.get('url','')}"
-        elif kind == "speech":
-            body = f'🗣  "{e.get("text","")}"'
         elif kind == "click":
             body = f"click {action_label(e)}  [{e.get('selector','')}]" + pos(e)
         elif kind == "hover":
@@ -390,9 +398,9 @@ def render_timeline(events: list[dict], blocklist: list[str] | None = None,
         elif kind == "key":
             body = f"key {e.get('key','')}"
         elif kind == "network":
+            # Brief, for causality on the one clock; full request/response bodies live in
+            # the authoritative `## API calls` table (not duplicated here).
             body = f"{e.get('method','')} {e.get('url','')} → {e.get('status','')} ({e.get('ms','?')}ms)"
-            if e.get("request_body"):
-                body += f"  body={json.dumps(e['request_body'])}"
         elif kind == "annotation:select":
             # The user pointed at THIS element to align with the analyst.
             body = f"✦ marked {action_label(e)}  [{e.get('selector','')}]" + pos(e)
@@ -640,6 +648,83 @@ def build_annotated_frames_html(events: list[dict], frames: list[dict]) -> str:
     )
 
 
+# ---- the authoritative API-calls table (D2) ------------------------------
+
+def _parse_iso_ms(s) -> float | None:
+    """Epoch milliseconds for an ISO-8601 timestamp, or None if it isn't parseable
+    (an untrusted/partial bundle). Tolerates the trailing 'Z' on older Pythons."""
+    if not isinstance(s, str) or not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1000
+    except (ValueError, TypeError):
+        return None
+
+
+def _table_cell(s, limit: int = 300) -> str:
+    """One markdown-table cell: collapse whitespace, size-cap, and escape the pipe so a
+    body or URL can never break the table. Empty values render as an em dash."""
+    s = " ".join(str(s).split())
+    if not s:
+        return "—"
+    if limit and len(s) > limit:
+        s = s[: limit - 1] + "…"
+    return s.replace("|", "\\|")
+
+
+def render_api_table(har: dict, blocklist: list[str] | None = None,
+                     t0_wall: str | None = None) -> str:
+    """The single authoritative record of every network request, as one markdown table:
+    `t` (ms since t0, derived from each entry's wall-clock start minus t0_wall), method,
+    full URL, status, and the request + response bodies (size-capped). This replaces the
+    old lossy split where the timeline had request bodies but truncated URLs and the
+    Network section had URLs but no bodies/timing. Analytics/tracking noise is collapsed
+    into a trailing note. Built straight from the HAR (its richest source) and fully
+    type-guarded so a malformed/untrusted bundle can't crash the build."""
+    blocklist = blocklist or []
+    log = har.get("log") if isinstance(har, dict) else None
+    entries = log.get("entries") if isinstance(log, dict) else None
+    if not isinstance(entries, list):
+        entries = []
+    t0 = _parse_iso_ms(t0_wall)
+    rows, collapsed = [], []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        req = entry.get("request")
+        req = req if isinstance(req, dict) else {}
+        url = req.get("url")
+        url = url if isinstance(url, str) else ""
+        if blocklist and is_low_signal(url, blocklist):
+            collapsed.append(host(url))
+            continue
+        resp = entry.get("response")
+        resp = resp if isinstance(resp, dict) else {}
+        status = resp.get("status", "")
+        started = _parse_iso_ms(entry.get("startedDateTime"))
+        t_cell = f"`{ms(started - t0)}`" if (t0 is not None and started is not None) else "—"
+        pd = req.get("postData")
+        req_body = pd.get("text", "") if isinstance(pd, dict) else ""
+        content = resp.get("content")
+        resp_body = content.get("text", "") if isinstance(content, dict) else ""
+        rows.append(
+            f"| {t_cell} | {_table_cell(req.get('method', ''))} | {_table_cell(url)} | "
+            f"{_table_cell(status)} | {_table_cell(req_body)} | {_table_cell(resp_body)} |"
+        )
+    if not rows and not collapsed:
+        return "- (none)"
+    out = ["| `t` | method | URL | status | request body | response body |",
+           "|---|---|---|---|---|---|", *rows]
+    if collapsed:
+        uniq = []
+        for h in collapsed:
+            if h and h not in uniq:
+                uniq.append(h)
+        shown = ", ".join(uniq[:8]) + (f", +{len(uniq) - 8} more" if len(uniq) > 8 else "")
+        out.append(f"\n_{len(collapsed)} low-signal request(s) collapsed · {shown}_")
+    return "\n".join(out)
+
+
 def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     blocklist = blocklist or []
     # Untrusted bundle: every load is best-effort and type-checked so a malformed /
@@ -657,36 +742,11 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     speech = parse_vtt_cues(transcript)
     timeline = sorted(timeline + speech, key=lambda e: _num(e.get("t", 0)))
 
-    network_summary = ""
-    har_path = bundle / "network.har"
-    if har_path.exists():
-        har = _load_json(har_path, {})
-        log = har.get("log")
-        entries = log.get("entries") if isinstance(log, dict) else None
-        rows, collapsed = [], []
-        for entry in entries if isinstance(entries, list) else []:
-            if not isinstance(entry, dict):
-                continue
-            req = entry.get("request") or {}
-            if not isinstance(req, dict):
-                req = {}
-            url = req.get("url") or ""
-            if not isinstance(url, str):
-                url = ""
-            if blocklist and is_low_signal(url, blocklist):
-                collapsed.append(host(url))
-                continue
-            resp = entry.get("response")
-            status = resp.get("status", "") if isinstance(resp, dict) else ""
-            rows.append(f"- {req.get('method','')} {url} → {status}")
-        if collapsed:
-            uniq = []
-            for h in collapsed:
-                if h and h not in uniq:
-                    uniq.append(h)
-            shown = ", ".join(uniq[:8]) + (f", +{len(uniq) - 8} more" if len(uniq) > 8 else "")
-            rows.append(f"- _({len(collapsed)} low-signal request(s) collapsed · {shown})_")
-        network_summary = "\n".join(rows)
+    # The single authoritative network record (D2): method + full URL + status +
+    # request/response bodies on the one clock. _load_json returns {} for a missing /
+    # malformed HAR, and render_api_table is fully type-guarded.
+    api_table = render_api_table(_load_json(bundle / "network.har", {}), blocklist,
+                                 manifest.get("t0_wall"))
 
     # The manifest's urls_visited list also picks up tracker/ad request URLs; drop the
     # low-signal ones (and note how many) so this list reads as real destinations.
@@ -721,6 +781,19 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     issue_lines = [f"- `{ms(e.get('t', 0))}` **{e.get('where','?')}**: {e.get('message','')}" for e in errors]
     if manifest.get("narration_error"):
         issue_lines.insert(0, f"- **narration**: {manifest['narration_error']} (no voice in video.webm)")
+    # Bundle-level flags that mean the capture is PARTIAL — surfaced up top so the
+    # analyzing AI knows the data is incomplete (not just clean-but-short) and treats
+    # gaps accordingly. These are set by the extension when a capture degrades.
+    partial_flags = [
+        ("storage_full", "storage filled mid-recording — the timeline, events, frames and "
+                         "network are TRUNCATED past that point (the video may still be complete)"),
+        ("narration_truncated", "the microphone track ended before the recording did — the "
+                                "narration / transcript stops short of the end"),
+        ("video_ended_early", "screen sharing stopped before Finish — `video.webm` ends early, "
+                              "though events / network / mic ran to the end"),
+    ]
+    flag_lines = [f"- ⚠ **{flag}**: {msg}" for flag, msg in partial_flags if manifest.get(flag)]
+    issue_lines = flag_lines + issue_lines
     issues_block = ("\n## ⚠ Capture issues\n" + "\n".join(issue_lines) + "\n") if issue_lines else ""
 
     # The user's stated goal + why they recorded — up top, the anchors for everything.
@@ -780,15 +853,23 @@ are what they did. See the raw timeline below for full detail (hovers, every req
 {render_steps(timeline, blocklist, tab_labels, tab_urls, frames)}
 
 ## Timeline (one clock, ms since t0)
+_The complete ordered log of user/DOM actions (clicks, hovers, inputs, keys, navigations,
+annotations). Narration is in `## Steps` (bound to each action) and verbatim in
+`## Narration`; full network detail is in `## API calls` — none of it is repeated here._
 {render_timeline(timeline, blocklist, tab_labels)}
 
+## API calls
+_Every network request on the one clock (`t` = ms since t0) — the authoritative record of
+what data moved. This is where request and response bodies live (not duplicated in the
+timeline). Use it to infer the data model: which endpoints carry which fields._
+{api_table}
+
 ## Narration (transcript)
+_Verbatim narration with its own cue times. The same narration is bound to each action in
+`## Steps`; this block is the raw reference._
 ```
 {transcript.strip()}
 ```
-
-## Network (HAR summary)
-{network_summary or '- (none)'}
 
 ## Frames
 Screenshots at key moments — open these from the pack's `frames/` directory.
@@ -975,6 +1056,11 @@ Self-contained: `agent-skills/` (how to use this pack + activity skills),
 `context.md` (the flattened recording, with the purpose steer up top), `frames/` +
 `frames-annotated.html` (screenshots), `bundle/` (raw structured files), `BRIEF.md`
 (the neutral output spec).
+
+Note: the raw rrweb DOM-replay stream (`events.jsonl`) is intentionally NOT included —
+it's the largest file and pure noise for these outcomes (the structured actions are in
+`context.md` and `bundle/timeline.json`). It remains in the original capture zip if you
+need full DOM replay.
 """,
         encoding="utf-8",
     )
