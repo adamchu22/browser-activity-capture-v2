@@ -3,8 +3,21 @@
 v2 reworks capture to **full-screen video + all-tabs instrumentation** and adds an
 **intent-capture layer** (stated task goal, semantic element context, narrated-step
 segmentation, frame annotation / "draw on screen"). Code is built and unit-tested
-(188 python / 93 node; DOM capture also harness-verified); the extension still needs a live-Chrome
+(190 python / 113 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
+
+## ✅ Done 2026-06-22 — documentation skill (illustrated docs + Notion option)
+
+A `documentation` skill now ships in **every exported zip** at
+`agent-skills/documentation/SKILL.md` and in the pack for the `docs` purpose. It tells the
+analyzing agent to produce one illustrated how-it-works doc / SOP with screenshots (pulled
+from `frames/`, recorder overlay cropped) + the user's highlights, flag that frames carry
+real PII, and treat the Notion-import zip as an *optional* step (single-page structure: `.md`
+at the zip root, `images/` beside it). Built + unit-tested (103 node / 190 python). Files:
+`analyze/skills/documentation/SKILL.md`, `analyze/pack.py`, `extension/src/bundle-docs.js`,
+`extension/src/background.js`, `tests/test_bundle_docs.mjs`, `tests/test_intent.py`. Details
+in `learnings.md` 2026-06-22. **Live verify still needed:** export a zip and confirm it
+contains `agent-skills/documentation/SKILL.md` (the zip-write path is `chrome.*`-dependent).
 
 ## ✅ Done 2026-06-22 — the rate/limit issue (screenshot rate-limit misclassified as storage-full)
 
@@ -23,8 +36,8 @@ substring-match 'quota' to mean disk-full") in `learnings.md` 2026-06-22.
       `MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND` message, requires a real storage word in the message
       fallback (never bare "quota"). `noteWriteFailure` uses it. Unit-tested (`tests/test_write_failure.mjs`, 7).
 - [x] **True storage-full path preserved** — a genuine `QuotaExceededError` still flips the badge `!`
-      + `manifest.storage_full` (Track A2). The issue file `ISSUE-frame-ratelimit-misclassified-as-storage-full.md`
-      can be removed (resolved here).
+      + `manifest.storage_full` (Track A2). The standalone issue writeup has been folded into this
+      entry and the loose file removed.
 - [ ] **Live verify (interactive, optional):** force rapid event frames → capture continues, NO `!`
       badge, `manifest.storage_full` stays `false`; a real IDB quota error still surfaces loudly.
 
@@ -125,15 +138,27 @@ Three bisected commits, 93 node / 125 python green. Diagnosis in `learnings.md` 
       (`tests/test_validate_robust.py`.)
 
 **Track D — AI-usability of outputs (the "totally usable, don't overload" ask):**
-D2/D3/D4/D6 — ✅ DONE 2026-06-22 (analyze-side, all in `pack.py`; built + unit-tested, 183 python /
-93 node green; no Chrome needed). Diagnosis + durable lessons in `learnings.md` 2026-06-22. D1/D5/D7
-remain (D1 split out per Adam — it needs a NEW response-body-redaction surface + a live verify).
-- [ ] **D1 — capture HAR response bodies** (size-capped, redacted, same-origin JSON) — the migration
-      outcome (#3) most-wanted hinges on inferring the data model from request/response shapes, and
-      the HAR has no bodies. Needs response-body redaction (overlaps the open P4c item below).
-      **NEEDS A PLAN** — adds a new sink where secrets can land (extension capture-path change) +
-      requires a live-Chrome verify. The analyze side is already ready for it: the `## API calls`
-      table (D2) has a `response body` column that renders `—` until the HAR carries bodies.
+D1/D2/D3/D4/D6 — ✅ DONE 2026-06-22 (D2/D3/D4/D6 analyze-side in `pack.py`; D1 extension capture-side;
+all built + unit-tested, 190 python / 113 node green). Diagnosis + durable lessons in `learnings.md`
+2026-06-22. D5 done (see above); D7 remains.
+- [x] **D1 — capture HAR response bodies** — DONE 2026-06-22 (built + unit-tested; **NEEDS A LIVE
+      CHROME VERIFY**). The migration outcome (#3) hinges on inferring the data model from response
+      shapes, and the HAR had no bodies. Per Adam's plan decisions: **same-site JSON only** (the
+      recorded app's own API incl. `api.*` subdomains, not third parties) and **reuse `redactBody`**
+      (secrets/emails masked, field names + value shapes kept legible). New pure
+      `extension/src/response-body.js` (`registrableDomain`/eTLD+1, `isSameSite`, `isJsonMime`,
+      `capResponseBody`); `background.js` debugger listener is now async, tags `_sameSite`/`_wantBody`,
+      and a new `Network.loadingFinished` branch calls `getResponseBody` → redact-then-cap (32KiB;
+      >1MiB omitted) → `entry.response.content.text`. `_sameSite`/`_wantBody` stripped on export;
+      manifest `redaction.response_bodies` declares the new sink. No redaction/analyze change needed:
+      the validator already scans all of `network.har`; `pack.py`'s `## API calls` `response body`
+      column already reads `response.content.text`. Tests: `tests/test_response_body.mjs` (11) + a
+      response-body case in `test_redact.mjs`. Plan: `~/.claude/plans/reflective-wobbling-tulip.md`.
+  - [ ] **Live verify (interactive — CDP can't be unit-tested):** record a JSON-API SPA → `network.har`
+        same-site entries have redacted `response.content.text`, a cross-site request has none, an
+        oversized body shows the `…‹truncated N bytes›` marker; `validate_bundle.py` PASS + "redaction
+        check passed"; `pack.py`'s API table `response body` column is populated (was `—`).
+  - Note: this resolves the open **P4c** item below (capture network response bodies).
 - [x] **D2 — one authoritative API-calls table in `context.md`** — DONE 2026-06-22. New
       `render_api_table` builds ONE markdown table from the HAR: `t` (ms since t0, derived from each
       entry's `startedDateTime` − manifest `t0_wall`) + method + full URL + status + request body +
@@ -541,10 +566,11 @@ CDP debugger survived. Most of the session's DOM + visual capture was lost. See 
       on the active tab; clicks + frames present after the first navigation). Needs the screen
       picker + mic, so it's an interactive run.
 
-**P4c — Capture network response bodies (follow-up, not blocking):** `network.har` currently
-has no response bodies (no `Network.getResponseBody` call), so rendered HTML / error text can't
-be recovered from the HAR — only from `video.webm`. Adding bodies needs response-body redaction
-(we don't scrub those yet). Scope separately.
+**P4c — Capture network response bodies — ✅ DONE 2026-06-22 as D1** (built + unit-tested; needs a
+live verify). `network.har` now carries same-site JSON response bodies (redacted via `redactBody`,
+size-capped) — see the D1 entry above. Note: only JSON is captured, so rendered HTML / non-JSON
+error text still comes from `video.webm`, not the HAR (by design — JSON is the data-model surface
+the migration outcome needs).
 
 **P1c — Capture only tabs the user enters (CODE DONE + unit-tested; RE-VERIFY AFTER P2)** 🔒
 A clean run showed v2 captured all 16 open tabs (incl. a 1Password signin + Telegram) in a

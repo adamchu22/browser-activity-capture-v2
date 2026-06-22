@@ -4,6 +4,84 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-22 (D1 — capture HAR response bodies — built + unit-tested, needs a live verify)
+
+`network.har` recorded request bodies but never response bodies (no `Network.getResponseBody`
+call), so the migration outcome — inferring a source app's data model from API traffic — could
+see what the client SENT but not what the server RETURNED. Added same-site JSON response-body
+capture. Decisions (Adam): same-site scope (the app's own API incl. subdomains, not third
+parties) + reuse the existing `redactBody` (secrets/emails masked, field names + value shapes
+kept legible). Durable lessons:
+
+- **`Network.loadingFinished` is the canonical point to fetch a body, not `responseReceived`.**
+  `responseReceived` gives you status + mimeType but the body isn't reliably retrievable yet.
+  `getResponseBody` is called on `loadingFinished` (which always follows responseReceived). It
+  legitimately FAILS for 304s, redirects, cached, and streamed responses — so the call must be
+  wrapped in try/catch and a failure left as an absent body (the pack renders `—`), never logged
+  as an error.
+
+- **Use CDP `params.documentURL` for the same-site test — it's the initiating page, per-request.**
+  No need to look up the tab's current URL (which can have changed, and is async). `documentURL`
+  on `requestWillBeSent` is exactly the origin that made the request, so
+  `isSameSite(request.url, documentURL)` is accurate even across mid-session navigations.
+
+- **eTLD+1 without the Public Suffix List: make the heuristic fail SAFE.** Chrome exposes no PSL,
+  so `registrableDomain` takes the last two labels (with a small allowlist of two-level suffixes
+  like `co.uk` → three labels). The key property: a missed exotic suffix only makes the same-site
+  test STRICTER (under-captures), never looser — so a heuristic miss can't leak a cross-site body.
+  Also restricted to `http(s)` URLs: `new URL("chrome://extensions").hostname` is `"extensions"`
+  (a deceptive single-label "host"), so gate on protocol before trusting the hostname.
+
+- **Redact BEFORE size-capping, or JSON-aware redaction silently degrades.** `redactBody` does
+  `JSON.parse` → field-name redaction → re-stringify; if you truncate first you hand it invalid
+  JSON and it falls back to the weaker regex-only path (loses field-name redaction). So:
+  `capResponseBody(redactBody(body), CAP)`. A `RESP_BODY_HARD_MAX` (1 MiB) skips redacting a
+  pathologically large body entirely (stores an "omitted: N bytes" marker) to bound CPU/memory.
+
+- **A new HAR field needs no new redaction gate or analyze change — but DOES need the export
+  strip updated.** The validator already scans the entire `network.har` text for tokens, and
+  `pack.py`'s API table already reads `response.content.text`, so both covered the new sink for
+  free. The one non-obvious gotcha: `metaFiles` strips internal fields with an EXPLICIT
+  destructure (`{ _t, _start, _tab, requestId, ...e }`), not a generic `_`-prefix filter — so new
+  `_sameSite`/`_wantBody` working fields had to be added there or they'd leak into the exported
+  HAR. (Wiki candidate, with the existing redaction sink-enumeration lessons: "when you add a
+  capture field, check every place that serializes the record.")
+
+Files: new `extension/src/response-body.js` + `tests/test_response_body.mjs` (11); `background.js`
+(async listener, `_sameSite`/`_wantBody` tags, `loadingFinished` branch, export strip, manifest
+field); a response-body case in `tests/test_redact.mjs`. Live verify pending (CDP can't be
+unit-tested) — see `to-do-current.md` D1.
+
+## 2026-06-22 (documentation skill — illustrated docs + Notion option — built + unit-tested)
+
+Added a `documentation` skill so a bundle handed to any agent produces an *illustrated*
+how-it-works doc / SOP (screenshots + the user's highlights), not just prose. It ships in
+**both** paths: in every exported zip at `agent-skills/documentation/SKILL.md`
+(`documentationSkill()` in `bundle-docs.js`, written into the zip via `background.js`
+`metaFiles()`), and in the pack for the `docs` purpose (`SKILLS_FOR_PURPOSE["docs"] =
+["documentation"]` in `pack.py`; canonical copy at `analyze/skills/documentation/SKILL.md`).
+The `docs` purpose `make` text in both `pack.py` and `bundle-docs.js` now says "one
+illustrated doc with screenshots." Durable findings the skill encodes:
+
+- **Pasting Markdown into Notion does NOT carry local images** — paste only fetches images
+  from public URLs. To get screenshots in, use Notion's **Import → Markdown & CSV** with a
+  zip. The skill makes the Notion zip an *optional* step, never the default output.
+- **Notion single-page gotcha:** for the import to land as exactly one page, the `.md` must
+  sit at the **root of the zip** with `images/` beside it. A wrapper subfolder makes Notion
+  create an extra parent page. (This was the "only 1 doc" feedback.)
+- **Frames/video are not pixel-redacted** — screenshots show real names/emails/phones. Fine
+  for internal docs, but the doc must carry a "contains real data" callout.
+- **Crop the recorder overlay out of frames** for clean shots: the red border + control pill
+  come off with `ffmpeg -i in.png -vf "crop=iw-16:ih-78:8:8" out.png`. Floating Select/Draw
+  highlights and the "click an element to mark it" tooltip can't be cropped generically —
+  prefer a clean frame.
+- Two copies of the skill text (JS literal in `bundle-docs.js` + the `.md` in
+  `analyze/skills/`) — kept in sync by a comment, matching the existing `analyze-capture`
+  precedent. Tests: `test_bundle_docs.mjs` (skill content + Notion-optional + single-page),
+  `test_intent.py` (docs→documentation mapping, frontmatter, pack copy). 103 node / 190 python.
+- **Still needs a live verify:** the zip-write path is `chrome.*`-dependent — confirm an
+  exported zip actually contains `agent-skills/documentation/SKILL.md`.
+
 ## 2026-06-22 (screenshot rate-limit misclassified as "storage full" — built + unit-tested)
 
 On a 17.7-min recording, `manifest.storage_full` flipped to `true`, `errors.json` logged

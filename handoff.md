@@ -1,11 +1,43 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-22 (the rate/limit issue RESOLVED — Chrome's captureVisibleTab screenshot
+_Last updated: 2026-06-22 (documentation skill added — ships in every zip at
+`agent-skills/documentation/SKILL.md` + in the pack for the `docs` purpose; teaches illustrated docs
+with screenshots/highlights + optional Notion-import packaging; 103 node / 190 python green; NEEDS A
+LIVE VERIFY that an exported zip contains the skill file. Earlier today: the rate/limit issue RESOLVED —
+Chrome's captureVisibleTab screenshot
 rate-limit was misclassified as storage-full; fixed by splitting captureFrame's try block + a hardened,
 unit-tested `write-failure.js` classifier; 100 node / 188 python green. Prior today: Track D D5 —
 narration guaranteed into the pack; the Comet mic-grant recourse fix — built, NEEDS A LIVE COMET VERIFY;
-Track D analyze-side D2/D3/D4/D6. Track D remaining: D1 (needs a plan) + D7. Earlier: Track C analyze
+Track D analyze-side D2/D3/D4/D6. D1 (HAR response bodies) BUILT + unit-tested 2026-06-22, NEEDS A
+LIVE VERIFY. Track D remaining: D7. Earlier: Track C analyze
 never-crash (done); Tracks A + B (built + unit-tested, NEED A LIVE VERIFY); 64MiB fix LIVE-VERIFIED.)_
+
+## ✅ DONE 2026-06-22 — documentation skill (illustrated docs + Notion option) — UNCOMMITTED BY DESIGN
+
+This came out of a real session: Adam recorded a walkthrough of an internal tool (the Distru Badge
+Scanner), asked for paste-ready docs, then asked to make it repeatable. The right move — confirmed with
+Adam — was to turn the workflow into a `documentation` skill that travels with every capture, so any
+agent handed a bundle produces an *illustrated* doc (screenshots + the user's highlights), not just
+prose. Built + unit-tested (103 node / 190 python green). What it does + where it lives is in
+`to-do-current.md` (the "documentation skill" DONE block) and `learnings.md` 2026-06-22.
+
+**The approach is validated — keep it.** Ships in BOTH paths (zip via `documentationSkill()` in
+`bundle-docs.js` → `background.js` `metaFiles()`; pack via `SKILLS_FOR_PURPOSE["docs"]` in `pack.py`,
+canonical `analyze/skills/documentation/SKILL.md`). It encodes the durable Notion findings (paste
+won't carry local images → use Import; single-page = `.md` at the zip root, no wrapper folder),
+the frames-aren't-redacted PII caveat, and the overlay-crop recipe; the Notion zip is an OPTIONAL
+step, never the default.
+
+> **NEXT AGENT — commit this work as you go.** These changes are **staged in the working tree but NOT
+> committed, on purpose** — Adam asked that the next agent commit the skill + docs while it works.
+> Bisect into logical commits (skill file → pack wiring → zip wiring → tests → repo-doc updates).
+> Changed/new files: `analyze/skills/documentation/SKILL.md` (new), `analyze/pack.py`,
+> `extension/src/bundle-docs.js`, `extension/src/background.js`, `tests/test_bundle_docs.mjs`,
+> `tests/test_intent.py`, plus the doc updates (`handoff.md`, `learnings.md`, `to-do-current.md`).
+> (Leave the unrelated untracked items — `SECURITY-SCAN.md`, the D1 `response-body.js`/`test_response_body.mjs`,
+> `test_redact.mjs` — to their own owners; don't sweep them into these commits.)
+> **Live verify still owed:** export a zip and confirm it contains `agent-skills/documentation/SKILL.md`
+> (the zip-write path is `chrome.*`-dependent, so it has no unit test).
 
 ## ▶ NEEDS A LIVE COMET VERIFY — mic-grant recourse (built 2026-06-22)
 
@@ -33,17 +65,35 @@ python green; diagnosis + lesson in `learnings.md` 2026-06-22):
   (matches `QuotaExceededError` name, excludes the rate-limit message, never bare "quota"). Unit test
   `tests/test_write_failure.mjs` (7). True storage-full path (Track A2) preserved.
 - Optional live verify: force rapid event frames → no `!` badge, `storage_full` stays false; a real
-  IDB quota error still surfaces loudly. The standalone `ISSUE-…misclassified-as-storage-full.md` is
-  resolved (can be removed).
+  IDB quota error still surfaces loudly. The standalone `ISSUE-…misclassified-as-storage-full.md` was
+  folded into this section and removed.
 
-## ▶ NEXT — Track D leftovers (D1 / D7); Tracks A + B still need a LIVE VERIFY (interactive):
-- **D1 — HAR response bodies** (unlocks the migration outcome). Adam: important, we WILL fix it, but
-  it's after the rate/limit issue. **NEEDS A PLAN** — an extension capture-path change that adds a NEW
-  sink where secrets can land (needs response-body redaction) AND a live-Chrome verify. The analyze
-  side is already ready: the new `## API calls` table has a `response body` column that renders `—`
-  until the HAR carries bodies.
+## ▶ NEXT — D1 + Tracks A/B all need a LIVE VERIFY (interactive); D7 remains:
+- **D1 — HAR response bodies — BUILT + unit-tested 2026-06-22, NEEDS A LIVE CHROME VERIFY** (see the
+  DONE block below). Live verify: record a JSON-API SPA → same-site entries have redacted
+  `response.content.text`, cross-site requests have none, oversized bodies show the truncation marker;
+  `validate_bundle.py` PASS; the pack's `## API calls` `response body` column populates.
 - **D7** — regenerate `analyze/example-output/` from a v2 bundle (needs a real v2 capture on disk).
 - **Live verify** Tracks A + B together when there's a Chrome session (both are interactive-only).
+
+## ✅ DONE 2026-06-22 — D1: capture HAR response bodies (built + unit-tested; NEEDS A LIVE VERIFY)
+
+The migration outcome (#3, most-wanted) infers a source app's data model from API traffic, but
+`network.har` carried no response bodies. Now it does. Adam's plan decisions: **same-site JSON only**
+(the app's own API incl. `api.*` subdomains, not third parties) + **reuse `redactBody`** (secrets/
+emails masked, field names + value shapes kept legible for the data model). 190 python / 113 node green.
+- New pure `extension/src/response-body.js`: `registrableDomain` (eTLD+1 heuristic + a small two-level
+  public-suffix allowlist), `isSameSite`, `isJsonMime` (REST/+json/graphql), `capResponseBody`.
+- `background.js` debugger listener is now `async`; `requestWillBeSent` tags `_sameSite` (from CDP
+  `documentURL`), `responseReceived` tags `_wantBody = _sameSite && isJsonMime`, and a NEW
+  `Network.loadingFinished` branch calls `getResponseBody` → **redact-then-cap** (32KiB; >1MiB omitted)
+  → `entry.response.content.text/.size`. `_sameSite`/`_wantBody` stripped on export; manifest
+  `redaction.response_bodies` declares the sink. getResponseBody failures (304/redirect/cached) are
+  swallowed → body renders `—`.
+- No redaction/analyze change needed: validator already scans all of `network.har`; `pack.py`'s API
+  table already reads `response.content.text`. This also resolves P4c.
+- Tests: `tests/test_response_body.mjs` (11) + a response-body case in `test_redact.mjs`. Plan:
+  `~/.claude/plans/reflective-wobbling-tulip.md`. Durable lessons in `learnings.md` 2026-06-22.
 
 Track D analyze-side (D2/D3/D4/D6) + D5 (narration carried into the pack) are done (built +
 unit-tested, no Chrome).
