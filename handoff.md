@@ -1,10 +1,10 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-22 (Comet mic-grant recourse fix — built, NEEDS A LIVE COMET VERIFY. Earlier
-today: HARDENING Track D analyze-side — D2/D3/D4/D6: AI-usability of the pack; all in `pack.py`, built
-+ unit-tested, 183 python / 93 node green, NO live verify needed. D1/D5/D7 remain. Prior: Track C
-analyze never-crash (done); Tracks A + B (built + unit-tested, NEED A LIVE VERIFY); 64MiB fix
-LIVE-VERIFIED.)_
+_Last updated: 2026-06-22 (Track D D5 — narration guaranteed into the pack; pack.py carries video.webm
+when the transcript is still a stub, built + unit-tested, 188 python / 93 node green. Plus the Comet
+mic-grant recourse fix — built, NEEDS A LIVE COMET VERIFY. Earlier today: HARDENING Track D analyze-side
+— D2/D3/D4/D6, all in `pack.py`. Track D remaining: D1 (needs a plan) + D7. Prior: Track C analyze
+never-crash (done); Tracks A + B (built + unit-tested, NEED A LIVE VERIFY); 64MiB fix LIVE-VERIFIED.)_
 
 ## ▶ NEEDS A LIVE COMET VERIFY — mic-grant recourse (built 2026-06-22)
 
@@ -18,16 +18,15 @@ now keys the "Enable microphone…" button off the real `micGrantedOnce` flag (n
 `request-mic.js`, `mic-permission.js`, `i18n.js`. Diagnosis + lessons in `learnings.md` 2026-06-22;
 the Comet verify checklist is in `to-do-current.md` (under the mic-permission block).
 
-## ▶ NEXT — Track D leftovers (D1 / D5 / D7). Tracks A + B still need a LIVE VERIFY (interactive).
+## ▶ NEXT — Track D leftovers (D1 / D7). Tracks A + B still need a LIVE VERIFY (interactive).
 
-Track D analyze-side (D2/D3/D4/D6) is done (built + unit-tested, no Chrome). Remaining in
-`to-do-current.md` → "HARDENING backlog":
+Track D analyze-side (D2/D3/D4/D6) + D5 (narration carried into the pack) are done (built +
+unit-tested, no Chrome). Remaining in `to-do-current.md` → "HARDENING backlog":
 - **D1 — HAR response bodies** (unlocks the migration outcome). **NEEDS A PLAN** — it's an extension
   capture-path change that adds a NEW sink where secrets can land (so it needs response-body
   redaction) AND a live-Chrome verify. The analyze side is already ready: the new `## API calls`
   table has a `response body` column that renders `—` until the HAR carries bodies.
-- **D5** — guarantee narration into the self-driving zip; **D7** — regenerate `analyze/example-output/`
-  from a v2 bundle (needs a real v2 capture on disk).
+- **D7** — regenerate `analyze/example-output/` from a v2 bundle (needs a real v2 capture on disk).
 - **Live verify** Tracks A + B together when there's a Chrome session (both are interactive-only).
 
 ## ✅ DONE 2026-06-22 — HARDENING Track D analyze-side (D2/D3/D4/D6) — built + unit-tested (NO live verify)
@@ -242,7 +241,7 @@ the items here need a real Chrome run or a human eyeball because they're shadow-
 visual and can't be unit-tested. Do them in order.
 
 ### Step 0 — Pre-flight (sanity, ~10s)
-- [ ] `python3 -m unittest discover -s tests` → **183 passed** (1 skipped).
+- [ ] `python3 -m unittest discover -s tests` → **188 passed** (1 skipped).
 - [ ] `node --test tests/test_*.mjs` → **93 passed**.
 - [ ] Load the extension: `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
       (If rrweb is missing, vendor it — see `extension/FIRST-CAPTURE.md` §0.)
@@ -519,7 +518,7 @@ the analyze side (`manifest["video"]`, frame `file`) basename-stripped; document
 aren't pixel-redacted. Residual low-severity recommendations are in `to-do-current.md` ("Security
 follow-ups"). See `learnings.md` for the full list.
 
-`python3 -m unittest discover -s tests` — 183 tests (glossary, network-noise collapse,
+`python3 -m unittest discover -s tests` — 188 tests (glossary, network-noise collapse,
 multi-tab rendering, semantic labels + step segmentation + frame annotation, purpose steer,
 bundled skills incl. competitive-research, coverage diagnostic, `test_annotations.py` (13):
 annotation:select/draw in the timeline, steps, the `## ✦ Annotations` section, and the

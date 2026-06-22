@@ -3,7 +3,7 @@
 v2 reworks capture to **full-screen video + all-tabs instrumentation** and adds an
 **intent-capture layer** (stated task goal, semantic element context, narrated-step
 segmentation, frame annotation / "draw on screen"). Code is built and unit-tested
-(183 python / 93 node; DOM capture also harness-verified); the extension still needs a live-Chrome
+(188 python / 93 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
 ## ✅ Done + LIVE-VERIFIED 2026-06-19 — 17-min recording never saved (the 64MiB sendMessage cap)
@@ -126,8 +126,18 @@ remain (D1 split out per Adam — it needs a NEW response-body-redaction surface
 - [x] **D4 — demote/omit raw `events.jsonl`** — DONE 2026-06-22. Removed from `RAW_FILES` so it's not
       copied into the pack's `bundle/`; the pack README states it's intentionally omitted (largest
       file, replay-only) and still lives in the original capture zip. (`TestEventsJsonlDemoted`.)
-- [ ] **D5 — guarantee narration into the self-driving zip** (transcribe at export / always pack) so
-      the zip path doesn't ship a stub the receiving AI can't fill; bundle the method skills too.
+- [x] **D5 — guarantee narration into the handoff** — DONE 2026-06-22. The ZIP was already covered
+      (the export carries `video.webm` + CLAUDE.md/AGENTS.md self-contained recovery — P0, live-verified);
+      the real gap was the PACK (old P4b): `pack.py` shipped neither the transcript text nor the audio to
+      recover it when no ASR engine ran. Now, if the transcript is STILL a stub after `maybe_transcribe`
+      and the manifest has narration audio, `build_pack` carries `video.webm` into `pack/bundle/` (skipped
+      when auto-transcribe already filled the transcript). README + `context.md` Narration section state
+      it's there and how to recover it. Also tightened the extension's stub `transcript.vtt` to point at
+      the in-bundle CLAUDE.md/AGENTS.md recovery, not a repo-only `pack.py` path. Did NOT "bundle the
+      method skills into the zip" — P0 settled on embedding the procedure inline; shipping skill files
+      would re-litigate that + add drift (see `learnings.md` 2026-06-22). (`tests/test_ai_usability.py` →
+      `TestNarrationCarry`, 5.) NB: the `background.js` stub-message tweak has no unit test — eyeball the
+      next exported zip's `transcript.vtt`.
 - [x] **D6 — surface the new capture-issue flags** — DONE 2026-06-22. `storage_full`,
       `narration_truncated`, `video_ended_early` now render in `## ⚠ Capture issues` (above the
       per-error lines) with a plain-language "what's missing", so the AI knows the bundle is partial.
@@ -589,16 +599,14 @@ grabs a frame at emit time so the annotated screen is in `frames/`. See `learnin
 
 **P4b — `pack.py`-path handoff gaps** (verified 2026-06-17; the *zip*-path equivalents are
 now covered by **P0** — these are the analysis-pack path):
-- [ ] **Audio never reaches the pack.** `pack.py` `RAW_FILES` (line 35) copies
-      manifest/timeline/transcript/network/events/errors but **NOT `video.webm`**. So if a
-      bundle is packed while its transcript is still the stub, the pack has neither narration
-      text nor the audio to recover it — narration is lost. Fix: either always transcribe
-      before/at pack time (P4 auto-transcribe), and/or carry the audio into the pack.
-- [ ] **No audio-fallback instructions anywhere.** Neither the bundle README
-      (`background.js:515`) nor the `analyze-capture` skill tells a model the narration is an
-      Opus track in `video.webm` or how to transcribe it; the skill says read "the full
-      transcript" with no stub fallback. Add: "if transcript.vtt is a stub, the audio is in
-      video.webm — transcribe it" (and ship that instruction where the recipient will see it).
+- [x] ~~**Audio never reaches the pack.**~~ DONE 2026-06-22 (as D5). `build_pack` now carries
+      `video.webm` into `pack/bundle/` when the transcript is still a stub after `maybe_transcribe`
+      and the manifest has narration audio (skipped when auto-transcribe already filled it). So a
+      pack built with no ASR engine keeps the audio to recover the narration from.
+- [x] ~~**No audio-fallback instructions anywhere.**~~ DONE 2026-06-22. The pack `context.md`
+      Narration section + README now state, when the transcript is a stub, that the narration is an
+      Opus track in `video.webm` and how to recover it (ffmpeg + ASR, per CLAUDE.md/AGENTS.md). The
+      extension's stub `transcript.vtt` message now points at the in-bundle self-contained recovery too.
 - [ ] **Raw zip is not self-driving.** The bundle README is a one-line file list that points
       at `../analyze/pack.py` (a path the recipient won't have). The self-driving layer
       (`agent-skills/analyze-capture`, `BRIEF.md`) is added by `pack.py` into the *pack*, not

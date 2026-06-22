@@ -39,6 +39,39 @@ that can disagree, and (b) always leave a visible recourse + plain-language manu
 never a control that hides itself and a click that silently no-ops. No unit test (chrome.*/
 getUserMedia); files: `popup.js`, `request-mic.js`, `mic-permission.js`, `i18n.js`.
 
+## 2026-06-22 (Track D — D5: guarantee narration into the handoff)
+
+D5 was framed as "guarantee narration into the self-driving ZIP." Reading the code first
+showed the zip was already fine: the extension export pushes `video.webm` (Opus narration,
+t0-aligned) into the zip and the embedded `CLAUDE.md`/`AGENTS.md` carry the self-contained
+recovery (ffmpeg + local ASR) — that path was already live-verified (P0). The real,
+unsolved gap was the PACK path (the old P4b item):
+
+- **`pack.py` shipped neither the narration text NOR the audio to recover it** when built
+  on a machine with no ASR engine: `maybe_transcribe` left the stub, and `video.webm` was
+  never copied into the pack (it's not in `RAW_FILES`) — so the words were simply gone.
+  Fix: after `maybe_transcribe`, if the transcript is STILL a stub and the manifest says
+  there's narration audio, carry `video.webm` into `pack/bundle/`. When auto-transcribe
+  succeeded we skip the (large) video — the words are already in `transcript.vtt`. So the
+  video is carried only when it's the ONLY remaining narration source. The pack README and
+  the `context.md` Narration section both state the audio is there and how to recover it,
+  so it's never a silent inclusion.
+
+- **Don't assume the task's stated artifact is where the gap is.** The item said "zip,"
+  but the zip was already self-driving; the equivalent gap lived one layer over, in the
+  pack. Lesson: trace the actual data path before building — the fix was in `pack.py`, not
+  the export code the title pointed at. (Also tightened the extension's stub `transcript.vtt`
+  message to point at the in-bundle CLAUDE.md/AGENTS.md recovery instead of a repo-only
+  `pack.py` path, so even a reader of just the stub finds the no-repo recovery.)
+
+- **Deliberately did NOT "bundle the method skills into the zip"** (the item's trailing
+  ask): the extension can't read `analyze/skills/` at runtime, and P0 already settled on
+  EMBEDDING the procedure inline in CLAUDE.md/AGENTS.md rather than shipping skill files.
+  Shipping them would re-litigate that and add a drift surface — flagged, not done.
+
+Files: `pack.py` (carry + notes, `tests/test_ai_usability.py` → `TestNarrationCarry`),
+`background.js` (stub message — no unit test, needs a trivial Chrome eyeball on the next zip).
+
 ## 2026-06-22 (HARDENING Track D — analyze-side AI-usability: D2/D3/D4/D6)
 
 The "totally usable, don't overload" ask. The pack's `context.md` was overloading the
