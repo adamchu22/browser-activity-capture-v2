@@ -6,6 +6,14 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (188 python / 93 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
+## ▶ TOP PRIORITY 2026-06-22 — a rate/limit issue on a longer run (details incoming)
+
+Adam hit "some kind of rate issue and limit" on a longer recording run and wants it solved before
+anything else (ahead of D1). **Details are pending — Adam will provide them in a new chat. Do NOT
+guess the cause or start fixing until he describes it.** Possible suspects to check against his actual
+report (do not assume): Chrome's `captureVisibleTab` ~2/sec quota (frames), an IndexedDB/storage
+limit on a long capture, or an external API rate limit. This is the next thing up.
+
 ## ✅ Done + LIVE-VERIFIED 2026-06-19 — 17-min recording never saved (the 64MiB sendMessage cap)
 
 Adam recorded 17 min, hit Finish, nothing downloaded (a 1-sec test right after worked). Error:

@@ -18,16 +18,25 @@ now keys the "Enable microphone…" button off the real `micGrantedOnce` flag (n
 `request-mic.js`, `mic-permission.js`, `i18n.js`. Diagnosis + lessons in `learnings.md` 2026-06-22;
 the Comet verify checklist is in `to-do-current.md` (under the mic-permission block).
 
-## ▶ NEXT — Track D leftovers (D1 / D7). Tracks A + B still need a LIVE VERIFY (interactive).
+## ▶ NEXT — a RATE/LIMIT issue from a longer run (details incoming from Adam in a new chat).
 
-Track D analyze-side (D2/D3/D4/D6) + D5 (narration carried into the pack) are done (built +
-unit-tested, no Chrome). Remaining in `to-do-current.md` → "HARDENING backlog":
-- **D1 — HAR response bodies** (unlocks the migration outcome). **NEEDS A PLAN** — it's an extension
-  capture-path change that adds a NEW sink where secrets can land (so it needs response-body
-  redaction) AND a live-Chrome verify. The analyze side is already ready: the new `## API calls`
-  table has a `response body` column that renders `—` until the HAR carries bodies.
+**Top priority, set 2026-06-22 (Adam).** On a longer recording run he hit "some kind of rate issue
+and limit" he wants solved before anything else. **Details pending — Adam will provide them in a new
+chat; do NOT guess the cause.** (Plausible suspects to confirm against his report, not assume: Chrome's
+`captureVisibleTab` ~2/sec quota for frames; an IndexedDB/storage limit on a long run; or an API rate
+limit somewhere — wait for his specifics.) Fix this FIRST.
+
+Then — Track D leftovers (D1 / D7); Tracks A + B still need a LIVE VERIFY (interactive):
+- **D1 — HAR response bodies** (unlocks the migration outcome). Adam: important, we WILL fix it, but
+  it's after the rate/limit issue. **NEEDS A PLAN** — an extension capture-path change that adds a NEW
+  sink where secrets can land (needs response-body redaction) AND a live-Chrome verify. The analyze
+  side is already ready: the new `## API calls` table has a `response body` column that renders `—`
+  until the HAR carries bodies.
 - **D7** — regenerate `analyze/example-output/` from a v2 bundle (needs a real v2 capture on disk).
 - **Live verify** Tracks A + B together when there's a Chrome session (both are interactive-only).
+
+Track D analyze-side (D2/D3/D4/D6) + D5 (narration carried into the pack) are done (built +
+unit-tested, no Chrome).
 
 ## ✅ DONE 2026-06-22 — HARDENING Track D analyze-side (D2/D3/D4/D6) — built + unit-tested (NO live verify)
 
