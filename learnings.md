@@ -4,6 +4,41 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-22 (Comet mic-grant had no recourse — built; NEEDS A LIVE COMET VERIFY)
+
+Adam: mic narration works in Chrome but not in Comet; clicking to enable "does nothing,"
+and he ended up fixing it by setting Microphone Ask→Allow in Comet's own site permissions.
+Two compounding bugs, both about the extension giving the user NO recourse when the grant
+silently fails:
+
+- **Don't drive a recourse control off `navigator.permissions.query` — it lies on some
+  Chromium forks.** `refreshMicState()` hid the "Enable microphone…" button whenever
+  `permissions.query({name:'microphone'})` returned `granted`. In Comet that returns
+  `granted` for the extension origin even when the offscreen recorder's `getUserMedia`
+  still can't capture — so the ONLY manual recourse was hidden while the mic didn't work.
+  Fix: key the button (and the on/off label) off `micGrantedOnce` — the SAME persisted
+  flag Start actually gates on (`micReady()`) — so the UI and the gate never disagree and
+  Enable stays clickable until the mic genuinely works. (Confirmed via a popup-console
+  snapshot: `permissionsQuery:'granted'` while the real grant was the deciding signal.)
+
+- **An async grant attempt must report its outcome, or a silent failure looks like a
+  no-op.** The in-tab prompt path (`requestMicInTab` → injected `request-mic.js` iframe)
+  returned success as soon as the iframe was *injected*, never whether a grant was
+  obtained, and the iframe swallowed its `getUserMedia` error. So when Comet didn't
+  surface a prompt, nothing happened and there was no fallback. Fix: `request-mic.js` now
+  `chrome.runtime.sendMessage({type:'mic-grant-result', ok, error})` (it's an extension-
+  origin page, so it has `chrome.runtime`); the popup listens and on failure opens the
+  grant window AND shows explicit guidance ("set Microphone to Allow in site/extension
+  permissions" — the exact manual step that worked). The background worker ignores the new
+  message type (its router is a chain of `if`s that no-ops on unknown). A
+  `storage.onChanged` listener keeps the popup's mic UI live the instant the flag flips.
+
+Lesson: for a permission the extension can't reliably prompt for in every browser, the UI
+must (a) base its state on the grant signal the rest of the code trusts, not a browser API
+that can disagree, and (b) always leave a visible recourse + plain-language manual path —
+never a control that hides itself and a click that silently no-ops. No unit test (chrome.*/
+getUserMedia); files: `popup.js`, `request-mic.js`, `mic-permission.js`, `i18n.js`.
+
 ## 2026-06-22 (HARDENING Track D — analyze-side AI-usability: D2/D3/D4/D6)
 
 The "totally usable, don't overload" ask. The pack's `context.md` was overloading the

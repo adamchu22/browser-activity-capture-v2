@@ -1,9 +1,22 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-22 (HARDENING Track D analyze-side — D2/D3/D4/D6: AI-usability of the pack;
-all in `pack.py`, built + unit-tested, 183 python / 93 node green, NO live verify needed. D1/D5/D7
-remain. Prior: Track C analyze never-crash (done); Tracks A + B (built + unit-tested, NEED A LIVE
-VERIFY); 64MiB fix LIVE-VERIFIED.)_
+_Last updated: 2026-06-22 (Comet mic-grant recourse fix — built, NEEDS A LIVE COMET VERIFY. Earlier
+today: HARDENING Track D analyze-side — D2/D3/D4/D6: AI-usability of the pack; all in `pack.py`, built
++ unit-tested, 183 python / 93 node green, NO live verify needed. D1/D5/D7 remain. Prior: Track C
+analyze never-crash (done); Tracks A + B (built + unit-tested, NEED A LIVE VERIFY); 64MiB fix
+LIVE-VERIFIED.)_
+
+## ▶ NEEDS A LIVE COMET VERIFY — mic-grant recourse (built 2026-06-22)
+
+Adam: mic narration works in Chrome but not Comet — the in-extension enable did nothing; he fixed it
+by setting Microphone Ask→Allow in Comet's own site permissions. Root cause: the extension gave no
+recourse when the grant silently failed. Fixed (no unit test — chrome.*/getUserMedia): `refreshMicState`
+now keys the "Enable microphone…" button off the real `micGrantedOnce` flag (not the unreliable
+`navigator.permissions.query`, which reports `granted` in Comet while the mic still can't capture);
+`request-mic.js` posts a `mic-grant-result` so the popup, on failure, opens the grant window + shows
+"set Microphone to Allow" guidance; `storage.onChanged` keeps the UI live. Files: `popup.js`,
+`request-mic.js`, `mic-permission.js`, `i18n.js`. Diagnosis + lessons in `learnings.md` 2026-06-22;
+the Comet verify checklist is in `to-do-current.md` (under the mic-permission block).
 
 ## ▶ NEXT — Track D leftovers (D1 / D5 / D7). Tracks A + B still need a LIVE VERIFY (interactive).
 

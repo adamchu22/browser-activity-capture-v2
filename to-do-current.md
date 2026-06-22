@@ -258,6 +258,20 @@ Three items came out of it — two from his narration, one I found reviewing the
         Start → no prompt at all. On a `chrome://` tab it falls back to the window. Revoke the mic
         mid-life → next Start re-prompts. Confirm macOS Privacy → Microphone → Chrome/Comet ON.
         `mic-permission.*` AND `request-mic.*` are both in use — do NOT delete.
+  - [ ] **Comet mic-grant recourse — BUILT 2026-06-22, NEEDS A LIVE COMET VERIFY.** Adam: mic works in
+        Chrome but not Comet; the in-extension enable did nothing and he had to set Microphone Ask→Allow
+        in Comet's own site permissions. Two no-recourse bugs (full diagnosis + lessons in `learnings.md`
+        2026-06-22): (a) `refreshMicState` hid the Enable button based on `navigator.permissions.query`,
+        which reports `granted` in Comet while the recorder still can't capture — now keyed off the real
+        `micGrantedOnce` flag so Enable stays clickable until the mic actually works; (b) the in-tab grant
+        reported success on iframe-injection, not on an actual grant, and swallowed failures — now
+        `request-mic.js` posts a `mic-grant-result` message; on failure the popup opens the grant window
+        AND shows guidance ("set Microphone to Allow in site/extension permissions"). `storage.onChanged`
+        keeps the mic UI live. Files: `popup.js`, `request-mic.js`, `mic-permission.js`, `i18n.js` (no
+        unit test — chrome.*/getUserMedia). **Live verify (Comet):** with the mic NOT yet granted, the
+        popup shows "Enable microphone…"; clicking it that doesn't surface a prompt → the grant window
+        opens + the popup shows the "set to Allow" guidance; after allowing, the mic state flips to ✓
+        without reopening the popup; Chrome's happy path is unchanged.
 
 ## ⏸️ ON HOLD 2026-06-18 — license + third-party notices (audit done, files written THEN reverted)
 
