@@ -49,6 +49,30 @@ test("redactBody still redacts JSON + form bodies (unchanged contract)", () => {
   assert.ok(redactBody("user=bob&token=secretvalue").includes("‹redacted:secret›"));
 });
 
+test("response bodies (D1): secrets/emails masked, data model shape kept", () => {
+  // D1 reuses redactBody for captured response bodies. The migration outcome needs the
+  // field names + value shapes legible, so non-secret data must survive while tokens and
+  // emails are masked.
+  const respBody = JSON.stringify({
+    id: 42,
+    name: "Acme Corp",
+    owner_email: "jane@acme.com",
+    api_token: JWT,
+    items: [{ sku: "A-1", qty: 3 }],
+  });
+  const out = redactBody(respBody);
+  assert.ok(!hasToken(out), "token in a response body must not survive");
+  assert.ok(!out.includes("jane@acme.com"), "email value must be masked");
+  assert.ok(out.includes("‹redacted:secret›"), "secret-keyed field masked");
+  assert.ok(out.includes("‹redacted:email›"), "email-shaped value masked");
+  // The data model (field names + non-secret values + nesting) stays intact.
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.id, 42);
+  assert.equal(parsed.name, "Acme Corp");
+  assert.equal(parsed.items[0].sku, "A-1");
+  assert.equal(parsed.items[0].qty, 3);
+});
+
 test("form bodies: card/cvv/ssn/jwt/sig are redacted (was a leak)", () => {
   // The non-JSON branch once used a narrower key set than the URL/JSON sinks, so a
   // card number / SSN in a form POST leaked into network.har.

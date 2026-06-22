@@ -27,6 +27,7 @@ import { recordingElapsed } from "./clock.js";
 import { serializeSession, applySession } from "./session.js";
 import { inCaptureScope } from "./capture-scope.js";
 import { isStorageQuotaError } from "./write-failure.js";
+import { isSameSite, isJsonMime, capResponseBody } from "./response-body.js";
 
 const state = {
   recording: false,
@@ -1006,7 +1007,14 @@ async function captureFrame(reason = "") {
 
 // ---- network (CDP -> HAR) ------------------------------------------------
 
-chrome.debugger.onEvent.addListener((source, method, params) => {
+// Response-body capture caps (D1). Bodies land in network.har + the pack's API table,
+// so they're bounded: keep up to RESP_BODY_CAP of a (redacted) body; above
+// RESP_BODY_HARD_MAX omit it entirely rather than spend CPU/memory redacting a huge
+// payload just to truncate it.
+const RESP_BODY_CAP = 32 * 1024;
+const RESP_BODY_HARD_MAX = 1024 * 1024;
+
+chrome.debugger.onEvent.addListener(async (source, method, params) => {
   // Pause suspends ALL capture, network included. Without the `state.paused` guard the
   // tracked tabs' requests kept landing in network.har while the user had stepped
   // off-record during a pause (a privacy leak), and that network-without-content
@@ -1034,6 +1042,10 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
           : undefined,
       },
       response: {},
+      // Same-SITE check for D1 response-body capture: documentURL is the initiating
+      // page, so this is accurate per-request (api.foo.com under app.foo.com = true,
+      // a third party = false). `_`-prefixed → stripped from the exported HAR.
+      _sameSite: isSameSite(request.url, params.documentURL),
     };
     state.har.set(requestId, entry);
     db.put("har", entry).catch((e) => noteWriteFailure("har-write", e)); // mirror to IDB so network survives a worker restart
@@ -1050,6 +1062,9 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       content: { mimeType: r.mimeType },
     };
     entry.time = Math.round((params.timestamp - entry._start) * 1000);
+    // Only same-site JSON responses get their body fetched on loadingFinished — the
+    // app's own API data model, not third-party/HTML/binary. (`_`-prefixed → stripped.)
+    entry._wantBody = entry._sameSite && isJsonMime(r.mimeType);
     db.put("har", entry).catch((e) => noteWriteFailure("har-write", e)); // upsert the now-complete entry
     // Also surface the request as a timeline event for the merged view.
     appendTimeline({
@@ -1060,6 +1075,38 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       ms: entry.time,
       tab: entry._tab,
     });
+  }
+
+  // loadingFinished is the canonical point at which the response body is retrievable
+  // (D1). Fetch it only for the same-site JSON we flagged, redact it through the same
+  // redactBody() used for request bodies, then size-cap. Redact BEFORE capping so the
+  // JSON-aware field-name redaction runs on valid JSON (capping first would break the
+  // parse and silently fall back to the weaker regex path). getResponseBody legitimately
+  // fails for 304s / redirects / cached / streamed responses — swallow it and leave the
+  // body unset (the pack renders "—").
+  if (method === "Network.loadingFinished") {
+    const entry = state.har.get(params.requestId);
+    if (!entry || !entry._wantBody) return;
+    try {
+      const { body, base64Encoded } = await chrome.debugger.sendCommand(
+        { tabId: source.tabId },
+        "Network.getResponseBody",
+        { requestId: params.requestId }
+      );
+      if (base64Encoded) return; // binary slipped past the JSON filter — skip
+      entry.response.content =
+        entry.response.content && typeof entry.response.content === "object"
+          ? entry.response.content
+          : {};
+      entry.response.content.size = body.length;
+      entry.response.content.text =
+        body.length > RESP_BODY_HARD_MAX
+          ? `‹response body omitted: ${body.length} bytes›`
+          : capResponseBody(redactBody(body), RESP_BODY_CAP);
+      db.put("har", entry).catch((e) => noteWriteFailure("har-write", e));
+    } catch {
+      /* body evicted / 304 / redirect — leave content.text unset */
+    }
   }
 });
 
@@ -1351,6 +1398,9 @@ function buildManifest({ hasVideo, narrationInVideo, micError, timeline, frameLi
       password_fields_masked: true,
       redacted_headers: ["Authorization", "Cookie", "Set-Cookie"],
       redacted_value_token: "‹redacted›",
+      // network.har now carries response bodies, but only for same-site JSON
+      // (the recorded app's own API), redacted like request bodies and size-capped.
+      response_bodies: "same_site_json, redacted, capped 32KiB",
       // Redaction covers the STRUCTURED streams (timeline, network.har, DOM, URLs),
       // not the pixels: a secret visible on screen is visible in video.webm/frames.
       visual_streams_redacted: false,
@@ -1372,7 +1422,7 @@ function metaFiles(manifest, timeline, harEntries, errors) {
       version: "1.2",
       creator: { name: "browser-activity-capture", version: "0.1.0" },
       comment: `t0_wall=${manifest.t0_wall}. Auth headers and cookies redacted before write.`,
-      entries: harEntries.map(({ _t, _start, _tab, requestId, ...e }) => e),
+      entries: harEntries.map(({ _t, _start, _tab, _sameSite, _wantBody, requestId, ...e }) => e),
     },
   };
   return [
