@@ -1,18 +1,37 @@
 # Handoff (v2)
 
-_Last updated: 2026-06-19 (HARDENING Track C — analyze pipeline never-crash on malformed/untrusted
-bundles; 5 bisected commits, 165 python / 93 node green, NO live verify needed (fully unit-tested).
-Prior same day: Track B structured-sink redaction leaks + Track A silent data-loss (both built +
-unit-tested, NEED A LIVE VERIFY); 64MiB fix LIVE-VERIFIED.)_
+_Last updated: 2026-06-22 (HARDENING Track D analyze-side — D2/D3/D4/D6: AI-usability of the pack;
+all in `pack.py`, built + unit-tested, 183 python / 93 node green, NO live verify needed. D1/D5/D7
+remain. Prior: Track C analyze never-crash (done); Tracks A + B (built + unit-tested, NEED A LIVE
+VERIFY); 64MiB fix LIVE-VERIFIED.)_
 
-## ▶ NEXT — Track D (AI-usability). Tracks A + B still need a LIVE VERIFY (interactive); Track C is fully done.
+## ▶ NEXT — Track D leftovers (D1 / D5 / D7). Tracks A + B still need a LIVE VERIFY (interactive).
 
-Track C is done (built + unit-tested, no Chrome needed). Remaining backlog in `to-do-current.md` →
-"HARDENING backlog":
-- **Track D** — AI-usability of outputs (the "totally usable, don't overload" ask): D1 HAR response
-  bodies (unlocks the migration outcome), D2 one API-calls table, D3 de-dup Steps/Timeline/transcript,
-  D4 demote raw `events.jsonl`, D6 surface the new capture-issue flags in pack.py.
+Track D analyze-side (D2/D3/D4/D6) is done (built + unit-tested, no Chrome). Remaining in
+`to-do-current.md` → "HARDENING backlog":
+- **D1 — HAR response bodies** (unlocks the migration outcome). **NEEDS A PLAN** — it's an extension
+  capture-path change that adds a NEW sink where secrets can land (so it needs response-body
+  redaction) AND a live-Chrome verify. The analyze side is already ready: the new `## API calls`
+  table has a `response body` column that renders `—` until the HAR carries bodies.
+- **D5** — guarantee narration into the self-driving zip; **D7** — regenerate `analyze/example-output/`
+  from a v2 bundle (needs a real v2 capture on disk).
 - **Live verify** Tracks A + B together when there's a Chrome session (both are interactive-only).
+
+## ✅ DONE 2026-06-22 — HARDENING Track D analyze-side (D2/D3/D4/D6) — built + unit-tested (NO live verify)
+
+The "totally usable, don't overload" ask — `context.md` was overloading the receiving AI with the
+same info three ways. All four analyze-side items are in `pack.py`; 183 python / 93 node green.
+Diagnosis + durable lessons in `learnings.md` 2026-06-22; new tests in `tests/test_ai_usability.py` (18).
+- **D2** one authoritative `## API calls` table (method + full URL + status + request/response bodies
+  on one clock; `t` derived from HAR `startedDateTime` − manifest `t0_wall`). Replaces the old lossy
+  Timeline/Network split; the thin `## Network (HAR summary)` section is gone.
+- **D3** de-dup: each modality gets ONE home. Narration → Steps (bound) + verbatim Narration block
+  (dropped inline 🗣 from the Timeline); bodies → the API table only (dropped `body=` from the
+  timeline network line, which keeps a brief line for causality). Headers say where each thing lives.
+- **D4** `events.jsonl` (raw rrweb stream) dropped from the pack's `bundle/`; README states it's
+  intentionally omitted and still lives in the original capture zip.
+- **D6** `storage_full` / `narration_truncated` / `video_ended_early` now render in `## ⚠ Capture
+  issues` so the AI knows the bundle is partial.
 
 ## ✅ DONE 2026-06-19 — HARDENING Track C (analyze never-crash) — built + unit-tested (NO live verify)
 
@@ -210,7 +229,7 @@ the items here need a real Chrome run or a human eyeball because they're shadow-
 visual and can't be unit-tested. Do them in order.
 
 ### Step 0 — Pre-flight (sanity, ~10s)
-- [ ] `python3 -m unittest discover -s tests` → **165 passed** (1 skipped).
+- [ ] `python3 -m unittest discover -s tests` → **183 passed** (1 skipped).
 - [ ] `node --test tests/test_*.mjs` → **93 passed**.
 - [ ] Load the extension: `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
       (If rrweb is missing, vendor it — see `extension/FIRST-CAPTURE.md` §0.)
@@ -487,14 +506,15 @@ the analyze side (`manifest["video"]`, frame `file`) basename-stripped; document
 aren't pixel-redacted. Residual low-severity recommendations are in `to-do-current.md` ("Security
 follow-ups"). See `learnings.md` for the full list.
 
-`python3 -m unittest discover -s tests` — 165 tests (glossary, network-noise collapse,
+`python3 -m unittest discover -s tests` — 183 tests (glossary, network-noise collapse,
 multi-tab rendering, semantic labels + step segmentation + frame annotation, purpose steer,
 bundled skills incl. competitive-research, coverage diagnostic, `test_annotations.py` (13):
 annotation:select/draw in the timeline, steps, the `## ✦ Annotations` section, and the
 frames-annotated.html marks; and `test_autotranscribe.py` (12): the stub-detection + the
 best-effort auto-transcribe gates, transcriber mocked; plus the later hardening tests —
-`test_pack_robust.py`, `test_nearest_frame.py`, `test_validate_robust.py` (Track C never-crash) and
-the Track A/B additions). Stdlib only, all green.
+`test_pack_robust.py`, `test_nearest_frame.py`, `test_validate_robust.py` (Track C never-crash),
+`test_ai_usability.py` (18, Track D — API-calls table / de-dup / events.jsonl demotion / partial
+flags) and the Track A/B additions). Stdlib only, all green.
 `node --test tests/test_*.mjs` — 93 tests: redact (URL/value/form-body/case/provider-keys/
 fragment, 13), nav-policy, bundle-docs, `test_annotate.mjs` (7, the Draw `drawGeom` math), plus the
 Track A/B suites (zip, bundle-streams, mask-text, capture-scope, clock, session, blocklist). The content.js

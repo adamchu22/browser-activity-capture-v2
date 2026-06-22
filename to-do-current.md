@@ -3,7 +3,7 @@
 v2 reworks capture to **full-screen video + all-tabs instrumentation** and adds an
 **intent-capture layer** (stated task goal, semantic element context, narrated-step
 segmentation, frame annotation / "draw on screen"). Code is built and unit-tested
-(165 python / 93 node; DOM capture also harness-verified); the extension still needs a live-Chrome
+(183 python / 93 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
 ## ✅ Done + LIVE-VERIFIED 2026-06-19 — 17-min recording never saved (the 64MiB sendMessage cap)
@@ -103,18 +103,35 @@ Three bisected commits, 93 node / 125 python green. Diagnosis in `learnings.md` 
       (`tests/test_validate_robust.py`.)
 
 **Track D — AI-usability of outputs (the "totally usable, don't overload" ask):**
+D2/D3/D4/D6 — ✅ DONE 2026-06-22 (analyze-side, all in `pack.py`; built + unit-tested, 183 python /
+93 node green; no Chrome needed). Diagnosis + durable lessons in `learnings.md` 2026-06-22. D1/D5/D7
+remain (D1 split out per Adam — it needs a NEW response-body-redaction surface + a live verify).
 - [ ] **D1 — capture HAR response bodies** (size-capped, redacted, same-origin JSON) — the migration
       outcome (#3) most-wanted hinges on inferring the data model from request/response shapes, and
       the HAR has no bodies. Needs response-body redaction (overlaps the open P4c item below).
-- [ ] **D2 — one authoritative API-calls table in `context.md`** binding method+URL+request body+
-      status+response body+triggering `t` (today split lossily across Timeline and Network sections).
-- [ ] **D3 — de-duplicate Steps/Timeline/transcript** (narration appears 3×; events listed twice) —
-      make Timeline a delta over Steps. This is the exact "overload with disconnected context" worry.
-- [ ] **D4 — demote/omit raw `events.jsonl`** from the pack (largest file, noise for these outcomes).
+      **NEEDS A PLAN** — adds a new sink where secrets can land (extension capture-path change) +
+      requires a live-Chrome verify. The analyze side is already ready for it: the `## API calls`
+      table (D2) has a `response body` column that renders `—` until the HAR carries bodies.
+- [x] **D2 — one authoritative API-calls table in `context.md`** — DONE 2026-06-22. New
+      `render_api_table` builds ONE markdown table from the HAR: `t` (ms since t0, derived from each
+      entry's `startedDateTime` − manifest `t0_wall`) + method + full URL + status + request body +
+      response body (size-capped, pipe-escaped, type-guarded). Replaces the old lossy split (timeline
+      had bodies + truncated URLs; the `## Network (HAR summary)` section had URLs but no bodies) —
+      that thin Network section is gone. (`tests/test_ai_usability.py` → `TestApiTable`.)
+- [x] **D3 — de-duplicate Steps/Timeline/transcript** — DONE 2026-06-22. Each modality now has ONE
+      home: narration → Steps (bound) + the verbatim Narration block (dropped the inline 🗣 from the
+      Timeline, so it's no longer 3×); request/response bodies → the API table only (dropped `body=`
+      from the timeline's network line, which keeps a brief `METHOD url → status (Nms)` for causality).
+      Section headers now state where each thing lives. (`TestTimelineDedup`.)
+- [x] **D4 — demote/omit raw `events.jsonl`** — DONE 2026-06-22. Removed from `RAW_FILES` so it's not
+      copied into the pack's `bundle/`; the pack README states it's intentionally omitted (largest
+      file, replay-only) and still lives in the original capture zip. (`TestEventsJsonlDemoted`.)
 - [ ] **D5 — guarantee narration into the self-driving zip** (transcribe at export / always pack) so
       the zip path doesn't ship a stub the receiving AI can't fill; bundle the method skills too.
-- [ ] **D6 — surface the new capture-issue flags** (`storage_full`, `narration_truncated`,
-      `video_ended_early`) in pack.py's `## ⚠ Capture issues` so the AI knows the bundle is partial.
+- [x] **D6 — surface the new capture-issue flags** — DONE 2026-06-22. `storage_full`,
+      `narration_truncated`, `video_ended_early` now render in `## ⚠ Capture issues` (above the
+      per-error lines) with a plain-language "what's missing", so the AI knows the bundle is partial.
+      (`TestPartialCaptureFlags`.)
 - [ ] **D7 — regenerate `analyze/example-output/`** from a v2 bundle (it's a v1 sample — no Purpose/
       Steps/Tabs/Annotations, so it under-represents current capabilities to any evaluator).
 

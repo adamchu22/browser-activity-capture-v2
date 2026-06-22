@@ -4,6 +4,52 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-22 (HARDENING Track D — analyze-side AI-usability: D2/D3/D4/D6)
+
+The "totally usable, don't overload" ask. The pack's `context.md` was overloading the
+receiving AI with the same information three different ways. Did the four analyze-side
+items (D2/D3/D4/D6 — all in `pack.py`, fully unit-testable, no Chrome). D1/D5/D7 deferred
+(D1 needs a new response-body-redaction surface + a live verify; split per Adam). 183
+python / 93 node green. Durable lessons:
+
+- **The HAR can supply a single-clock `t` for free — no fragile correlation needed.** The
+  old `context.md` split network across two sections (the timeline had request bodies but
+  truncated/relative URLs; the Network section had full URLs but no bodies/timing), so the
+  AI had to stitch them. The fix is one authoritative `## API calls` table built straight
+  from the HAR (its richest source: full URL + request `postData` + response `content`).
+  The missing piece was the per-event `t`: each HAR entry has `startedDateTime` (wall) and
+  the manifest has `t0_wall`, so `t = parse(startedDateTime) − parse(t0_wall)` in ms — it
+  lines up exactly with the timeline's own `t` (verified on the sample). No correlation
+  heuristic. `datetime.fromisoformat` needs `Z`→`+00:00` for pre-3.11; wrap parsing so an
+  untrusted/missing timestamp yields `—` instead of crashing (the never-crash contract).
+
+- **De-dup by giving each modality ONE home, not by deleting.** Narration was appearing 3×
+  (per-step in Steps, inline 🗣 in the Timeline, verbatim in Narration); network bodies 2×.
+  The clean rule: each modality gets a single authoritative home and the others reference
+  it. Narration → Steps (bound to the action) + the verbatim Narration block; dropped the
+  inline 🗣 from the Timeline. Bodies → the API table only; the Timeline keeps a brief
+  `METHOD url → status (Nms)` line for causality but no `body=`. Section headers now say
+  where each thing lives, so the reader isn't hunting. Network stays IN the timeline (brief)
+  because removing it would force the exact cross-referencing the de-dup is meant to avoid.
+
+- **A markdown table is only safe if every cell is escaped + capped.** Request/response
+  bodies and URLs go into table cells, so an unescaped `|` (common in bodies) silently
+  breaks the table and a 5 KB body makes it unreadable. `_table_cell` collapses whitespace,
+  size-caps (300 chars), escapes `|`, and renders empties as `—`. Same untrusted-input
+  discipline as Track C: type-guard entries/request/response/url before reading.
+
+- **Demoting a file from the pack must be loud, not silent.** `events.jsonl` (the raw rrweb
+  DOM-replay stream) is the largest file and pure noise for these outcomes (the structured
+  actions are already in `timeline.json` + the API table), so it's dropped from the pack's
+  `bundle/`. But a silent drop reads as "this bundle has no DOM data" — so the pack README
+  states it's intentionally omitted and still lives in the original capture zip.
+
+- **Partial-capture flags are useless trapped in the manifest.** The extension already sets
+  `storage_full` / `narration_truncated` / `video_ended_early` when a capture degrades, but
+  pack.py only surfaced `narration_error` + `errors.json`. A receiving AI reading a clean-
+  looking `context.md` had no idea the data was TRUNCATED. Now all three flags render in
+  `## ⚠ Capture issues` (above the per-error lines) with a plain-language "what's missing."
+
 ## 2026-06-19 (HARDENING Track C — analyze pipeline never-crash on malformed bundles)
 
 The analyze side promises "never crash on a bad bundle" (a recipient may run it on
