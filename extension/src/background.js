@@ -26,6 +26,7 @@ import { hostOnBlocklist } from "./blocklist.js";
 import { recordingElapsed } from "./clock.js";
 import { serializeSession, applySession } from "./session.js";
 import { inCaptureScope } from "./capture-scope.js";
+import { isStorageQuotaError } from "./write-failure.js";
 
 const state = {
   recording: false,
@@ -82,9 +83,10 @@ function logError(where, info = {}) {
 // and flip the badge so the user knows to finish and export now. Non-quota write
 // blips (a transient tx abort) are left to the per-site catch — they self-heal.
 function noteWriteFailure(where, e) {
-  const quota =
-    e && (e.name === "QuotaExceededError" || /quota|storage/i.test(e.message || ""));
-  if (quota && !state.storageFull) {
+  // isStorageQuotaError (write-failure.js) distinguishes a real full-disk
+  // QuotaExceededError from Chrome's captureVisibleTab rate-limit message, which
+  // also contains the word "quota" but is a harmless, self-healing throttle.
+  if (isStorageQuotaError(e) && !state.storageFull) {
     state.storageFull = true;
     logError(where, {
       message:
@@ -961,6 +963,14 @@ async function captureFrame(reason = "") {
     }
     return;
   }
+  // Two separate operations live here — the screenshot and the IndexedDB write — and
+  // they fail for DIFFERENT reasons, so they get SEPARATE try blocks. Folding them
+  // together is the bug this split fixes: captureVisibleTab's ~2/sec rate-limit error
+  // ("...MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota.") used to fall into the same
+  // catch as the IDB write and route through noteWriteFailure, which misread its
+  // "quota" wording as a full disk — a self-healing throttle tripping the fatal
+  // truncation alarm. The screenshot failure must NOT reach noteWriteFailure.
+  let dataUrl;
   try {
     // captureVisibleTab shoots the active tab of the focused window. Only shoot the
     // surface we're recording: skip a focused tab/window outside the captured scope
@@ -969,21 +979,28 @@ async function captureFrame(reason = "") {
     const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (active && !inScope(active)) return;
     if (active && state.blocklist.length && hostBlocked(active.url)) return;
-    const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
-    const t = now();
-    const file = `frames/${String(t).padStart(10, "0")}.png`;
+    dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
+  } catch (e) {
+    // captureVisibleTab can fail on chrome:// pages etc., or hit Chrome's ~2/sec rate
+    // limit when an event frame lands next to a timer frame — both non-fatal and
+    // self-healing. No storage was touched, so this is NEVER a storage-full case;
+    // swallow it (the full-screen video stays the ground truth for these moments).
+    console.debug("frame capture skipped:", reason, e?.message);
+    return;
+  }
+  const t = now();
+  const file = `frames/${String(t).padStart(10, "0")}.png`;
+  try {
     // Frames are written straight to IndexedDB (not held in worker memory): a
     // 30-min capture is hundreds of PNGs, and — more importantly — if the worker is
     // ever torn down, in-memory frames would vanish. IDB survives a worker restart.
     await db.append("frames", { t, file, dataUrl });
     state.frames.push({ t, file }); // metadata mirror for the manifest (no bytes)
   } catch (e) {
-    // captureVisibleTab can fail on chrome:// pages etc., or hit Chrome's
-    // ~2/sec quota when an event frame lands next to a timer frame — non-fatal.
-    // But a STORAGE QuotaExceededError here is different: it means IndexedDB is full
-    // and the whole capture is now silently truncating — surface that loudly.
+    // A STORAGE QuotaExceededError here means IndexedDB is full and the whole capture
+    // is now silently truncating — surface that loudly (noteWriteFailure classifies it).
     noteWriteFailure("frame-write", e);
-    console.debug("frame capture skipped:", reason, e?.message);
+    console.debug("frame write skipped:", reason, e?.message);
   }
 }
 
