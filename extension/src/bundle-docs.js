@@ -6,10 +6,13 @@
 //   - README.md    — what the bundle is + a file list
 //   - CLAUDE.md     — full analysis instructions, addressed to Claude agents
 //   - AGENTS.md     — the same instructions, AGENTS.md convention, for any agent
+//   - agent-skills/documentation/SKILL.md — how to produce illustrated documentation
+//     (screenshots + highlights) from the bundle; included in every zip
 //
 // CLAUDE.md and AGENTS.md share one body (agentGuideBody) so they never drift. Keep
 // this in sync with analyze/skills/analyze-capture/SKILL.md and analyze/BRIEF.md —
-// those are the pack-path equivalents of the same procedure.
+// those are the pack-path equivalents of the same procedure. documentationSkill() below
+// mirrors analyze/skills/documentation/SKILL.md — keep the two in sync.
 //
 // Pure functions of the manifest object; no chrome / DOM deps, so they unit-test in
 // plain node (see tests/test_bundle_docs.mjs).
@@ -18,7 +21,7 @@
 // map in analyze/pack.py; keys match the popup checkboxes.
 export const PURPOSES = {
   skill: { label: "Build a skill / automation", read: "Focus on replayable mechanics — exact selectors, URLs, API endpoints, required inputs, and the success signal (confirming response or redirect). Flag what's safe to automate vs. must stay human-in-the-loop.", make: "`SKILL.md` (a reusable skill) + `automation-suggestions.md`" },
-  docs: { label: "Documentation / SOP", read: "Focus on a clear human-followable procedure — preconditions, the happy path, decision points and eligibility checks the narrator mentioned, and the why behind each step.", make: "`SOP.md`" },
+  docs: { label: "Documentation / SOP", read: "Focus on a clear human-followable procedure — preconditions, the happy path, decision points and eligibility checks the narrator mentioned, and the why behind each step.", make: "one illustrated doc (`documentation.md` or `SOP.md`) with screenshots embedded from `frames/` — follow `agent-skills/documentation/SKILL.md`" },
   ux: { label: "UX / product feedback", read: "Focus on friction — hesitation and long pauses, backtracking, dead-ends, repeated attempts, confusing labels, error/empty states, slow steps. Cite the frame and timestamp for each.", make: "`feedback.md` — issues with severity and where they occurred" },
   ui: { label: "Propose UI changes", read: "Find friction (as for UX feedback), then prescribe concrete UI changes grounded in the captured element (selector + accessible name) and the frame.", make: "`ui-changes.md` — proposed changes ranked by impact" },
   improve: { label: "Find a better / faster way", read: "Focus on inefficiency — redundant or manual steps, repeated navigation, things doable in fewer clicks or via an API instead of the UI, rekeying that could be batched.", make: "`improvements.md` — concrete suggestions ranked by time saved" },
@@ -50,6 +53,7 @@ instructions for reading it and what to produce. No external pipeline is require
 (Optional convenience: ../analyze/pack.py pre-flattens a bundle into a single context.md.)
 
 - CLAUDE.md / AGENTS.md — how to analyze this bundle (read these first)
+- agent-skills/documentation/SKILL.md — how to produce illustrated docs (screenshots + highlights)
 - manifest.json — metadata, redaction policy, frame index
 - timeline.json — merged event stream (nav/speech/click/input/key/network)
 - events.jsonl — raw rrweb DOM stream
@@ -120,6 +124,7 @@ ${renderPurpose(m.purposes)}
 The outputs you can offer (write them into this bundle's folder):
 - **notes.md** — a one-paragraph summary, then an \`Open questions\` list (ambiguities, gaps, off-screen steps). Always produce this.
 - **SOP.md** — a numbered procedure a new teammate could follow. Narration for *intent* ("why"), events/network for *mechanics* ("what"). Mark inferences \`(inferred)\`.
+- **documentation.md** — for the **docs** purpose: one illustrated how-it-works doc or SOP with screenshots embedded from \`frames/\` and the user's on-screen highlights. Follow \`agent-skills/documentation/SKILL.md\` (it also explains the optional Notion-import packaging — don't do that by default).
 - **SKILL.md** — a reusable skill: YAML front-matter (\`name\`, one-line \`description\`), trigger, ordered steps, the real selectors/URLs/API endpoints, required inputs, and the success signal.
 - **automation-suggestions.md** — what's safe to fully automate, what must stay human-in-the-loop (and why), and the single highest-leverage automation. Reference observed API endpoints.
 - **feedback.md** / **ui-changes.md** / **improvements.md** / **research.md** — per the purpose lens above.
@@ -129,6 +134,97 @@ The outputs you can offer (write them into this bundle's folder):
 - Secrets are already redacted (shown as \`‹redacted›\`) in the structured streams (timeline, network.har, the DOM stream, URLs). Never invent the underlying value, and never suggest bypassing redaction. NOTE: \`video.webm\` and \`frames/*.png\` are NOT pixel-redacted — a secret visible on screen during recording is visible there. Don't surface or transcribe an on-screen secret you happen to see in the video/frames.
 - Ground every claim in the bundle; prefer \`(inferred)\` over confident invention.
 - Your output is a starting point a human will review — be honest about gaps.`;
+}
+
+// The documentation skill, shipped in every zip at agent-skills/documentation/SKILL.md.
+// Mirrors analyze/skills/documentation/SKILL.md (the pack-path copy) — keep the two in
+// sync. It teaches an agent to turn this bundle into an illustrated doc (screenshots +
+// the user's highlights), and explains the optional Notion-import packaging without
+// making it the default.
+export function documentationSkill() {
+  return `---
+name: documentation
+description: Turn a Browser Activity Capture into illustrated documentation — a single how-it-works doc or SOP with embedded screenshots and the user's on-screen highlights. Use when the capture's purpose is "docs", or when asked to document a tool/process from a recording. Optionally package the result for Notion import.
+---
+
+# Document a tool or process from a capture
+
+You're turning one recording into documentation a human can follow: an internal
+"how it works" doc or an SOP, **with screenshots**. The narration is the *why*, the
+timeline is the *what*, and the frames are the visual ground truth. Use all three.
+
+## What to produce (default)
+
+**One** Markdown document — \`documentation.md\` (or \`SOP.md\` for a strict procedure) —
+plus an \`images/\` folder of screenshots referenced inline. One doc, not many. **Do NOT
+build a Notion zip by default** — that's an optional packaging step (last section).
+
+The document should contain:
+
+- A title and a one–two sentence summary callout.
+- A **properties block** near the top: a small table of key facts (product, owner,
+  status, app URL, hosting/stack, last updated, source). These map onto Notion page
+  properties later.
+- Sections that follow the **actual flow** of the recording (see read order). Use
+  headings, tables (endpoints, assets), checkboxes for future work, and \`> emoji\`
+  callouts for warnings and notes.
+- **Screenshots at each meaningful step** (see below) — this is the point of the skill.
+- An **Open questions** section for anything not stated. Don't invent.
+
+## Read it in this order (one clock — every \`t\` is ms since t0)
+
+1. **Purpose & task** — \`manifest.json\`. This is your lens.
+2. **Narration** — \`transcript.vtt\`. The user's own account of intent, decisions, and
+   rules. If the transcript is a stub, recover it from \`video.webm\` first (see CLAUDE.md /
+   AGENTS.md in this bundle).
+3. **Timeline** — \`timeline.json\`: the actions, described semantically with selectors and
+   accessible names.
+4. **Visual ground truth** — \`frames/\` and \`video.webm\`.
+
+## Screenshots — include them
+
+1. **Pick the moments.** Walk the timeline and choose one shot per section: page loads
+   (\`nav\` events), each distinct screen/state, decision points, and anything the narrator
+   pointed at.
+2. **Find the nearest frame.** Frame filenames are ms offsets (\`frames/0000012345.png\`).
+   For each moment pick the frame file with the closest \`t\` — a second or two **after** a
+   \`nav\`, so the page has rendered. Spot-check it; avoid mid-transition frames.
+3. **Crop the capture overlay out.** Frames include the recorder's red border and the
+   control pill at the bottom. Crop ~8px off the edges and ~70px off the bottom, e.g.:
+   \`ffmpeg -i in.png -vf "crop=iw-16:ih-78:8:8" out.png\`.
+4. **Save and embed.** Put them in \`images/\` with ordered, descriptive names
+   (\`01-scanner-home.png\`) and embed inline: \`![caption](images/01-scanner-home.png)\`.
+5. **Highlights.** The capture records the user's own annotations — \`annotation:select\`
+   (an element they marked) and \`annotation:draw\` (a freeform circle) — in
+   \`timeline.json\`. Use them to call out the exact element a step refers to, or describe
+   the element by its accessible name. Caveat: if the user was in Select/Draw mode, some
+   frames carry a stray highlight box or a "click an element to mark it" tooltip — prefer a
+   clean frame unless the highlight adds clarity.
+
+## Ground rules
+
+- **Frames and video are NOT pixel-redacted.** They show whatever was on screen —
+  including real names, emails, and phone numbers. Expected for internal docs, but add a
+  callout flagging the page contains real data, and never transcribe an on-screen secret.
+- Ground every claim in the capture; mark inferences \`(inferred)\`. Quote spoken
+  model/tool/version names **as said**, and list exact versions under Open questions rather
+  than guessing.
+- Respect any "don't include this part" aside in the narration.
+
+## Optional: package for Notion import (only if the user asks)
+
+Don't do this by default. When the user wants it in Notion:
+
+- **Pasting Markdown text into Notion will NOT carry local images** — paste only fetches
+  images from public URLs. To keep screenshots private, use Notion's
+  **Import → Markdown & CSV** with a zip instead of pasting.
+- **Make it import as exactly one page:** put the single \`.md\` at the **root of the zip**
+  with the \`images/\` folder beside it. Do **not** nest them inside a wrapper subfolder — a
+  wrapper folder makes Notion create an extra parent page. Keep image links relative
+  (\`images/...\`).
+- **Never upload the screenshots to a public host** to make paste work — they contain
+  internal data.
+`;
 }
 
 export function bundleClaudeMd(m) {

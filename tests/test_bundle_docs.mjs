@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   bundleReadme, bundleClaudeMd, bundleAgentsMd, agentGuideBody, renderPurpose, PURPOSES,
+  documentationSkill,
 } from "../extension/src/bundle-docs.js";
 
 const baseManifest = {
@@ -59,6 +60,36 @@ test("redaction rule is restated so the agent never bypasses it", () => {
 
 test("the one-clock contract is stated", () => {
   assert.match(agentGuideBody(baseManifest), /milliseconds since t0/i);
+});
+
+test("documentation skill ships in the zip and teaches screenshots + highlights", () => {
+  const s = documentationSkill();
+  assert.match(s, /^---\nname: documentation/, "must have skill frontmatter");
+  assert.match(s, /description:/);
+  assert.match(s, /screenshot/i, "must tell the agent to include screenshots");
+  assert.match(s, /frames\//, "must reference the frames as the screenshot source");
+  assert.match(s, /annotation:select|highlight/i, "must cover the user's highlights");
+  assert.match(s, /ffmpeg.*crop/i, "must give the overlay-crop command");
+  assert.match(s, /NOT pixel-redacted/i, "must flag frames aren't redacted (PII)");
+});
+
+test("documentation skill: Notion packaging is OPTIONAL, not the default", () => {
+  const s = documentationSkill();
+  assert.match(s, /Notion/i);
+  assert.match(s, /Do NOT\s+build a Notion zip by default/i, "Notion zip must not be the default");
+  assert.match(s, /only if the user asks/i);
+  // and it documents the single-page import structure (the wrapper-folder gotcha)
+  assert.match(s, /root of the zip/i);
+  assert.match(s, /exactly one page/i);
+  assert.match(s, /wrapper/i);
+});
+
+test("docs purpose points the agent at the documentation skill + screenshots", () => {
+  const out = renderPurpose(["docs"]);
+  assert.match(out, /screenshots/i);
+  assert.match(out, /agent-skills\/documentation\/SKILL\.md/);
+  // the bundle README lists the shipped skill file
+  assert.match(bundleReadme(baseManifest), /agent-skills\/documentation\/SKILL\.md/);
 });
 
 test("renderPurpose renders the chosen lens for each known purpose", () => {

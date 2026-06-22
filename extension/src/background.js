@@ -20,7 +20,7 @@ import { redactHeaders, redactBody, redactUrl, scrubTokens, redactCtx } from "./
 import { makeZip } from "./zip.js";
 import { streamFiles, frameMeta } from "./bundle-streams.js";
 import * as db from "./db.js";
-import { bundleReadme, bundleClaudeMd, bundleAgentsMd } from "./bundle-docs.js";
+import { bundleReadme, bundleClaudeMd, bundleAgentsMd, documentationSkill } from "./bundle-docs.js";
 import { navActions } from "./nav-policy.js";
 import { hostOnBlocklist } from "./blocklist.js";
 import { recordingElapsed } from "./clock.js";
@@ -1436,6 +1436,9 @@ function metaFiles(manifest, timeline, harEntries, errors) {
     // Claude agents and the cross-agent AGENTS.md convention respectively.
     { name: "CLAUDE.md", data: bundleClaudeMd(manifest) },
     { name: "AGENTS.md", data: bundleAgentsMd(manifest) },
+    // The documentation skill travels in every zip so an agent handed only the bundle
+    // can produce illustrated docs (screenshots + highlights) with no external pipeline.
+    { name: "agent-skills/documentation/SKILL.md", data: documentationSkill() },
   ];
 }
 

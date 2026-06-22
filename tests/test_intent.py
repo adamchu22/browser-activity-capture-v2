@@ -180,7 +180,13 @@ class TestPurpose(unittest.TestCase):
 class TestBundledSkills(unittest.TestCase):
     def test_analyze_capture_always_bundled(self):
         self.assertEqual(pack.skills_for([]), ["analyze-capture"])
-        self.assertEqual(pack.skills_for(["skill", "docs"]), ["analyze-capture"])
+        self.assertEqual(pack.skills_for(["skill"]), ["analyze-capture"])
+
+    def test_docs_purpose_adds_documentation(self):
+        self.assertEqual(pack.skills_for(["docs"]), ["analyze-capture", "documentation"])
+        # combined with another purpose, both activity skills ship (deduped, stable order)
+        self.assertEqual(pack.skills_for(["skill", "docs"]),
+                         ["analyze-capture", "documentation"])
 
     def test_ui_purposes_add_ui_improvement(self):
         self.assertEqual(pack.skills_for(["ux"]), ["analyze-capture", "ui-improvement"])
@@ -199,7 +205,7 @@ class TestBundledSkills(unittest.TestCase):
         self.assertIn("research.md", pack.render_purpose(["research"]))
 
     def test_skill_files_have_frontmatter(self):
-        for name in ("analyze-capture", "ui-improvement", "competitive-research"):
+        for name in ("analyze-capture", "ui-improvement", "competitive-research", "documentation"):
             text = (pack.SKILLS_DIR / name / "SKILL.md").read_text()
             self.assertTrue(text.startswith("---"), f"{name} missing frontmatter")
             self.assertIn(f"name: {name}", text)
@@ -215,6 +221,16 @@ class TestBundledSkills(unittest.TestCase):
         pack.build_pack(src, out)
         self.assertTrue((out / "agent-skills" / "analyze-capture" / "SKILL.md").exists())
         self.assertTrue((out / "agent-skills" / "ui-improvement" / "SKILL.md").exists())
+
+    def test_build_pack_copies_documentation_skill_for_docs(self):
+        src = Path(tempfile.mkdtemp())
+        manifest = {"capture_id": "c", "t0_wall": "now", "duration_ms": 10, "sync_mode": "self_record",
+                    "purposes": ["docs"]}
+        (src / "manifest.json").write_text(json.dumps(manifest))
+        (src / "timeline.json").write_text(json.dumps([ev(0, "click", selector="#x")]))
+        out = Path(tempfile.mkdtemp()) / "pack"
+        pack.build_pack(src, out)
+        self.assertTrue((out / "agent-skills" / "documentation" / "SKILL.md").exists())
 
 
 class TestFrames(unittest.TestCase):

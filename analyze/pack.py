@@ -45,6 +45,7 @@ RAW_FILES = ["manifest.json", "timeline.json", "transcript.vtt", "network.har", 
 # consumption procedure) is always included; this maps the rest. Add a purpose→skill
 # entry here when you drop a new skill into analyze/skills/.
 SKILLS_FOR_PURPOSE = {
+    "docs": ["documentation"],
     "ux": ["ui-improvement"],
     "ui": ["ui-improvement"],
     "research": ["competitive-research"],
@@ -78,7 +79,8 @@ PURPOSES = {
         "read": "Focus on a clear human-followable procedure — preconditions, the happy "
                 "path, decision points and eligibility checks the narrator mentioned, and "
                 "the why behind each step.",
-        "make": "`SOP.md`",
+        "make": "one illustrated doc (`documentation.md` or `SOP.md`) with screenshots "
+                "embedded from `frames/` — follow the bundled `documentation` skill",
     },
     "ux": {
         "label": "UX / product feedback",
