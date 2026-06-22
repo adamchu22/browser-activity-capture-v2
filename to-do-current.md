@@ -191,6 +191,13 @@ all built + unit-tested, 190 python / 113 node green). Diagnosis + durable lesso
       (`TestPartialCaptureFlags`.)
 - [ ] **D7 — regenerate `analyze/example-output/`** from a v2 bundle (it's a v1 sample — no Purpose/
       Steps/Tabs/Annotations, so it under-represents current capabilities to any evaluator).
+      **DEFERRED 2026-06-22 (Adam): needs a CURATED demo recording, not any existing capture.** Scanned
+      every zip in `outputs/` + `~/Downloads/`: ZERO have a `purpose` set, ZERO have real (non-stub)
+      narration, and all predate D1 (no response bodies) — so no on-disk bundle can showcase the
+      headline intent layer. To do D7 right, record a short session WITH: a purpose selected, spoken
+      narration (for Steps), 2-3 tabs, an annotation, and a JSON-API site (so the D1 `## API calls`
+      response-body column is populated). That recording also doubles as the D1 live-verify. Then
+      `pack.py` it and replace `example-output/` (decide PII handling then — frames are real screenshots).
 
 ## ▶ TODO 2026-06-18 — validate the capture→bundle→AI OUTCOME flow for 3 purposes (PROCESS tests, not code)
 
