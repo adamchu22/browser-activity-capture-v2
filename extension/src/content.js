@@ -456,7 +456,12 @@
             font:13px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
             background:#1c1c1e;color:#fff;padding:8px 12px;border-radius:9999px;
             box-shadow:0 6px 24px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.12);
-            user-select:none;}
+            user-select:none;cursor:grab;touch-action:none;}
+          .bar.dragging{cursor:grabbing;}
+          /* Collapsed: keep only the live read-outs (dot, timer, mic) + the toggle. */
+          .bar.collapsed .sep,
+          .bar.collapsed #select,.bar.collapsed #draw,.bar.collapsed #pause,
+          .bar.collapsed #restart,.bar.collapsed #cancel,.bar.collapsed #finish{display:none;}
           .dot{width:10px;height:10px;border-radius:50%;background:#ff3b30;
             box-shadow:0 0 0 0 rgba(255,59,48,.6);animation:pulse 1.4s infinite;}
           .dot.paused{background:#ff9f0a;animation:none;}
@@ -487,6 +492,10 @@
           button.active:hover{background:#3a9bff;}
           button:disabled{opacity:.4;cursor:default;}
           button:disabled:hover{background:transparent;}
+          /* Collapse toggle — a chevron that flips when the bar is collapsed. */
+          .toggle{display:inline-flex;align-items:center;padding:5px 6px;}
+          .toggle svg{width:14px;height:14px;transition:transform 120ms ease;}
+          .bar.collapsed .toggle svg{transform:rotate(180deg);}
         </style>
         <div class="bar" part="bar">
           <span class="dot" id="dot"></span>
@@ -495,6 +504,9 @@
             <span class="mic-ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></span>
             <span class="mic-bars" id="micBars"><i></i><i></i><i></i><i></i><i></i></span>
           </span>
+          <button id="collapse" class="toggle" title="Hide the controls">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
           <span class="sep"></span>
           <button id="select" title="Pick an element you mean">Select</button>
           <button id="draw" title="Draw on the screen">Draw</button>
@@ -507,10 +519,12 @@
       (document.documentElement || document.body).appendChild(host);
 
       els = {
+        bar: shadow.querySelector(".bar"),
         dot: shadow.getElementById("dot"),
         time: shadow.getElementById("time"),
         mic: shadow.getElementById("mic"),
         micBars: shadow.getElementById("micBars"),
+        collapse: shadow.getElementById("collapse"),
         select: shadow.getElementById("select"),
         draw: shadow.getElementById("draw"),
         pause: shadow.getElementById("pause"),
@@ -522,6 +536,8 @@
       els.finish.addEventListener("click", () => cmd("finish"));
       wireDestructive(els.restart, "restart", "Restart");
       wireDestructive(els.cancel, "cancel", "Cancel");
+      els.collapse.addEventListener("click", toggleCollapse);
+      makeDraggable(els.bar);
 
       // The two annotation tools (Selector / Draw). Toggling one button enters
       // that mode; clicking it again (or pressing Esc, or switching to the other)
@@ -554,6 +570,63 @@
         const h = Math.max(0.12, Math.min(1, lv * (BAR_WEIGHTS[i] || 0.7) * jitter));
         bars[i].style.transform = `scaleY(${h.toFixed(3)})`;
       }
+    }
+
+    // Collapse the pill down to just the live read-outs (rec dot, timer, mic
+    // meter) and the toggle, hiding the tools/controls; click again to expand.
+    function toggleCollapse() {
+      const collapsed = els.bar.classList.toggle("collapsed");
+      els.collapse.title = collapsed ? "Show the controls" : "Hide the controls";
+      clampToViewport(); // width changed — keep it on-screen if it was dragged to an edge
+    }
+
+    // Pin the pill at a viewport coordinate, clamped so it can't leave the screen.
+    function placeAt(left, top) {
+      const r = els.bar.getBoundingClientRect();
+      const maxL = Math.max(0, window.innerWidth - r.width);
+      const maxT = Math.max(0, window.innerHeight - r.height);
+      els.bar.style.left = Math.min(Math.max(0, left), maxL) + "px";
+      els.bar.style.top = Math.min(Math.max(0, top), maxT) + "px";
+    }
+    // Re-clamp the current position. No-op until a drag has taken over placement
+    // (before that the pill is still CSS-centered, transform: translateX(-50%)).
+    function clampToViewport() {
+      if (els.bar.style.transform !== "none") return;
+      const r = els.bar.getBoundingClientRect();
+      placeAt(r.left, r.top);
+    }
+
+    // Make the pill draggable from any non-button area. The first drag switches it
+    // from CSS bottom-center to explicit left/top so it stays where the user drops it.
+    function makeDraggable(bar) {
+      let dragging = false, startX = 0, startY = 0, baseLeft = 0, baseTop = 0;
+      bar.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;            // left button only
+        if (e.target.closest("button")) return; // let the controls handle their own clicks
+        const r = bar.getBoundingClientRect();
+        bar.style.left = r.left + "px";
+        bar.style.top = r.top + "px";
+        bar.style.bottom = "auto";
+        bar.style.transform = "none";
+        baseLeft = r.left; baseTop = r.top;
+        startX = e.clientX; startY = e.clientY;
+        dragging = true;
+        bar.classList.add("dragging");
+        bar.setPointerCapture?.(e.pointerId);
+        e.preventDefault();
+      });
+      bar.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        placeAt(baseLeft + (e.clientX - startX), baseTop + (e.clientY - startY));
+      });
+      const end = (e) => {
+        if (!dragging) return;
+        dragging = false;
+        bar.classList.remove("dragging");
+        bar.releasePointerCapture?.(e.pointerId);
+      };
+      bar.addEventListener("pointerup", end);
+      bar.addEventListener("pointercancel", end);
     }
 
     // Reflect the active annotation mode on the tool buttons.
