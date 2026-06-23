@@ -1,5 +1,44 @@
 # Handoff (v2)
 
+## ✅ DONE 2026-06-23 — PACK FINALIZE UPGRADE (from an external agent's bundle review) — built + unit-tested
+
+Acted on an external agent's review of a real bundle. The review's premise ("build a finalize
+engine") was aimed at a gap mostly already filled by `pack.py` — the real issue is that the pack's
+fused output never travels with the bundle (recipient gets the raw zip). Adam's delivery decision:
+**"hand the pack, not the raw zip."** So all new value went into `pack.py` and a runner makes a pack
+for every new zip. Full adjudication + durable lessons in `learnings.md` 2026-06-23; task list in
+`to-do-current.md` (the 2026-06-23 PACK FINALIZE block). **235 python / 113 node green.**
+
+What shipped (all stdlib-only, all unit-tested):
+- `analyze/health.py` → **`health.json`**: rebuilds the frame index FROM DISK (frame filename = ms
+  offset), reconciles vs `manifest.frames` (a worker restart can under-index it), flags visual gaps.
+  `pack.py` now uses the disk-rebuilt list everywhere; reconciliation shows in `## ⚠ Capture issues`.
+- `analyze/todos.py` → **`todos.json`** + a `## ✦ To-dos & intent` section: classifies narration
+  utterances (bug/to-do/question/praise/research/decision) with element/frame/endpoint evidence.
+  Heuristic DRAFT; optional LLM refine is a separate to-do.
+- `analyze/friction.py` → **`friction.json`** + a `## ⚠ Friction signals` section: long pauses,
+  rage/repeat clicks, retried actions, error-shaped UI labels + non-2xx responses.
+- `analyze/autopack.py` → packs every new capture zip in a location (idempotent, Zip-Slip-guarded,
+  `--watch`); per-user config in git-ignored `autopack.config.json`. The "runnable per zip" piece.
+- Fixed the embedded narration-recovery command in `bundle-docs.js` (was missing `--output-path`);
+  `tests/test_recovery_command.py` guards it against drifting from `transcribe.py` again.
+- New tests: `test_health.py`, `test_todos.py`, `test_friction.py`, `test_autopack.py`,
+  `test_recovery_command.py`.
+
+**▶ NEXT — re-run the external-agent review as a TEST, against the PACK (not the raw zip).** The
+whole point of this batch was to remove the "agent tax" that review paid. So validate it the same
+way it was found: produce a fresh bundle → `python analyze/autopack.py <folder>` → hand the
+resulting `*-pack/` to a fresh agent → confirm the finalize artifacts do their job: `todos.json`
+already lists the intent (no re-reading the transcript by hand), `friction.json` already has the
+pauses/rage-clicks (no manual detection), `health.json` says the frame index is trustworthy, and
+`context.md` needs no manual stream-join. If the agent still pays a tax, that gap is the next
+build. (This doubles as the deferred D7 — a curated demo bundle for `example-output/`.)
+
+Other follow-ups in `to-do-current.md`: PLANNING task — install on a new computer so captures
+auto-pack locally (wiring `autopack.py` into a launchd/cron/watch service); optional LLM pass to
+refine `todos.json`. **No live-Chrome verify needed** for this batch — it's all analyze-side Python
+(the one extension change is the `bundle-docs.js` doc-string, covered by a test).
+
 ## ▶ NEEDS A LIVE CHROME VERIFY — overlay pill draggable + collapse (built 2026-06-23)
 
 Adam asked to move the recording-controls bar and add a hide button that collapses it down to the

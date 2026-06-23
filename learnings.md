@@ -4,6 +4,48 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-23 (pack finalize upgrade — acting on an external agent's bundle review)
+
+An external agent reviewed a real exported bundle and proposed a "finalize engine"
+(`moments.jsonl`/`todos.json`/`friction.json`/`digest.md`/`health.json`). Adjudicating it
+against the code produced a sharper conclusion than the review itself. Durable lessons:
+
+- **`pack.py` already IS the fusion engine — but its output never travels with the bundle.**
+  The reviewer worked from the raw zip and concluded the tool "ships the lowest-value
+  representation and pushes assembly onto the consumer." True of the RAW ZIP, false of the
+  pack: `pack.py` (1,100+ lines) already does the single-clock API table, narration→step
+  binding, frame correlation, annotation fusion, and auto-transcribe. The real gap is
+  DELIVERY — the exported zip carries the raw streams + CLAUDE.md/AGENTS.md, NOT a pack, and
+  the recipient has no `analyze/pack.py` to run. Lesson: when an outside reviewer says "build
+  X," check whether X exists but isn't reaching them. Adam's call: "hand the pack, not the raw
+  zip" — so new value goes INTO pack.py and `autopack.py` makes the pack travel.
+- **Don't build a parallel `finalize.py`.** The reviewer offered to write one from scratch. It
+  would reimplement pack.py's tested fusion and then drift from it — exactly the "two things
+  that must agree WILL drift" failure this repo keeps hitting (validator/redact regexes, the
+  skill-text copies). The two genuinely-NEW analyses (intent→todos, friction) became pack.py
+  outputs reusing its existing parse; only `health.py` is new infrastructure.
+- **The frame index must be rebuilt from disk, not trusted from the manifest.** The strongest
+  find: a service-worker restart can leave `manifest.frames` indexing only the frames captured
+  AFTER it, while every frame is still written to disk — so a tool trusting the manifest
+  silently loses visual ground truth and `errors.json` ("state recovered") doesn't warn,
+  because state WAS recovered; the frame index wasn't. Cheap fix because the frame filename IS
+  its ms offset (`background.js` `captureFrame`: `frames/${t.padStart(10)}.png`), so disk is
+  always complete and authoritative. `health.json` reconciles disk vs manifest and flags gaps —
+  making the bundle self-VALIDATING, not just self-describing.
+- **A heuristic intent classifier must fail toward "unclassified," and bare wh-word-at-start is
+  too noisy for "question."** `todos.py` keys off `?`-terminated utterances + interrogative
+  modal phrases ("can we", "should we", "how does"); the bare `^(what|how|why)` branch was
+  dropped after it mis-fired on declaratives ("What they would have to do is…"). A miss (left
+  unclassified) is cheaper than a false to-do. todos.json is framed as a DRAFT to confirm, and
+  an optional LLM pass is the right home for implicit intent — kept OUT of the stdlib core so
+  pack.py stays no-provider-lock-in.
+- **An embedded command in docs is code and will drift — assert it.** The bundle's self-recovery
+  command (`bundle-docs.js`) had drifted from `transcribe.py`'s real invocation (missing
+  `--output-path`, so it failed on first run — the reviewer caught it). Fixed + added
+  `test_recovery_command.py` asserting the doc keeps `--output-path`/`--format vtt`/the same
+  model id. Same lesson as the validator/redact TOKEN_RE lockstep: a comment ("kept in sync")
+  is not enforcement; a test is.
+
 ## 2026-06-22 (D1 — capture HAR response bodies — built + unit-tested, needs a live verify)
 
 `network.har` recorded request bodies but never response bodies (no `Network.getResponseBody`

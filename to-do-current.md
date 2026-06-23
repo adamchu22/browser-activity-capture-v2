@@ -6,6 +6,85 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (190 python / 113 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
+## ✅ Done 2026-06-23 — PACK FINALIZE UPGRADE (from the external agent's review) — built + unit-tested
+
+Acted on an external agent's review of a real bundle. Key reframe: `pack.py` already does the
+stream-fusion the review asked for, but (a) it never travels with the bundle (recipient gets the
+raw zip, not a pack) and (b) two genuinely-new analyses didn't exist anywhere. Adam's delivery
+call: **"hand the pack, not the raw zip"** — so all new value went into `pack.py`, and a runner
+makes a pack for every new zip. 235 python / 113 node green. Durable notes in `learnings.md`
+2026-06-23.
+- [x] **Frame-index integrity (`health.json`)** — the review's strongest find: a worker restart
+      can leave `manifest.frames` indexing only the frames AFTER it while ALL frames are on disk,
+      so a tool trusting the manifest silently loses visual ground truth. Frame filenames ARE the
+      ms offset, so the index is rebuilt from disk losslessly (`analyze/health.py`
+      `frames_on_disk`/`canonical_frames`/`build_health`). `build_context` + `build_pack` now use
+      the disk-rebuilt list; `## ⚠ Capture issues` surfaces the manifest-vs-disk reconciliation +
+      visual gaps; `health.json` ships in the pack. (`tests/test_health.py`.)
+- [x] **Intent → `todos.json`** — classifies each narration utterance (bug / to-do / question /
+      praise / research / decision) and attaches the element / frame / endpoint around it
+      (`analyze/todos.py`). Heuristic + stdlib-only (no model, no network — preserves pack.py's
+      no-provider-lock-in). Rendered as a `## ✦ To-dos & intent` section up top + full list in
+      `todos.json`. Framed as a DRAFT to confirm. (`tests/test_todos.py`.)
+- [x] **Computed `friction.json`** — long pauses, rage/repeat clicks, retried actions, error-shaped
+      UI labels + non-2xx responses (`analyze/friction.py`). The ux-purpose deliverable, pre-baked.
+      Summary in a `## ⚠ Friction signals` section + full detail in `friction.json`.
+      (`tests/test_friction.py`.)
+- [x] **Auto-pack runner (`analyze/autopack.py`)** — point it at a location and it builds a pack
+      for every new capture zip (idempotent, best-effort per zip, Zip-Slip-guarded). `--watch`
+      polls; per-user locations in git-ignored `autopack.config.json`. This is the "runnable for
+      every new zip by calling the location" piece. (`tests/test_autopack.py`.)
+- [x] **Recovery-command bug fix** — the embedded narration-recovery command in `bundle-docs.js`
+      was missing `--output-path` (fails on first run, as the review found); aligned to
+      `transcribe.py`'s real invocation + writes `transcript.vtt`. A drift-guard test
+      (`tests/test_recovery_command.py`) asserts the doc command keeps `--output-path`/`--format
+      vtt`/the same model id as `transcribe.py` so it can't silently diverge again.
+- **Deliberately NOT built** (review over-reach): a parallel `finalize.py` (would fork pack.py's
+      ~1,100 tested lines → drift), cross-session dedup/trend system, in-recorder todo-triage loop,
+      event-only frames. See `learnings.md` 2026-06-23 for the full adjudication.
+- [ ] **▶ NEXT — re-run the external review as a TEST (against the PACK, not the raw zip).** Validate
+      the upgrade the same way the problem was found: produce a fresh bundle → `python
+      analyze/autopack.py <folder>` → hand the `*-pack/` to a fresh agent → confirm it does NOT pay
+      the original "agent tax": `todos.json` already carries the intent, `friction.json` the
+      pauses/rage-clicks, `health.json` says the frame index is trustworthy, `context.md` needs no
+      manual stream-join. Any tax it STILL pays = the next thing to build. Doubles as the deferred D7
+      (a curated demo bundle for `analyze/example-output/`).
+
+## ▶ TODO (PLANNING — needs a plan before building) 2026-06-23 — install on a new computer so captures auto-pack locally
+
+Goal (Adam): a user sets this up ONCE on their machine and from then on every recording they make
+is **automatically turned into a pack by their own local install**, in their own locations — no
+manual `pack.py`, no us. The pieces exist (`autopack.py` + `autopack.config.json` + the `.venv`
+transcribe setup); what's missing is the one-time install that wires them into a background service.
+**SCOPE IT FIRST — this is a "Building Full" task, not a quick script.** A plan must cover:
+- **Trigger mechanism** per-OS: macOS `launchd` (LaunchAgent) vs `autopack.py --watch` vs a folder
+  watcher; Windows Task Scheduler / a service; Linux systemd user unit. Decide watch-loop vs
+  event-driven, and the poll interval.
+- **Per-user config** — `setup.sh`/`setup.ps1` should prompt for / write `autopack.config.json`
+  (watch dir = the extension's download folder; packs_dir = where they want packs), and verify the
+  download folder matches the extension's Settings.
+- **Transcription dependency** — the auto-pack needs the `.venv` (ffmpeg + ASR) to fill narration;
+  fold the existing `analyze/setup.sh` selftest/pre-warm into this install so a fresh machine is
+  ready end-to-end.
+- **Idempotent install + uninstall**, logging (where do autopack errors go?), and what happens on
+  laptop sleep / login.
+- **Security** — a background process that auto-extracts zips from a Downloads folder (Zip-Slip is
+  already guarded in `pack_zip`, but the install story should state the trust boundary).
+- **Docs** — a "first-time setup on a new computer" section + how to change locations later.
+- Open question: does this stay manual-trigger-friendly (run by hand any time) AND offer the
+  service, or service-only? (Lean: keep the manual entrypoint, add the service on top.)
+This dovetails with the existing CONNECTOR/MCP idea (let an AI trigger a capture) — but that's a
+separate task; this one is purely local auto-pack-on-download.
+
+## ▶ TODO 2026-06-23 — optional LLM pass to refine `todos.json` (enhancement, not required)
+
+`todos.json` ships a stdlib-only heuristic draft today (keyword/shape classification). An OPTIONAL
+LLM pass would catch IMPLICIT intent the keywords miss and de-noise false positives (e.g. a
+declarative that trips a pattern). Build it like `analyze/adapters/run_claude.py`: off by default
+(no API key required for the core), explicit opt-in, reads `todos.json` + `context.md` and returns
+a refined list with the same `{t, type, text, evidence}` shape. Must NOT become a hard dependency —
+the no-provider-lock-in default is the whole point of the stdlib core.
+
 ## ✅ Done 2026-06-23 — overlay pill: draggable + collapse-to-readouts (NEEDS A LIVE CHROME VERIFY)
 
 Adam asked to move the recording-controls bar and add a hide button that collapses it down to
