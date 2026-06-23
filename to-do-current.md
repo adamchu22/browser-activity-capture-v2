@@ -6,6 +6,21 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (190 python / 113 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
+## ✅ Done 2026-06-23 — machine-local pointer so a raw zip finds the pipeline (Step 0) — built + unit-tested
+
+Adam hands the raw zip from a different repo, so the agent couldn't reach `pack.py` and the zip's
+docs told it to self-drive instead of building the `context.md` spine. Fixed (246 python / 116 node
+green; details in `handoff.md` + `learnings.md` 2026-06-23):
+- [x] `analyze/install_pointer.py` — writes/reads `~/.config/browser-activity-capture/install.json`
+      (`analyze_dir` + `.venv` python + `pack_cmd`); degrades to None. `tests/test_install_pointer.py` (10).
+- [x] `setup.sh`/`setup.ps1` register the install after the venv selftest.
+- [x] `bundle-docs.js` README + CLAUDE.md/AGENTS.md lead with **Step 0** (adjacent pack → pointer →
+      register-then-build → self-drive fallback); `test_bundle_docs.mjs` updated.
+- [x] Verified end-to-end (temp `XDG_CONFIG_HOME` → read pointer → `pack_cmd` → 765-line `context.md`).
+- [ ] Eyeball Step 0 in the next exported zip's README/CLAUDE.md (doc-string-only change, no unit test
+      for the zip-write path). The bigger automation — autopack-on-download — is the PLANNING task
+      below; this pointer is its shared foundation.
+
 ## ✅ Done 2026-06-23 — PACK FINALIZE UPGRADE (from the external agent's review) — built + unit-tested
 
 Acted on an external agent's review of a real bundle. Key reframe: `pack.py` already does the

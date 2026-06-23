@@ -1,5 +1,35 @@
 # Handoff (v2)
 
+## ✅ DONE 2026-06-23 — MACHINE-LOCAL POINTER so a raw zip can find the pipeline (Step 0) — built + unit-tested
+
+Live test of the recent batch (`capture-2026-06-23T20-38-26-134Z.zip`) validated PASS, 0 warnings;
+the overlay (draggable + collapse), Select/Draw annotations, redaction, and D1 response bodies all
+checked out (review in the test). The gap Adam surfaced: he **hands the raw zip every time, from a
+different repo**, so the agent can't reach `analyze/pack.py` and the zip's docs told it to self-drive
+the 10-step manual join instead of building the `context.md` spine. Fix (built + unit-tested, 246
+python / 116 node green; full diagnosis + durable lessons in `learnings.md` 2026-06-23):
+- **`analyze/install_pointer.py`** (new, stdlib) — writes/reads a pointer at
+  `~/.config/browser-activity-capture/install.json` (`analyze_dir` + repo `.venv` python +
+  ready-to-run `pack_cmd`); `read_pointer` returns None on missing/malformed so callers degrade.
+  `tests/test_install_pointer.py` (10).
+- **`setup.sh` / `setup.ps1`** now register the install (run `install_pointer.py`) after the venv
+  selftest — the install knows its own path, no filesystem search.
+- **`extension/src/bundle-docs.js`** — README + CLAUDE.md/AGENTS.md now lead with **Step 0**: an
+  adjacent `…-pack/` → read its `context.md`; else read the pointer → run `pack_cmd` on this bundle →
+  read `context.md`; else (no pointer) run `install_pointer.py` once then build; else (no shell/chat
+  LLM) ignore Step 0 and self-drive. Re-opens the P0 self-contained contract (Step 0 primary,
+  self-driving the fallback); `test_bundle_docs.mjs` updated to lock it.
+- **Verified end-to-end:** wrote the pointer to a temp `XDG_CONFIG_HOME`, read it, ran its `pack_cmd`
+  on the test bundle → 765-line `context.md` spine produced. The exact "agent reads pointer → builds
+  spine" loop works.
+
+**▶ NEXT — the bigger automation is still the autopack-on-download install** (queued PLANNING task in
+`to-do-current.md`): a launchd/watch service that pre-builds `…-pack/` beside each zip in Downloads,
+so Step 0 case 1 (adjacent pack) is always satisfied and the agent does zero setup. The pointer built
+here is the shared foundation for it. No live-Chrome verify needed for this batch (the one extension
+change is the `bundle-docs.js` doc strings, covered by tests); the doc strings will appear in the next
+exported zip — eyeball Step 0 there.
+
 ## ✅ DONE 2026-06-23 — PACK FINALIZE UPGRADE (from an external agent's bundle review) — built + unit-tested
 
 Acted on an external agent's review of a real bundle. The review's premise ("build a finalize

@@ -4,6 +4,37 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-06-23 (machine-local pointer so a bundle can find the pipeline — Step 0)
+
+The 2026-06-23 pack-finalize batch decided "hand the pack, not the raw zip," but Adam
+**hands the raw zip every time** — and from a DIFFERENT repo, so `analyze/pack.py` isn't
+reachable from where his agent works. The zip's own docs made it worse: they said "self-driving,
+no external pipeline required" and mentioned `pack.py` only as an optional `../analyze/pack.py`
+(a path that's wrong once the zip sits in `~/Downloads`). Net: his agent always did the 10-step
+manual stream-join and never built the `context.md` spine — the finalize work was bypassed.
+
+Fix (Adam's design): a **machine-local pointer file** at a fixed home path,
+`~/.config/browser-activity-capture/install.json` (`analyze_dir` + `python` + a ready
+`pack_cmd`). `analyze/install_pointer.py` writes/reads it (stdlib, never raises → None on
+missing/malformed so callers degrade). `setup.sh`/`setup.ps1` write it at install time (they
+KNOW the path — no fragile filesystem search); an agent that finds a checkout but no pointer can
+run `python analyze/install_pointer.py` once to record it. The zip's `bundle-docs.js` now leads
+with **Step 0**: read the pointer → run the `pack_cmd` on this bundle → read `context.md`; an
+adjacent `…-pack/` short-circuits it; no shell/pipeline → ignore Step 0 and self-drive. Durable
+lessons:
+- **A bundle handed to an agent in another repo can't find the tool unless the tool tells it
+  where it lives.** "Self-contained instructions" ≠ "self-contained capability" — the spine needs
+  the Python pipeline, so the doc must point at it, not pretend no pipeline exists.
+- **Installer-writes-the-pointer beats agent-discovers-it.** The install knows its own path; the
+  first-run `find`/ask is only the fallback.
+- **Dedicated tool-owned file, NOT `~/.claude/CLAUDE.md`** — bundles go to non-Claude agents too,
+  so the pointer is provider-neutral (matches pack.py's no-lock-in stance); a CLAUDE.md line can
+  be an extra convenience but isn't the source of truth.
+- This pointer is also exactly what an autopack-on-download install would read, so it's the shared
+  foundation for that queued task — not throwaway.
+- This re-opened the P0 (2026-06-17) "self-contained zip" contract: Step 0 is now primary,
+  self-driving is the explicit fallback. `test_bundle_docs.mjs` updated to lock the new contract.
+
 ## 2026-06-23 (pack finalize upgrade — acting on an external agent's bundle review)
 
 An external agent reviewed a real exported bundle and proposed a "finalize engine"
