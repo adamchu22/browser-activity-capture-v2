@@ -38,5 +38,11 @@ Write-Host "-> Verifying transcription end-to-end (this also downloads the model
 & .venv\Scripts\python.exe analyze\transcribe.py --selftest
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# Record WHERE this pipeline lives at a fixed home path, so an agent handed a
+# capture bundle from any other directory can find pack.py + this .venv and build
+# the fused context.md spine itself (see analyze\install_pointer.py).
+Write-Host "-> Registering this install so bundles can find it..."
+& .venv\Scripts\python.exe analyze\install_pointer.py
+
 Write-Host "Done. pack.py will now auto-transcribe every future capture. Test it directly with:"
 Write-Host "    .venv\Scripts\python.exe analyze\transcribe.py C:\path\to\bundle"

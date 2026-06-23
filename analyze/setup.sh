@@ -49,5 +49,11 @@ fi
 echo "→ Verifying transcription end-to-end (this also downloads the model once)…"
 .venv/bin/python analyze/transcribe.py --selftest
 
+# Record WHERE this pipeline lives at a fixed home path, so an agent handed a
+# capture bundle from any other directory can find pack.py + this .venv and build
+# the fused context.md spine itself (see analyze/install_pointer.py).
+echo "→ Registering this install so bundles can find it…"
+.venv/bin/python analyze/install_pointer.py
+
 echo "✓ Done. pack.py will now auto-transcribe every future capture. Test it directly with:"
 echo "    .venv/bin/python analyze/transcribe.py /path/to/bundle"
