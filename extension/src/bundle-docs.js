@@ -102,9 +102,9 @@ Recover them yourself, no external help needed:
    installed yet, set up a throwaway env first (the model weights download on first run, or
    load from the local Hugging Face cache if already present — no path needed, just the repo id):
    \`uv venv .venv-asr && uv pip install --python .venv-asr mlx-audio\`
-   then transcribe:
-   \`.venv-asr/bin/python -m mlx_audio.stt.generate --model mlx-community/parakeet-tdt-0.6b-v3 --audio audio.wav --format vtt\`
-   (writes \`audio.wav.vtt\`). Only fall back to Whisper if Parakeet isn't available: \`whisper audio.wav --model small.en\`.
+   then transcribe (\`--output-path\` is REQUIRED — without it the command errors):
+   \`.venv-asr/bin/python -m mlx_audio.stt.generate --model mlx-community/parakeet-tdt-0.6b-v3 --audio audio.wav --output-path transcript --format vtt\`
+   (writes \`transcript.vtt\`). Only fall back to Whisper if Parakeet isn't available: \`whisper audio.wav --model small.en --output_format vtt\`.
 3. The audio starts within ~1s of t0 — treat the cue times as t0-aligned.
 Then use the transcript as the user's account of intent.
 
