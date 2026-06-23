@@ -48,7 +48,37 @@ test("AUDIO FALLBACK: both files tell the agent narration is in video.webm + how
 test("self-driving: states the bundle needs no external tool/pipeline", () => {
   const doc = bundleAgentsMd(baseManifest);
   assert.match(doc, /self-driving/i);
-  assert.match(doc, /no external tool or pipeline|without us|no external help/i);
+  assert.match(doc, /no external (tool or )?pipeline|without us|no external help/i);
+});
+
+test("Step 0: leads with building the fused spine via the pipeline pointer", () => {
+  for (const doc of [bundleClaudeMd(baseManifest), bundleAgentsMd(baseManifest)]) {
+    assert.match(doc, /Step 0/, "must have a Step 0 block");
+    assert.match(doc, /spine/i, "must frame context.md as the fused spine");
+    // the fixed, machine-local pointer path an agent reads to locate the pipeline
+    assert.match(doc, /~\/\.config\/browser-activity-capture\/install\.json/);
+    assert.match(doc, /pack\.py/, "must give the pack command");
+    assert.match(doc, /context\.md/, "must tell the agent to read context.md");
+    // and the first-run fallback that records the location for next time
+    assert.match(doc, /install_pointer\.py/);
+    // adjacent pre-built pack is the cheapest case
+    assert.match(doc, /-pack\//);
+  }
+});
+
+test("Step 0 still degrades to self-driving when no pipeline is available", () => {
+  const doc = bundleAgentsMd(baseManifest);
+  assert.match(doc, /self-driving/i);
+  // an agent with no shell / no pipeline is told it can ignore Step 0
+  assert.match(doc, /chat LLM|no shell|ignore Step 0/i);
+});
+
+test("README leads with the spine but keeps the self-driving fallback", () => {
+  const r = bundleReadme(baseManifest);
+  assert.match(r, /spine/i);
+  assert.match(r, /~\/\.config\/browser-activity-capture\/install\.json/);
+  assert.match(r, /-pack\//, "mentions an adjacent built pack");
+  assert.match(r, /self-driving/i);
 });
 
 test("redaction rule is restated so the agent never bypasses it", () => {

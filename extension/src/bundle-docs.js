@@ -1,8 +1,11 @@
 // Self-driving documentation embedded in every exported Capture Bundle.
 //
 // The goal (P0): a bundle zip must work when handed to ANY agent for another
-// process, with no access to our analyze/ pipeline and nobody from this project in
-// the loop. So every export carries:
+// process, with nobody from this project in the loop. The docs lead with "Step 0"
+// — build the fused context.md spine via the analyze pipeline (located through the
+// machine-local pointer, analyze/install_pointer.py) — and fall back to fully
+// self-driving from the raw files when the pipeline isn't available. So every export
+// carries:
 //   - README.md    — what the bundle is + a file list
 //   - CLAUDE.md     — full analysis instructions, addressed to Claude agents
 //   - AGENTS.md     — the same instructions, AGENTS.md convention, for any agent
@@ -47,10 +50,17 @@ export function bundleReadme(m) {
 
 Portable recording of one browser task, aligned on one clock (ms since t0).
 
-**This bundle is self-driving.** Hand the whole folder to any agent and point it at
-**CLAUDE.md** (Claude agents) or **AGENTS.md** (any agent) — those carry the full
-instructions for reading it and what to produce. No external pipeline is required.
-(Optional convenience: ../analyze/pack.py pre-flattens a bundle into a single context.md.)
+**Best first move — build the fused "spine."** This is the RAW capture (a dozen
+separate files). The analyze pipeline flattens every stream into one ordered
+\`context.md\` so an agent doesn't have to join them by hand. If a \`…-pack/\` folder
+sits next to this one, read its \`context.md\`. If not, and the pipeline is installed
+on this machine, its location is recorded at
+\`~/.config/browser-activity-capture/install.json\` — see **Step 0** in CLAUDE.md /
+AGENTS.md for the one command.
+
+**Still self-driving if the pipeline isn't available.** Hand the whole folder to any
+agent and point it at **CLAUDE.md** (Claude agents) or **AGENTS.md** (any agent) —
+they carry the full instructions for reading the raw files and what to produce.
 
 - CLAUDE.md / AGENTS.md — how to analyze this bundle (read these first)
 - agent-skills/documentation/SKILL.md — how to produce illustrated docs (screenshots + highlights)
@@ -71,8 +81,27 @@ export function agentGuideBody(m) {
     : `no microphone narration was captured${m.narration_error ? ` (reason: ${m.narration_error})` : ""}.`;
   return `You've been handed a **Capture Bundle**: a multimodal, timestamped recording of one
 person doing one task in their web browser, aligned on a single millisecond clock.
-**This file is the whole instruction set — the bundle is self-driving.** You do not need
-any external tool or pipeline to use it.
+**The bundle is self-driving** — everything you need to analyze it from the raw files
+is in this one file, no external pipeline required. But there's an easier path first:
+
+## Step 0 — build the fused "spine" first (do this if you can)
+This folder is the RAW capture (a dozen separate files). The analyze pipeline can fuse
+every stream into ONE ordered \`context.md\` (narration + clicks + frames + API calls on
+one clock, plus extracted to-dos and friction), so you don't join them by hand. To get it:
+1. **A built pack may already be here.** If a \`…-pack/\` folder sits next to this bundle,
+   read its \`context.md\` + \`BRIEF.md\` and skip the manual reading order below — that's
+   the finished spine.
+2. **Else build it from the installed pipeline.** Its location is recorded on this
+   machine at \`~/.config/browser-activity-capture/install.json\` (JSON with \`analyze_dir\`
+   and \`python\`). Read that file, then run its \`pack_cmd\` on THIS folder, e.g.
+   \`<python> <analyze_dir>/pack.py <this-bundle-folder> --out <bundle>-pack\`, and read
+   \`<bundle>-pack/context.md\`.
+3. **Else register it once, then build.** If that pointer file is missing but you can
+   find a checkout of \`browser-activity-capture-v2\` on this machine, run
+   \`python analyze/install_pointer.py\` there once (it records the location so every
+   future bundle is automatic), then build as in step 2.
+4. **Else self-drive.** If you have no shell or can't find the pipeline (e.g. you're a
+   chat LLM), ignore Step 0 — this bundle still works from the raw files below.
 
 ## The clock
 Every \`t\` in every file is **milliseconds since t0**. \`t0_wall\` in manifest.json is the
