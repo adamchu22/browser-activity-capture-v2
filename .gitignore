@@ -8,3 +8,6 @@ outputs/
 
 # Local transcription venv (faster-whisper/mlx-audio) — recreate with uv, see analyze/README.
 .venv/
+
+# Per-user auto-pack config (watch dirs + packs dir) — written by setup, machine-specific.
+analyze/autopack.config.json
