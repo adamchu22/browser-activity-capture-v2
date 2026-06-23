@@ -1,5 +1,15 @@
 # Handoff (v2)
 
+## ▶ NEEDS A LIVE CHROME VERIFY — overlay pill draggable + collapse (built 2026-06-23)
+
+Adam asked to move the recording-controls bar and add a hide button that collapses it down to the
+timer + mic meter. Built in the `overlay` IIFE in `extension/src/content.js` (shadow-DOM pill, no
+unit test — DOM/chrome.* dependent; 113 node / 190 python still green). Drag from any non-button
+area (pointer capture, clamped to viewport, first drag switches centered→explicit left/top);
+chevron `#collapse` toggles a `.collapsed` class hiding the tools/controls, leaving rec dot + timer
++ mic meter. Position is tab-local (resets on full-page nav remount). Verify steps + details in
+`to-do-current.md` (the 2026-06-23 DONE block).
+
 _Last updated: 2026-06-22 (documentation skill added — ships in every zip at
 `agent-skills/documentation/SKILL.md` + in the pack for the `docs` purpose; teaches illustrated docs
 with screenshots/highlights + optional Notion-import packaging; 103 node / 190 python green; NEEDS A

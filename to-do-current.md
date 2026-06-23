@@ -6,6 +6,23 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (190 python / 113 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
+## ✅ Done 2026-06-23 — overlay pill: draggable + collapse-to-readouts (NEEDS A LIVE CHROME VERIFY)
+
+Adam asked to move the recording-controls bar and add a hide button that collapses it down to
+just the timer + mic meter. Done in the `overlay` IIFE in `extension/src/content.js` (shadow-DOM
+pill; no unit test — DOM/shadow + chrome.* dependent, consistent with the rest of the overlay).
+- **Draggable** — `makeDraggable()` drags from any non-button area (buttons keep their own clicks
+  via `e.target.closest("button")`). First drag switches the pill from CSS bottom-center
+  (`transform:translateX(-50%)`) to explicit `left/top`; `placeAt()` clamps it inside the viewport.
+  Uses pointer capture so a fast drag doesn't drop. Position is tab-local (resets on a full-page
+  nav remount — acceptable; SPA navs don't remount).
+- **Collapse** — a chevron toggle (`#collapse`) hides the seps + Select/Draw/Pause/Restart/Cancel/
+  Finish via a `.collapsed` class, leaving the rec dot, timer, and mic meter. Re-clamps after the
+  width change so a pill dragged to an edge stays on-screen. Chevron flips when collapsed.
+- **Live verify (interactive — no unit test):** record → drag the pill around (it follows the
+  cursor, stays on-screen, buttons still click); hit the chevron → collapses to dot+timer+mic,
+  click again → expands; collapsing while docked at an edge keeps it visible.
+
 ## ✅ Done 2026-06-22 — documentation skill (illustrated docs + Notion option)
 
 A `documentation` skill now ships in **every exported zip** at
