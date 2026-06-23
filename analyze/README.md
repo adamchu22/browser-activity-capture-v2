@@ -10,11 +10,39 @@ or a speech engine isn't installed, and `--no-transcribe` turns it off.)
 
 ```
 bundle/ ──► pack.py ──► analysis-pack/        ──►  [ any agent / harness / LLM ]
- (stdlib only)          ├── BRIEF.md   (the task, provider-neutral)
-                        ├── context.md (flattened recording)
-                        ├── frames/    (screenshots)
-                        └── bundle/    (raw structured files)
+ (stdlib only)          ├── BRIEF.md     (the task, provider-neutral)
+                        ├── context.md   (fused recording + to-dos/friction up top)
+                        ├── todos.json   (intent extracted from narration, with evidence)
+                        ├── friction.json(computed UX signals: pauses, rage clicks, errors)
+                        ├── health.json  (integrity: frame index vs disk, gaps, flags)
+                        ├── frames/      (screenshots)
+                        └── bundle/      (raw structured files)
 ```
+
+The three JSON artifacts do the forensic join **once** so an agent starts from a
+labelled draft, not raw streams: `todos.json` classifies each narration utterance
+(bug / to-do / question / praise / research / decision) and attaches the element /
+frame / endpoint around it; `friction.json` pre-computes long pauses, rage/repeat
+clicks, retried actions and error-shaped events; `health.json` rebuilds the frame
+index from disk (the manifest can under-index it after a worker restart) and reports
+what to trust. All stdlib-only — `todos.json` is a heuristic draft, refine with an LLM
+if you want.
+
+### Auto-pack: a pack for every new capture, no manual step
+
+`autopack.py` watches a folder (where the extension downloads captures) and builds a
+pack for every new capture zip — so the handoff is always the pack, never the raw zip.
+
+```bash
+python autopack.py                 # configured/default location(s)
+python autopack.py ~/Downloads      # pack new capture zips in a folder
+python autopack.py --watch          # poll forever (or run from cron/launchd)
+```
+
+Idempotent (skips zips already packed) and best-effort per zip. Per-user locations go
+in `analyze/autopack.config.json` (git-ignored): `{"watch_dirs": ["~/Downloads"],
+"packs_dir": "~/captures/packs"}`. Installing this as a background service on a new
+machine is the "install on new computers" task — see `to-do-current.md`.
 
 ## 1. Build the pack (no API key, no network)
 

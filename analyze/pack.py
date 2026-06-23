@@ -30,6 +30,13 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+# Sibling analyze modules (analyze/ is on sys.path when run as `python analyze/pack.py`
+# and the test suite inserts it explicitly). build_health rebuilds the frame index from
+# disk (the manifest can under-index it); friction + todos are the finalize-time analyses.
+from health import build_health, canonical_frames  # noqa: E402
+from friction import compute_friction  # noqa: E402
+from todos import extract_todos  # noqa: E402
+
 _VTT_TIME = re.compile(r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->")
 
 BRIEF = Path(__file__).parent / "BRIEF.md"
@@ -727,6 +734,29 @@ def render_api_table(har: dict, blocklist: list[str] | None = None,
     return "\n".join(out)
 
 
+def api_entries(har: dict, t0_wall: str | None) -> list[dict]:
+    """HAR entries reshaped for friction/todos: `_t` (ms since t0, re-derived since the
+    export strips it) + the request/response dicts. Fully type-guarded; a malformed HAR
+    yields an empty list, never an exception."""
+    log = har.get("log") if isinstance(har, dict) else None
+    entries = log.get("entries") if isinstance(log, dict) else None
+    if not isinstance(entries, list):
+        return []
+    t0 = _parse_iso_ms(t0_wall)
+    out = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        started = _parse_iso_ms(e.get("startedDateTime"))
+        t = (started - t0) if (t0 is not None and started is not None) else 0
+        out.append({
+            "_t": t,
+            "request": e.get("request") if isinstance(e.get("request"), dict) else {},
+            "response": e.get("response") if isinstance(e.get("response"), dict) else {},
+        })
+    return out
+
+
 def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     blocklist = blocklist or []
     # Untrusted bundle: every load is best-effort and type-checked so a malformed /
@@ -747,8 +777,9 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     # The single authoritative network record (D2): method + full URL + status +
     # request/response bodies on the one clock. _load_json returns {} for a missing /
     # malformed HAR, and render_api_table is fully type-guarded.
-    api_table = render_api_table(_load_json(bundle / "network.har", {}), blocklist,
-                                 manifest.get("t0_wall"))
+    har = _load_json(bundle / "network.har", {})
+    api_table = render_api_table(har, blocklist, manifest.get("t0_wall"))
+    api = api_entries(har, manifest.get("t0_wall"))  # for friction error-events + todo evidence
 
     # The manifest's urls_visited list also picks up tracker/ad request URLs; drop the
     # low-signal ones (and note how many) so this list reads as real destinations.
@@ -772,7 +803,11 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
                 for i, t in enumerate(tabs)]
         tabs_block = "\n## Tabs (recorded in parallel)\n" + "\n".join(rows) + "\n"
 
-    frames = [f for f in (manifest.get("frames") or []) if isinstance(f, dict)]
+    # Frames: rebuilt FROM DISK, not from manifest.frames — a worker restart can leave the
+    # manifest indexing only the frames after it while every frame is still on disk, so a
+    # tool trusting the manifest loses visual ground truth without knowing. The filename is
+    # the ms offset, so disk is complete. health.json reports the reconciliation.
+    frames = canonical_frames(bundle, manifest)
     frame_index = "\n".join(
         f"- `{ms(f.get('t', 0))}` → `frames/{Path(f.get('file') or '').name}`" for f in frames
     )
@@ -795,7 +830,30 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
                               "though events / network / mic ran to the end"),
     ]
     flag_lines = [f"- ⚠ **{flag}**: {msg}" for flag, msg in partial_flags if manifest.get(flag)]
-    issue_lines = flag_lines + issue_lines
+    # Frame-index integrity (self-validating): surface the manifest-vs-disk reconciliation
+    # and any visual gaps so a reader knows the index was rebuilt and where the screen
+    # wasn't sampled. Full detail is in health.json.
+    health = build_health(bundle)
+    frame_issue_lines = []
+    miss_man = health["frames"]["missing_from_manifest_count"]
+    if miss_man:
+        frame_issue_lines.append(
+            f"- ⚠ **frame index**: {miss_man} of {health['frames']['on_disk']} frames on "
+            f"disk were missing from `manifest.frames` (likely a worker restart) — rebuilt "
+            f"from disk, so all are usable here. See `health.json`."
+        )
+    if health["frames"]["missing_from_disk"]:
+        frame_issue_lines.append(
+            f"- ⚠ **frame index**: {len(health['frames']['missing_from_disk'])} frame(s) the "
+            f"manifest lists are not on disk. See `health.json`."
+        )
+    if health["frame_gaps"]:
+        biggest = max(g["gap_ms"] for g in health["frame_gaps"]) // 1000
+        frame_issue_lines.append(
+            f"- ⚠ **visual gaps**: {len(health['frame_gaps'])} gap(s) over 15s with no frame "
+            f"captured (largest {biggest}s — pause / restart / stall). See `health.json`."
+        )
+    issue_lines = flag_lines + frame_issue_lines + issue_lines
     issues_block = ("\n## ⚠ Capture issues\n" + "\n".join(issue_lines) + "\n") if issue_lines else ""
 
     # The user's stated goal + why they recorded — up top, the anchors for everything.
@@ -840,6 +898,55 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
         + "\n".join(anno_lines) + "\n"
     ) if anno_lines else ""
 
+    # To-dos & intent (the franchise): classify each narration utterance (bug / to-do /
+    # question / praise / research / decision) and attach the evidence around it. This is
+    # the high-signal "what the user wants done" list — surfaced up top, full list in
+    # todos.json. Heuristic + stdlib-only (no model); an LLM pass can refine it later.
+    todos = extract_todos(speech, timeline, frames, api)
+    todo_lines = []
+    for td in todos[:25]:
+        ev = td.get("evidence", {})
+        bits = []
+        if ev.get("element"):
+            bits.append(f"on {ev['element']}")
+        if ev.get("endpoint"):
+            bits.append(f"→ {ev['endpoint']}")
+        if ev.get("frame"):
+            bits.append(f"`{ev['frame']}`")
+        ev_str = ("  ·  " + " · ".join(bits)) if bits else ""
+        todo_lines.append(f'- `{ms(td["t"])}` **[{td["type"]}]** "{td["text"]}"{ev_str}')
+    more_todos = f"\n- _(+{len(todos) - 25} more — see `todos.json`)_" if len(todos) > 25 else ""
+    todos_block = (
+        "\n## ✦ To-dos & intent (extracted from narration)\n"
+        "_Each utterance the user spoke that carries intent, classified and tied to the "
+        "element / frame / endpoint around it. This is a DRAFT for you to confirm, not a "
+        "verdict. Full structured list with evidence in `todos.json`._\n"
+        + "\n".join(todo_lines) + more_todos + "\n"
+    ) if todo_lines else ""
+
+    # Friction signals (the ux deliverable, pre-baked): long pauses, rage/repeat clicks,
+    # retried actions, error-shaped labels/responses. Summary here, full detail in friction.json.
+    friction = compute_friction(timeline, api)
+    fsum = friction["summary"]
+    friction_block = ""
+    if any(fsum.values()):
+        fr_lines = [
+            f"- {fsum['long_pauses']} long pause(s) · {fsum['repeat_clicks']} repeat-click "
+            f"burst(s) · {fsum['retried_actions']} retried action(s) · {fsum['error_events']} "
+            f"error signal(s)"
+        ]
+        for rc in friction["repeat_clicks"][:3]:
+            fr_lines.append(f"  - `{ms(rc['t'])}` clicked **{rc['label']}** ×{rc['count']} (rage/repeat)")
+        for r in friction["retried_actions"][:3]:
+            fr_lines.append(f"  - **{r['label']}** retried ×{r['count']} across the session")
+        for e in friction["error_events"][:5]:
+            fr_lines.append(f"  - `{ms(e['t'])}` {e['label']} ({e['source']})")
+        friction_block = (
+            "\n## ⚠ Friction signals (computed)\n"
+            "_Where the user likely struggled — pre-computed so you don't re-derive it. "
+            "Full detail in `friction.json`._\n" + "\n".join(fr_lines) + "\n"
+        )
+
     # If the transcript is a stub but the narration is in the audio, say so right in the
     # Narration section so the reader knows the words aren't lost and how to recover them.
     narration_recovery = ""
@@ -856,7 +963,7 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
 {task_block}{purpose_block}
 Captured {manifest.get('t0_wall','?')} · duration {manifest.get('duration_ms','?')} ms ·
 sync mode `{manifest.get('sync_mode','?')}`. Secrets redacted as `‹redacted›`.
-{issues_block}{tabs_block}{annotations_block}
+{issues_block}{tabs_block}{annotations_block}{todos_block}{friction_block}
 ## URLs visited
 {urls_block}
 
@@ -1032,10 +1139,24 @@ def build_pack(bundle: Path, out: Path, blocklist: list[str] | None = None,
     # there's something to annotate.
     manifest = _load_json(bundle / "manifest.json", {})
     timeline = [e for e in _load_json(bundle / "timeline.json", []) if isinstance(e, dict)]
-    frames = [f for f in (manifest.get("frames") or []) if isinstance(f, dict)]
+    frames = canonical_frames(bundle, manifest)  # disk-rebuilt — see build_context
     annotated = build_annotated_frames_html(timeline, frames)
     if annotated:
         (out / "frames-annotated.html").write_text(annotated, encoding="utf-8")
+
+    # The finalize-time structured artifacts: a self-validating integrity report and the
+    # two pre-baked analyses (intent → to-dos, computed friction). They turn "the agent
+    # redoes the forensic join every time" into "the agent starts from a labelled draft +
+    # the evidence to defend it." All stdlib-only and best-effort.
+    speech = parse_vtt_cues(_read_text(bundle / "transcript.vtt"))
+    merged = sorted(timeline + speech, key=lambda e: _num(e.get("t", 0)))
+    api = api_entries(_load_json(bundle / "network.har", {}), manifest.get("t0_wall"))
+    (out / "health.json").write_text(
+        json.dumps(build_health(bundle), indent=2), encoding="utf-8")
+    (out / "friction.json").write_text(
+        json.dumps(compute_friction(merged, api), indent=2), encoding="utf-8")
+    (out / "todos.json").write_text(
+        json.dumps(extract_todos(speech, merged, frames, api), indent=2), encoding="utf-8")
 
     # The post-transfer step: bundle the skills the receiving agent uses — the
     # analyze-capture procedure always, plus activity skills (e.g. ui-improvement)
@@ -1090,9 +1211,18 @@ the pack carries its own instructions — it's self-driving.
 - **Your own harness:** see `../adapters/` for optional reference runners.
 
 Self-contained: `agent-skills/` (how to use this pack + activity skills),
-`context.md` (the flattened recording, with the purpose steer up top), `frames/` +
-`frames-annotated.html` (screenshots), `bundle/` (raw structured files), `BRIEF.md`
-(the neutral output spec).
+`context.md` (the fused recording, with the purpose steer + extracted to-dos up top),
+`frames/` + `frames-annotated.html` (screenshots), `bundle/` (raw structured files),
+`BRIEF.md` (the neutral output spec).
+
+Finalize-time artifacts (start here — they replace the forensic join by hand):
+- **`todos.json`** — intent extracted from the narration (bug / to-do / question / praise
+  / research / decision), each with the element / frame / endpoint around it. A DRAFT to
+  confirm, not a verdict.
+- **`friction.json`** — computed UX signals: long pauses, rage/repeat clicks, retried
+  actions, error-shaped events.
+- **`health.json`** — integrity report: the frame index rebuilt from disk vs the manifest,
+  visual gaps, and partial-capture flags. Tells you what to trust before you rely on it.
 
 Note: the raw rrweb DOM-replay stream (`events.jsonl`) is intentionally NOT included —
 it's the largest file and pure noise for these outcomes (the structured actions are in
