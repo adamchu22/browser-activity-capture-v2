@@ -65,7 +65,19 @@ makes a pack for every new zip. 235 python / 113 node green. Durable notes in `l
       manual stream-join. Any tax it STILL pays = the next thing to build. Doubles as the deferred D7
       (a curated demo bundle for `analyze/example-output/`).
 
-## ▶ TODO (PLANNING — needs a plan before building) 2026-06-23 — install on a new computer so captures auto-pack locally
+## ▶ TODO (PLAN DONE 2026-06-24 — ready to build) — install on a new computer so captures auto-pack locally
+
+**▶ Plan is written + scoped: `PLAN-autopack-install.md` (repo root).** Decisions locked (Adam
+2026-06-24): packs **beside each zip**; **macOS first** (launchd, live-verify on Adam's Mac),
+Windows/Linux scaffolded-but-untested; trust boundary = "anything capture-shaped in your own
+Downloads"; **opt-in** at setup. Build order in the plan; step 1 (autopack robustness: atomic
+builds / lock / failure-memory / fresh-skip / size-cap / tightened detection) is pure Python and
+fully unit-testable — start there. Two facts that reshaped the original assumptions: the extension
+downloads **flat to the browser's Downloads dir** (no subfolder anymore — `background.js`
+getSettings/exportFilename), and autopack's idempotency marker ("does `-pack/` exist") breaks on an
+interrupted build (→ R1 atomic finalize). Top predicted breakage: **ffmpeg not on PATH in the
+launchd/Task-Scheduler minimal env** → silent stub transcripts (→ bake the abs ffmpeg path into the
+trigger env). Full failure-mode list (F1–F10) in the plan.
 
 Goal (Adam): a user sets this up ONCE on their machine and from then on every recording they make
 is **automatically turned into a pack by their own local install**, in their own locations — no

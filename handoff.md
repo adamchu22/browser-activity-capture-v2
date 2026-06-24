@@ -23,10 +23,14 @@ python / 116 node green; full diagnosis + durable lessons in `learnings.md` 2026
   on the test bundle → 765-line `context.md` spine produced. The exact "agent reads pointer → builds
   spine" loop works.
 
-**▶ NEXT — the bigger automation is still the autopack-on-download install** (queued PLANNING task in
-`to-do-current.md`): a launchd/watch service that pre-builds `…-pack/` beside each zip in Downloads,
-so Step 0 case 1 (adjacent pack) is always satisfied and the agent does zero setup. The pointer built
-here is the shared foundation for it. No live-Chrome verify needed for this batch (the one extension
+**▶ NEXT — autopack-on-download install: PLAN IS DONE (2026-06-24), ready to build.** Full scoped plan
+in `PLAN-autopack-install.md` (repo root); the `to-do-current.md` block points to it. Decisions locked
+(Adam): packs beside each zip; macOS/launchd first (live-verify on Adam's Mac), Win/Linux scaffolded-
+but-untested; trust = "anything capture-shaped in your own Downloads"; opt-in at setup. **Start with
+build-order step 1** — pure-Python autopack robustness (atomic builds, single-instance lock, failure
+memory, skip-fresh-zip, zip-bomb size cap, tightened capture detection), all unit-testable, lands the
+risky logic before any OS coupling. Top predicted breakage: ffmpeg missing from the launchd minimal env
+→ silent stub transcripts. The Step-0 pointer built earlier is the shared foundation. No live-Chrome verify needed for this batch (the one extension
 change is the `bundle-docs.js` doc strings, covered by tests); the doc strings will appear in the next
 exported zip — eyeball Step 0 there.
 
