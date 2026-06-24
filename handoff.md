@@ -23,14 +23,22 @@ python / 116 node green; full diagnosis + durable lessons in `learnings.md` 2026
   on the test bundle → 765-line `context.md` spine produced. The exact "agent reads pointer → builds
   spine" loop works.
 
-**▶ NEXT — autopack-on-download install: PLAN IS DONE (2026-06-24), ready to build.** Full scoped plan
-in `PLAN-autopack-install.md` (repo root); the `to-do-current.md` block points to it. Decisions locked
+**▶ NEXT — autopack-on-download install. PLAN DONE + STEP 1 DONE (2026-06-24).** Full scoped plan in
+`PLAN-autopack-install.md`; build-order + per-step status in `to-do-current.md`. Decisions locked
 (Adam): packs beside each zip; macOS/launchd first (live-verify on Adam's Mac), Win/Linux scaffolded-
-but-untested; trust = "anything capture-shaped in your own Downloads"; opt-in at setup. **Start with
-build-order step 1** — pure-Python autopack robustness (atomic builds, single-instance lock, failure
-memory, skip-fresh-zip, zip-bomb size cap, tightened capture detection), all unit-testable, lands the
-risky logic before any OS coupling. Top predicted breakage: ffmpeg missing from the launchd minimal env
-→ silent stub transcripts. The Step-0 pointer built earlier is the shared foundation. No live-Chrome verify needed for this batch (the one extension
+but-untested; trust = "anything capture-shaped in your own Downloads"; opt-in at setup.
+
+**Step 1 (autopack robustness) is built + unit-tested** — `analyze/autopack.py` +
+`tests/test_autopack.py`, 252 python / 116 node green. Landed: atomic builds (no half-pack on an
+interrupted build), single-instance lock, failure memory + backoff (give up after 3), skip-fresh
+(`--min-age` 10s), zip-bomb cap, tightened capture detection (`capture-*.zip` + real manifest),
+`--watch` interval 30→60s. Pure Python, no OS coupling yet.
+
+**▶ NEXT — Step 2:** `--once`/`--status` flags + a rotating `autopack.log`; `--status` reads the
+state file to report what was packed/failed/given-up and when. Then Step 3 (macOS launchd install +
+setup.sh prompts) is the first live-verify on Adam's Mac. **Top predicted breakage (Step 3): ffmpeg
+missing from the launchd minimal env → silent stub transcripts** (bake the abs ffmpeg path into the
+plist env). The Step-0 pointer built earlier is the shared foundation. No live-Chrome verify needed for this batch (the one extension
 change is the `bundle-docs.js` doc strings, covered by tests); the doc strings will appear in the next
 exported zip — eyeball Step 0 there.
 

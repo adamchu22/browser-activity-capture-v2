@@ -70,9 +70,25 @@ makes a pack for every new zip. 235 python / 113 node green. Durable notes in `l
 **▶ Plan is written + scoped: `PLAN-autopack-install.md` (repo root).** Decisions locked (Adam
 2026-06-24): packs **beside each zip**; **macOS first** (launchd, live-verify on Adam's Mac),
 Windows/Linux scaffolded-but-untested; trust boundary = "anything capture-shaped in your own
-Downloads"; **opt-in** at setup. Build order in the plan; step 1 (autopack robustness: atomic
-builds / lock / failure-memory / fresh-skip / size-cap / tightened detection) is pure Python and
-fully unit-testable — start there. Two facts that reshaped the original assumptions: the extension
+Downloads"; **opt-in** at setup. Build order in the plan.
+
+- [x] **Step 1 DONE 2026-06-24 — autopack robustness (pure Python, unit-tested).** All landed in
+      `analyze/autopack.py` + `tests/test_autopack.py` (252 python / 116 node green; 15 autopack
+      tests). R1 atomic builds (build into `.tmp` sibling → `os.replace`, so an interrupted build
+      never leaves a half-pack the idempotency check skips forever; orphaned `.tmp` swept under the
+      lock). R2 single-instance lock (`acquire_lock`, flock/msvcrt, auto-released on exit — service
+      + manual `--watch` can't race). R3 failure memory + backoff (`autopack.state.json`, give up
+      after MAX_ATTEMPTS=3; key includes size+mtime so a re-download retries fresh; success clears
+      it). R4 skip-fresh (`--min-age`, default 10s). R6 zip-bomb cap (4 GiB uncompressed) +
+      oversized-manifest guard. D4b tightened detection (filename `capture-*.zip` AND a manifest
+      with `capture_id`+`t0_wall`). `--watch` default interval 30s→60s. State/lock dir is XDG-aware
+      via `install_pointer.config_home()`.
+- [ ] **Step 2 — `--once`/`--status` flags + log file (rotating `autopack.log`); surface the
+      state-file failures via `--status`.**
+- [ ] **Step 3 — macOS launchd install** (`service.py --install/--uninstall`, ffmpeg-abs-path in the
+      plist env per F1, setup.sh prompts + write `autopack.config.json`). **Live-verify on Adam's Mac.**
+- [ ] **Step 4 — docs** (first-time setup, change locations, trust boundary, re-run-after-moving).
+- [ ] **Step 5 (gated on demand) — Windows Task Scheduler + Linux systemd**, each its own live verify. Two facts that reshaped the original assumptions: the extension
 downloads **flat to the browser's Downloads dir** (no subfolder anymore — `background.js`
 getSettings/exportFilename), and autopack's idempotency marker ("does `-pack/` exist") breaks on an
 interrupted build (→ R1 atomic finalize). Top predicted breakage: **ffmpeg not on PATH in the
