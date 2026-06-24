@@ -7,9 +7,15 @@ already packed) and best-effort per zip (one bad zip doesn't stop the rest), so 
 scheduler (launchd / Task Scheduler / a systemd timer — see PLAN-autopack-install.md)
 can just call it on a timer, or a person can run it by hand.
 
-    python analyze/autopack.py                 # use configured/default location(s)
+    python analyze/autopack.py                 # one pass over configured/default location(s)
     python analyze/autopack.py ~/Downloads      # pack new capture zips in a folder
+    python analyze/autopack.py --once           # one pass + exit (what the OS scheduler runs)
     python analyze/autopack.py --watch          # poll the location(s) forever
+    python analyze/autopack.py --status         # report last run + outstanding failures (read-only)
+
+Each pass that does work appends a line to a rotating activity log at
+`<config>/browser-activity-capture/autopack.log`, and records its time + counts in
+the state file so `--status` can report liveness and what failed.
 
 Per-user locations live in `analyze/autopack.config.json` (git-ignored, written
 by setup): {"watch_dirs": ["~/Downloads"], "packs_dir": "~/captures/packs"}.
@@ -68,6 +74,10 @@ STABILIZE_SECONDS = 10.0
 # Give up on a zip that fails to pack this many times (corrupt/aborted download),
 # rather than retrying it every poll forever.
 MAX_ATTEMPTS = 3
+# Rotate the activity log once it passes this size, keeping one prior generation
+# (`autopack.log.1`). A service running every 60s for years must never grow the
+# log without bound.
+MAX_LOG_BYTES = 1 * 1024 * 1024
 
 
 # ---- per-user config + the machine-local state/lock dir ----------------------
@@ -111,6 +121,10 @@ def lock_path() -> Path:
 
 def state_path() -> Path:
     return state_dir() / "autopack.state.json"
+
+
+def log_path() -> Path:
+    return state_dir() / "autopack.log"
 
 
 # ---- discovery ---------------------------------------------------------------
@@ -281,6 +295,109 @@ def acquire_lock(path: Path):
     return f
 
 
+# ---- activity log + status ---------------------------------------------------
+
+def _isoformat(ts: float) -> str:
+    """Local-time ISO8601 (to the second) for a log/status timestamp."""
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts))
+
+
+def append_log(line: str, *, path: Path | None = None,
+               max_bytes: int = MAX_LOG_BYTES) -> None:
+    """Append one line to the rotating activity log. Best-effort — a logging
+    failure must never crash the service. When the log would pass max_bytes it's
+    rotated to `<log>.1` (one generation kept), then the line starts a fresh log."""
+    path = path or log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        if size and size + len(line) + 1 > max_bytes:
+            os.replace(path, path.with_name(path.name + ".1"))
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def _summary_line(ts: float, summary: dict) -> str:
+    """One grep-able line describing a pass that did something."""
+    parts = [f"packed={len(summary['packed'])}",
+             f"failed={len(summary['failed'])}",
+             f"gaveup={len(summary['gaveup'])}"]
+    line = f"{_isoformat(ts)} " + " ".join(parts)
+    if summary["packed"]:
+        line += "; packed " + ", ".join(Path(p).name for p in summary["packed"])
+    if summary["failed"]:
+        line += "; failed " + ", ".join(
+            f"{Path(f['zip']).name} ({f['error']})" for f in summary["failed"])
+    if summary["gaveup"]:
+        line += "; gave up on " + ", ".join(Path(z).name for z in summary["gaveup"])
+    return line
+
+
+def _ago(seconds: float) -> str:
+    """Coarse human duration for status output."""
+    seconds = max(0.0, seconds)
+    if seconds < 90:
+        return f"{seconds:.0f}s"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f}m"
+    if seconds < 172800:
+        return f"{seconds / 3600:.1f}h"
+    return f"{seconds / 86400:.1f}d"
+
+
+def status_report(locations: list[Path], packs_dir: Path | None, *,
+                  state: dict | None = None, now: float | None = None) -> str:
+    """Human-readable status from the state file: where we're watching, when the
+    service last ran and with what result, and any zips still failing / given up
+    on. Read-only — `--status` calls this without taking the lock."""
+    state = load_state() if state is None else state
+    now = time.time() if now is None else now
+    lines = ["autopack status"]
+    dest = f"packs in {packs_dir}" if packs_dir else "packs beside each zip"
+    lines.append(f"  watching: {', '.join(str(p) for p in locations)} ({dest})")
+    for loc in locations:
+        if not loc.is_dir():
+            lines.append(f"  ⚠ {loc} — folder does not exist")
+            continue
+        caps = [z for z in loc.glob("*.zip") if CAPTURE_NAME_RE.match(z.name)]
+        if not caps:
+            lines.append(f"  {loc}: no capture zips seen yet")
+            continue
+        try:
+            newest = max(caps, key=lambda z: z.stat().st_mtime)
+            age = _ago(now - newest.stat().st_mtime)
+            lines.append(f"  {loc}: {len(caps)} capture zip(s), newest {age} ago")
+        except OSError:
+            lines.append(f"  {loc}: {len(caps)} capture zip(s)")
+
+    last = state.get("last_run")
+    if isinstance(last, dict):
+        lines.append(
+            f"  last run: {last.get('at', '?')} — {last.get('packed', 0)} packed, "
+            f"{last.get('failed', 0)} failed, {last.get('gaveup', 0)} given up")
+    else:
+        lines.append("  last run: no record yet")
+
+    failures = state.get("failures")
+    failures = failures if isinstance(failures, dict) else {}
+    if not failures:
+        lines.append("  no failures recorded")
+        return "\n".join(lines)
+    lines.append(f"  outstanding ({len(failures)}):")
+    for key, rec in failures.items():
+        rec = rec if isinstance(rec, dict) else {}
+        attempts = rec.get("attempts", 0)
+        tag = "GIVEN UP" if attempts >= MAX_ATTEMPTS else f"attempt {attempts}/{MAX_ATTEMPTS}"
+        name = Path(str(key).split("|", 1)[0]).name
+        lines.append(f"    ✗ {name} [{tag}] {rec.get('last_error', '')}".rstrip())
+    return "\n".join(lines)
+
+
 # ---- the pass ----------------------------------------------------------------
 
 def run(
@@ -291,17 +408,21 @@ def run(
     min_age_s: float = 0.0,
     now: float | None = None,
     state_file: Path | None = None,
+    log_file: Path | None = None,
 ) -> dict:
     """One pass: pack every new capture zip across all locations. Returns a summary.
     A zip that fails is recorded (never aborts the batch); after MAX_ATTEMPTS it's
-    given up on instead of retried every poll."""
+    given up on instead of retried every poll. Records the pass (time + counts) in
+    the state file's `last_run` so `--status` can report it, and — when log_file is
+    given — appends a line to the rotating activity log for any pass that did work."""
+    ts = time.time() if now is None else now
     blocklist = load_blocklist()
     sweep_stale_temps(locations, packs_dir)
     st = load_state(state_file)
     failures = st.setdefault("failures", {})
     packed, failed, gaveup, skipped = [], [], [], 0
     for loc in locations:
-        for z, dest in find_unpacked(loc, packs_dir, min_age_s=min_age_s, now=now):
+        for z, dest in find_unpacked(loc, packs_dir, min_age_s=min_age_s, now=ts):
             key = failure_key(z)
             rec = failures.get(key)
             if rec and rec.get("attempts", 0) >= MAX_ATTEMPTS:
@@ -319,21 +440,41 @@ def run(
                 failed.append({"zip": str(z), "error": err, "attempts": attempts})
                 print(f"✗ failed {z.name} (attempt {attempts}/{MAX_ATTEMPTS}): {err}",
                       file=sys.stderr)
+    summary = {"packed": packed, "failed": failed, "gaveup": gaveup, "skipped": skipped}
+    # Stamp the pass so --status can report liveness + result; only commit a log
+    # line for a pass that actually did something (else a 60s idle service spams it).
+    st["last_run"] = {"at": _isoformat(ts), "packed": len(packed),
+                      "failed": len(failed), "gaveup": len(gaveup)}
     save_state(st, state_file)
-    return {"packed": packed, "failed": failed, "gaveup": gaveup, "skipped": skipped}
+    if log_file is not None and (packed or failed or gaveup):
+        append_log(_summary_line(ts, summary), path=log_file)
+    return summary
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build analysis packs for new capture zips in a location.")
     ap.add_argument("locations", nargs="*", help="folder(s) to scan (default: config or ~/Downloads)")
     ap.add_argument("--watch", action="store_true", help="poll the location(s) forever")
+    ap.add_argument("--once", action="store_true",
+                    help="run a single pass and exit (the default; explicit for the OS scheduler)")
+    ap.add_argument("--status", action="store_true",
+                    help="report what was packed/failed/given-up and when, then exit (read-only)")
     ap.add_argument("--interval", type=float, default=60.0, help="seconds between polls in --watch (default 60)")
     ap.add_argument("--min-age", type=float, default=STABILIZE_SECONDS,
                     help=f"ignore zips younger than this many seconds (default {STABILIZE_SECONDS:g})")
     ap.add_argument("--no-transcribe", action="store_true", help="skip the local ASR step")
     args = ap.parse_args()
 
+    if args.watch and args.once:
+        ap.error("--watch and --once are mutually exclusive")
+
     locations, packs_dir = resolve_locations(args.locations)
+
+    # --status is read-only: never take the lock (so it works while the service
+    # is mid-pass), just print the state-file report.
+    if args.status:
+        print(status_report(locations, packs_dir))
+        return
 
     # One autopack per machine: a second instance (e.g. the service + a manual
     # --watch) exits quietly rather than racing on the same zip.
@@ -348,7 +489,8 @@ def main() -> None:
               file=sys.stderr)
 
         def one_pass():
-            s = run(locations, packs_dir, transcribe=not args.no_transcribe, min_age_s=args.min_age)
+            s = run(locations, packs_dir, transcribe=not args.no_transcribe,
+                    min_age_s=args.min_age, log_file=log_path())
             if not s["packed"] and not s["failed"]:
                 print("autopack: nothing new to pack.", file=sys.stderr)
             return s

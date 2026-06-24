@@ -203,6 +203,77 @@ class TestLock(unittest.TestCase):
             h2.close()
 
 
+class TestActivityLog(unittest.TestCase):
+    def test_log_line_written_only_when_work_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loc = Path(tmp)
+            sf, lf = loc / "state.json", loc / "autopack.log"
+            # an empty folder → idle pass → no log line, but last_run is stamped
+            autopack.run([loc], None, transcribe=False, state_file=sf, log_file=lf)
+            self.assertFalse(lf.exists())
+            self.assertIn("last_run", json.loads(sf.read_text()))
+            # now a real capture → one line recording it
+            _write_capture_zip(loc / "capture-1.zip")
+            autopack.run([loc], None, transcribe=False, state_file=sf, log_file=lf)
+            text = lf.read_text()
+            self.assertEqual(text.count("\n"), 1)
+            self.assertIn("packed=1", text)
+            self.assertIn("capture-1-pack", text)
+
+    def test_log_records_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loc = Path(tmp)
+            sf, lf = loc / "state.json", loc / "autopack.log"
+            _write_capture_zip(loc / "capture-1.zip")
+            orig = autopack.pack_zip
+            autopack.pack_zip = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("nope"))
+            try:
+                autopack.run([loc], None, transcribe=False, state_file=sf, log_file=lf)
+            finally:
+                autopack.pack_zip = orig
+            line = lf.read_text()
+            self.assertIn("failed=1", line)
+            self.assertIn("capture-1.zip", line)
+
+    def test_append_log_rotates_at_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lf = Path(tmp) / "autopack.log"
+            autopack.append_log("first line that fills the log", path=lf, max_bytes=40)
+            self.assertTrue(lf.exists())
+            self.assertFalse(lf.with_name("autopack.log.1").exists())
+            # next line would blow the 40-byte cap → rotate, fresh log holds line 2
+            autopack.append_log("second line", path=lf, max_bytes=40)
+            self.assertEqual(lf.read_text().strip(), "second line")
+            self.assertIn("first line", lf.with_name("autopack.log.1").read_text())
+
+
+class TestStatus(unittest.TestCase):
+    def test_reports_last_run_and_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loc = Path(tmp)
+            z = loc / "capture-1.zip"
+            _write_capture_zip(z)
+            state = {
+                "last_run": {"at": "2026-06-24T10:00:00", "packed": 2,
+                             "failed": 1, "gaveup": 0},
+                "failures": {f"{z}|1|2": {"attempts": 3, "last_error": "BadZipFile: x"}},
+            }
+            report = autopack.status_report([loc], None, state=state,
+                                            now=z.stat().st_mtime + 120)
+            self.assertIn(str(loc), report)
+            self.assertIn("2 packed, 1 failed", report)
+            self.assertIn("GIVEN UP", report)          # attempts >= MAX_ATTEMPTS
+            self.assertIn("capture-1.zip", report)
+            self.assertIn("1 capture zip(s)", report)  # saw the zip in the folder
+
+    def test_clean_state_and_missing_folder(self):
+        missing = Path("/no/such/autopack/dir")
+        report = autopack.status_report([missing], None, state={}, now=0.0)
+        self.assertIn("does not exist", report)
+        self.assertIn("no record yet", report)
+        self.assertIn("no failures recorded", report)
+
+
 class TestConfig(unittest.TestCase):
     def test_cli_arg_wins(self):
         locs, packs = autopack.resolve_locations(["/tmp/foo"])
