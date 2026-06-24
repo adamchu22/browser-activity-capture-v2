@@ -1,5 +1,7 @@
-"""autopack.py — pack every new capture zip in a location (idempotent, best-effort)."""
+"""autopack.py — pack every new capture zip in a location, robust enough to run
+unattended (idempotent, atomic, locked, fail-remembering, bomb-guarded)."""
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -12,10 +14,10 @@ sys.path.insert(0, str(ANALYZE))
 import autopack  # noqa: E402
 
 
-def _write_capture_zip(path: Path, *, valid=True):
+def _write_capture_zip(path: Path, *, valid=True, manifest=None):
     with zipfile.ZipFile(path, "w") as zf:
         if valid:
-            zf.writestr("manifest.json", json.dumps(
+            zf.writestr("manifest.json", json.dumps(manifest if manifest is not None else
                 {"capture_id": "x", "t0_wall": "2026-06-23T00:00:00.000Z",
                  "duration_ms": 1000, "purposes": [], "frames": []}))
             zf.writestr("timeline.json", json.dumps(
@@ -23,19 +25,30 @@ def _write_capture_zip(path: Path, *, valid=True):
             zf.writestr("transcript.vtt", "WEBVTT\n\nNOTE No narration captured\n")
             zf.writestr("network.har", json.dumps({"log": {"entries": []}}))
             zf.writestr("frames/0000000100.png", b"\x89PNG\r\n")
+        elif manifest is not None:
+            zf.writestr("manifest.json", json.dumps(manifest))
         else:
             zf.writestr("hello.txt", "not a capture")
 
 
+def _age(path: Path, seconds: float):
+    """Backdate a file's mtime so the freshness gate treats it as settled."""
+    st = path.stat()
+    os.utime(path, (st.st_atime, st.st_mtime - seconds))
+
+
 class TestDiscovery(unittest.TestCase):
-    def test_is_capture_zip(self):
+    def test_is_capture_zip_requires_real_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             good = Path(tmp) / "capture-1.zip"
-            bad = Path(tmp) / "other.zip"
+            no_manifest = Path(tmp) / "other.zip"
+            stub_manifest = Path(tmp) / "capture-2.zip"
             _write_capture_zip(good)
-            _write_capture_zip(bad, valid=False)
+            _write_capture_zip(no_manifest, valid=False)
+            _write_capture_zip(stub_manifest, valid=False, manifest={})  # marker only, no capture_id
             self.assertTrue(autopack.is_capture_zip(good))
-            self.assertFalse(autopack.is_capture_zip(bad))
+            self.assertFalse(autopack.is_capture_zip(no_manifest))
+            self.assertFalse(autopack.is_capture_zip(stub_manifest))
 
     def test_find_unpacked_skips_existing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -43,15 +56,25 @@ class TestDiscovery(unittest.TestCase):
             z = loc / "capture-1.zip"
             _write_capture_zip(z)
             self.assertEqual(len(autopack.find_unpacked(loc, None)), 1)
-            # simulate an already-built pack beside it
-            (loc / "capture-1-pack").mkdir()
+            (loc / "capture-1-pack").mkdir()  # simulate an already-built pack
             self.assertEqual(autopack.find_unpacked(loc, None), [])
 
-    def test_find_unpacked_ignores_non_capture_zip(self):
+    def test_find_unpacked_ignores_non_capture_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             loc = Path(tmp)
-            _write_capture_zip(loc / "junk.zip", valid=False)
+            # right shape, wrong name → not the extension's output, skip it
+            _write_capture_zip(loc / "report.zip")
             self.assertEqual(autopack.find_unpacked(loc, None), [])
+
+    def test_find_unpacked_skips_fresh_then_picks_up_settled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loc = Path(tmp)
+            z = loc / "capture-1.zip"
+            _write_capture_zip(z)
+            now = z.stat().st_mtime + 0.1  # the zip is "fresh"
+            self.assertEqual(autopack.find_unpacked(loc, None, min_age_s=10, now=now), [])
+            later = z.stat().st_mtime + 30  # 30s on, it's settled
+            self.assertEqual(len(autopack.find_unpacked(loc, None, min_age_s=10, now=later)), 1)
 
     def test_pack_path_for_uses_packs_dir(self):
         z = Path("/x/capture-9.zip")
@@ -73,19 +96,34 @@ class TestPacking(unittest.TestCase):
             health = json.loads((dest / "health.json").read_text())
             self.assertEqual(health["frames"]["on_disk"], 1)
 
-    def test_run_is_idempotent_and_best_effort(self):
+    def test_pack_zip_is_atomic_on_failure(self):
+        # An interrupted build must leave NO dest dir (so it's retried, not skipped
+        # forever) and NO leftover staging dir.
         with tempfile.TemporaryDirectory() as tmp:
             loc = Path(tmp)
-            _write_capture_zip(loc / "capture-good.zip")
-            # a corrupt "capture" zip that passes the marker check but fails to extract
-            bad = loc / "capture-bad.zip"
-            with zipfile.ZipFile(bad, "w") as zf:
-                zf.writestr("manifest.json", "{}")  # marker present, but no timeline → build still runs
-            s1 = autopack.run([loc], None, transcribe=False)
-            self.assertEqual(len(s1["packed"]), 2)  # both attempt; build_pack never crashes
-            # second pass: nothing new
-            s2 = autopack.run([loc], None, transcribe=False)
-            self.assertEqual(s2["packed"], [])
+            z = loc / "capture-1.zip"
+            _write_capture_zip(z)
+            dest = loc / "capture-1-pack"
+            orig = autopack.build_pack
+            autopack.build_pack = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+            try:
+                with self.assertRaises(RuntimeError):
+                    autopack.pack_zip(z, dest, blocklist=[], transcribe=False)
+            finally:
+                autopack.build_pack = orig
+            self.assertFalse(dest.exists())
+            self.assertEqual(list(loc.glob(".*-pack.tmp-*")), [])
+
+    def test_zip_bomb_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loc = Path(tmp)
+            z = loc / "capture-1.zip"
+            _write_capture_zip(z)
+            self.addCleanup(setattr, autopack, "MAX_UNCOMPRESSED_BYTES",
+                            autopack.MAX_UNCOMPRESSED_BYTES)
+            autopack.MAX_UNCOMPRESSED_BYTES = 10  # any real bundle blows past this
+            with self.assertRaises(ValueError):
+                autopack.pack_zip(z, loc / "out", transcribe=False)
 
     def test_zip_slip_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -97,6 +135,73 @@ class TestPacking(unittest.TestCase):
             with self.assertRaises(ValueError):
                 autopack.pack_zip(z, loc / "out", transcribe=False)
 
+    def test_run_is_idempotent_and_best_effort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loc = Path(tmp)
+            sf = loc / "state.json"
+            _write_capture_zip(loc / "capture-good.zip")
+            # a real-looking capture (valid manifest) but a corrupt timeline → it's
+            # detected, and build_pack stays best-effort (never crashes → still packs).
+            bad = loc / "capture-bad.zip"
+            with zipfile.ZipFile(bad, "w") as zf:
+                zf.writestr("manifest.json", json.dumps(
+                    {"capture_id": "y", "t0_wall": "2026-06-23T00:00:00.000Z"}))
+                zf.writestr("timeline.json", "not json{")
+            s1 = autopack.run([loc], None, transcribe=False, state_file=sf)
+            self.assertEqual(len(s1["packed"]), 2)
+            s2 = autopack.run([loc], None, transcribe=False, state_file=sf)
+            self.assertEqual(s2["packed"], [])  # nothing new
+
+
+class TestFailureMemory(unittest.TestCase):
+    def test_gives_up_after_max_attempts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loc = Path(tmp)
+            sf = loc / "state.json"
+            z = loc / "capture-1.zip"
+            _write_capture_zip(z)
+            orig = autopack.pack_zip
+            autopack.pack_zip = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("nope"))
+            try:
+                for i in range(autopack.MAX_ATTEMPTS):
+                    s = autopack.run([loc], None, transcribe=False, state_file=sf)
+                    self.assertEqual(len(s["failed"]), 1, f"pass {i}")
+                    self.assertEqual(s["gaveup"], [])
+                # next pass: attempts maxed → given up, not retried
+                s = autopack.run([loc], None, transcribe=False, state_file=sf)
+                self.assertEqual(s["failed"], [])
+                self.assertEqual(len(s["gaveup"]), 1)
+            finally:
+                autopack.pack_zip = orig
+            # the failure was persisted
+            self.assertEqual(json.loads(sf.read_text())["failures"]
+                             [list(json.loads(sf.read_text())["failures"])[0]]["attempts"],
+                             autopack.MAX_ATTEMPTS)
+
+    def test_success_clears_failure_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loc = Path(tmp)
+            sf = loc / "state.json"
+            z = loc / "capture-1.zip"
+            _write_capture_zip(z)  # write first so the seeded key matches the runtime key
+            autopack.save_state({"failures": {autopack.failure_key(z):
+                                              {"attempts": 1, "last_error": "x"}}}, sf)
+            autopack.run([loc], None, transcribe=False, state_file=sf)
+            self.assertEqual(json.loads(sf.read_text()).get("failures"), {})
+
+
+class TestLock(unittest.TestCase):
+    def test_single_instance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lp = Path(tmp) / "autopack.lock"
+            h1 = autopack.acquire_lock(lp)
+            self.assertIsNotNone(h1)
+            self.assertIsNone(autopack.acquire_lock(lp))  # second instance blocked
+            h1.close()
+            h2 = autopack.acquire_lock(lp)  # released → reacquirable
+            self.assertIsNotNone(h2)
+            h2.close()
+
 
 class TestConfig(unittest.TestCase):
     def test_cli_arg_wins(self):
@@ -104,7 +209,6 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(locs, [Path("/tmp/foo")])
 
     def test_default_is_downloads(self):
-        # no config file on disk in CI → ~/Downloads default
         if autopack.CONFIG.exists():
             self.skipTest("a real autopack.config.json is present")
         locs, packs = autopack.resolve_locations([])
