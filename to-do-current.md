@@ -70,7 +70,14 @@ makes a pack for every new zip. 235 python / 113 node green. Durable notes in `l
 Goal (Adam): a user sets this up ONCE on their machine and from then on every recording they make
 is **automatically turned into a pack by their own local install**, in their own locations — no
 manual `pack.py`, no us. The pieces exist (`autopack.py` + `autopack.config.json` + the `.venv`
-transcribe setup); what's missing is the one-time install that wires them into a background service.
+transcribe setup + the new `install_pointer.py`); what's missing is the one-time install that wires
+them into a background service.
+
+**Why this is the last piece (2026-06-23):** the zip docs now lead with Step 0 — an agent builds the
+`context.md` spine itself via the machine-local pointer. This task makes it zero-effort: a watcher
+pre-builds `…-pack/` **beside each new zip in Downloads**, so Step 0 hits case 1 (adjacent pack) and
+the agent reads `context.md` directly without even running `pack.py`. Quick interim (no service): run
+`python analyze/autopack.py ~/Downloads --watch` by hand. The plan below is the reboot-proof version.
 **SCOPE IT FIRST — this is a "Building Full" task, not a quick script.** A plan must cover:
 - **Trigger mechanism** per-OS: macOS `launchd` (LaunchAgent) vs `autopack.py --watch` vs a folder
   watcher; Windows Task Scheduler / a service; Linux systemd user unit. Decide watch-loop vs
