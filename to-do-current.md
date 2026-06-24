@@ -65,12 +65,13 @@ makes a pack for every new zip. 235 python / 113 node green. Durable notes in `l
       manual stream-join. Any tax it STILL pays = the next thing to build. Doubles as the deferred D7
       (a curated demo bundle for `analyze/example-output/`).
 
-## ▶ IN PROGRESS (PLAN DONE + STEP 1 DONE 2026-06-24) — install on a new computer so captures auto-pack locally
+## ▶ IN PROGRESS (PLAN DONE + STEPS 1–2 DONE 2026-06-24) — install on a new computer so captures auto-pack locally
 
 **▶ Plan is written + scoped: `PLAN-autopack-install.md` (repo root).** Decisions locked (Adam
 2026-06-24): packs **beside each zip**; **macOS first** (launchd, live-verify on Adam's Mac),
 Windows/Linux scaffolded-but-untested; trust boundary = "anything capture-shaped in your own
-Downloads"; **opt-in** at setup. Build order below; Step 1 done, Step 2 is next.
+Downloads"; **opt-in** at setup. Build order below; Steps 1–2 done (all pure Python), **Step 3
+(macOS launchd install) is next — the first live-verify on Adam's Mac.**
 
 Two facts that reshaped the original assumptions (found while scoping): the extension downloads
 **flat to the browser's Downloads dir** (no subfolder anymore — `background.js`
@@ -90,8 +91,17 @@ the abs ffmpeg path into the trigger env, Step 3). Full failure-mode list (F1–
       oversized-manifest guard. D4b tightened detection (filename `capture-*.zip` AND a manifest
       with `capture_id`+`t0_wall`). `--watch` default interval 30s→60s. State/lock dir is XDG-aware
       via `install_pointer.config_home()`.
-- [ ] **Step 2 — `--once`/`--status` flags + log file (rotating `autopack.log`); surface the
-      state-file failures via `--status`.**
+- [x] **Step 2 DONE 2026-06-24 — `--once`/`--status` flags + rotating `autopack.log` (pure Python,
+      unit-tested).** All in `analyze/autopack.py` + `tests/test_autopack.py` (257 python / 116 node
+      green; 20 autopack tests, +5). `--once` = explicit single pass (what the OS scheduler runs;
+      errors if combined with `--watch`). `--status` is **read-only / lock-free** (works while the
+      service is mid-pass) and reports from the state file: where we're watching + each folder's
+      newest-capture age, when the service last ran and with what counts, and any zips still
+      failing / GIVEN UP (attempts ≥ MAX). Every pass now stamps `state["last_run"]` (time + counts)
+      for liveness; a pass that did work also appends one grep-able line to a rotating `autopack.log`
+      (`MAX_LOG_BYTES` 1 MiB → one `.log.1` generation), while idle passes stay silent so a 60s
+      service can't spam it. `run()` gained a `log_file=` param (None ⇒ no log line, so existing
+      tests don't touch the real log dir).
 - [ ] **Step 3 — macOS launchd install** (`service.py --install/--uninstall`, ffmpeg-abs-path in the
       plist env per F1, setup.sh prompts + write `autopack.config.json`). **Live-verify on Adam's Mac.**
 - [ ] **Step 4 — docs** (first-time setup, change locations, trust boundary, re-run-after-moving).

@@ -23,24 +23,27 @@ python / 116 node green; full diagnosis + durable lessons in `learnings.md` 2026
   on the test bundle → 765-line `context.md` spine produced. The exact "agent reads pointer → builds
   spine" loop works.
 
-**▶ NEXT — autopack-on-download install. PLAN DONE + STEP 1 DONE (2026-06-24).** Full scoped plan in
+**▶ NEXT — autopack-on-download install. PLAN DONE + STEPS 1–2 DONE (2026-06-24).** Full scoped plan in
 `PLAN-autopack-install.md`; build-order + per-step status in `to-do-current.md`. Decisions locked
 (Adam): packs beside each zip; macOS/launchd first (live-verify on Adam's Mac), Win/Linux scaffolded-
 but-untested; trust = "anything capture-shaped in your own Downloads"; opt-in at setup.
 
-**Step 1 (autopack robustness) is built + unit-tested** — `analyze/autopack.py` +
-`tests/test_autopack.py`, 252 python / 116 node green. Landed: atomic builds (no half-pack on an
-interrupted build), single-instance lock, failure memory + backoff (give up after 3), skip-fresh
-(`--min-age` 10s), zip-bomb cap, tightened capture detection (`capture-*.zip` + real manifest),
-`--watch` interval 30→60s. Pure Python, no OS coupling yet.
+**Steps 1–2 (autopack robustness + ops surface) built + unit-tested** — `analyze/autopack.py` +
+`tests/test_autopack.py`, 257 python / 116 node green (20 autopack tests). Step 1: atomic builds,
+single-instance lock, failure memory + backoff (give up after 3), skip-fresh (`--min-age` 10s),
+zip-bomb cap, tightened capture detection (`capture-*.zip` + real manifest), `--watch` interval
+30→60s. Step 2: `--once` (explicit single pass — the scheduler entrypoint; can't combine with
+`--watch`); `--status` (read-only / lock-free — works mid-pass — reports watch dirs + newest-capture
+age, last-run time/counts, and failing/GIVEN-UP zips from the state file); a rotating `autopack.log`
+(one line per pass that did work, 1 MiB → `.log.1`, idle passes silent) + `state["last_run"]` stamped
+every pass for liveness. Pure Python, no OS coupling yet.
 
-**▶ NEXT — Step 2:** `--once`/`--status` flags + a rotating `autopack.log`; `--status` reads the
-state file to report what was packed/failed/given-up and when. Then Step 3 (macOS launchd install +
-setup.sh prompts) is the first live-verify on Adam's Mac. **Top predicted breakage (Step 3): ffmpeg
-missing from the launchd minimal env → silent stub transcripts** (bake the abs ffmpeg path into the
-plist env). The Step-0 pointer built earlier is the shared foundation. No live-Chrome verify needed for this batch (the one extension
-change is the `bundle-docs.js` doc strings, covered by tests); the doc strings will appear in the next
-exported zip — eyeball Step 0 there.
+**▶ NEXT — Step 3: macOS launchd install** — `service.py --install/--uninstall` writing the
+LaunchAgent (calls `autopack.py --once` on `StartInterval=60`), `setup.sh` opt-in prompts + write
+`autopack.config.json`. **First live-verify on Adam's Mac.** **Top predicted breakage (F1): ffmpeg
+missing from the launchd minimal env → silent stub transcripts** — bake the abs ffmpeg path into the
+plist `EnvironmentVariables.PATH`. The Step-0 pointer is the shared foundation. No live-Chrome verify
+needed for this batch (Steps 1–2 are analyze-side Python only).
 
 ## ✅ DONE 2026-06-23 — PACK FINALIZE UPGRADE (from an external agent's bundle review) — built + unit-tested
 
