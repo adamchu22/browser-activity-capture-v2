@@ -141,6 +141,22 @@ def build_health(bundle: Path) -> dict:
         if flags[flag]:
             warnings.append(f"{flag}: {msg}")
 
+    # Video segments: a multi-segment video.webm (the user re-shared after
+    # "Stop sharing") has gaps where no video was captured. Informational, not a
+    # hard partial flag — events/network/mic still captured during the gaps, and
+    # video_ended_early is false if the take was recovered. Surface it so a
+    # reader knows to consult manifest.video_segments for the gap offsets.
+    segments = manifest.get("video_segments") or []
+    if isinstance(segments, list) and len(segments) > 1:
+        warnings.append(
+            f"video_segments: video.webm is stitched from {len(segments)} segments "
+            f"(user re-shared after the screen share stopped). Events between segment "
+            f"offsets have no corresponding video — see manifest.video_segments."
+        )
+
+    # Recompute ok: multi-segment is informational (the take was recovered), so
+    # it doesn't flip ok to false by itself. video_ended_early (unrecovered) still
+    # does, via the partial_flags loop above.
     return {
         "ok": not missing_from_disk and not any(flags.values()),
         "frames": {

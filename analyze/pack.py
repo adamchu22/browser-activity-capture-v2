@@ -830,6 +830,33 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
                               "though events / network / mic ran to the end"),
     ]
     flag_lines = [f"- ⚠ **{flag}**: {msg}" for flag, msg in partial_flags if manifest.get(flag)]
+    # Video segments: if the user re-shared after "Stop sharing", video.webm is
+    # stitched from multiple segments with gaps between them. Surface the gaps so
+    # the AI knows which events have no corresponding video. Each segment's
+    # offset_ms is the recording-clock time at which that segment's recorder
+    # started; the gap before a segment (from the previous segment's end, or
+    # from t0 for the first segment) is where video is missing.
+    segments = manifest.get("video_segments") or []
+    segment_lines = []
+    if isinstance(segments, list) and len(segments) > 1:
+        segment_lines.append(
+            f"- ⚠ **video segments**: `video.webm` is stitched from {len(segments)} "
+            f"segments (the user re-shared after the screen share stopped). Events "
+            f"between segment offsets have no corresponding video:"
+        )
+        for i, seg in enumerate(segments):
+            if not isinstance(seg, dict):
+                continue
+            off = seg.get("offset_ms", 0)
+            if i == 0:
+                segment_lines.append(f"  - segment 1 starts at `{ms(off)}` (recording t0)")
+            else:
+                prev = segments[i - 1].get("offset_ms", 0) if isinstance(segments[i - 1], dict) else 0
+                gap_ms = off - prev
+                segment_lines.append(
+                    f"  - segment {i + 1} starts at `{ms(off)}` "
+                    f"(~{gap_ms // 1000}s after the previous segment — video gap)"
+                )
     # Frame-index integrity (self-validating): surface the manifest-vs-disk reconciliation
     # and any visual gaps so a reader knows the index was rebuilt and where the screen
     # wasn't sampled. Full detail is in health.json.
@@ -853,7 +880,7 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
             f"- ⚠ **visual gaps**: {len(health['frame_gaps'])} gap(s) over 15s with no frame "
             f"captured (largest {biggest}s — pause / restart / stall). See `health.json`."
         )
-    issue_lines = flag_lines + frame_issue_lines + issue_lines
+    issue_lines = flag_lines + segment_lines + frame_issue_lines + issue_lines
     issues_block = ("\n## ⚠ Capture issues\n" + "\n".join(issue_lines) + "\n") if issue_lines else ""
 
     # The user's stated goal + why they recorded — up top, the anchors for everything.

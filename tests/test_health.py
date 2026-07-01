@@ -110,6 +110,33 @@ class TestReconciliation(unittest.TestCase):
             h = health.build_health(b)  # must not raise
             self.assertIn("frames", h)
 
+    def test_video_segments_warning_when_multiple_segments(self):
+        # A recovered re-share: video.webm is stitched from 3 segments. The
+        # take is NOT flagged video_ended_early (it was recovered), but the
+        # gaps must be surfaced as a warning so a reader knows where video is
+        # missing.
+        with tempfile.TemporaryDirectory() as tmp:
+            man = {"frames": [], "video_segments": [
+                {"offset_ms": 0},
+                {"offset_ms": 12000},
+                {"offset_ms": 45000},
+            ]}
+            b = _bundle(tmp, man, [0])
+            h = health.build_health(b)
+            self.assertTrue(any("video_segments" in w and "3 segments" in w for w in h["warnings"]))
+            # ok stays true: a recovered re-share is informational, not a hard
+            # partial flag (the take didn't end early).
+            self.assertTrue(h["ok"])
+
+    def test_single_video_segment_no_warning(self):
+        # A normal single-segment recording (or one that lists a single segment)
+        # must NOT emit the video_segments warning.
+        with tempfile.TemporaryDirectory() as tmp:
+            man = {"frames": [], "video_segments": [{"offset_ms": 0}]}
+            b = _bundle(tmp, man, [0])
+            h = health.build_health(b)
+            self.assertFalse(any("video_segments" in w for w in h["warnings"]))
+
 
 if __name__ == "__main__":
     unittest.main()
