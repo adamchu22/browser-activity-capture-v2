@@ -384,6 +384,7 @@
     let pausedAccum = 0; // ms banked from completed pauses (from the worker)
     let pauseStartedAt = 0; // wall-clock ms the current pause began (0 if live)
     let micActive = false; // is the mic live? drives the level meter vs the muted glyph
+    let reshare = false; // screen share died — show the Re-share button
 
     const fmt = (ms) => {
       const s = Math.max(0, Math.floor(ms / 1000));
@@ -443,6 +444,7 @@
       pausedAccum = meta?.pausedAccum || 0;
       pauseStartedAt = meta?.pauseStartedAt || 0;
       micActive = !!meta?.micActive;
+      reshare = !!meta?.reshare;
 
       host = document.createElement("div");
       host.id = "__bac_overlay__";
@@ -461,7 +463,20 @@
           /* Collapsed: keep only the live read-outs (dot, timer, mic) + the toggle. */
           .bar.collapsed .sep,
           .bar.collapsed #select,.bar.collapsed #draw,.bar.collapsed #pause,
-          .bar.collapsed #restart,.bar.collapsed #cancel,.bar.collapsed #finish{display:none;}
+          .bar.collapsed #restart,.bar.collapsed #cancel,.bar.collapsed #finish,
+          .bar.collapsed #reshare{display:none;}
+          /* Re-share button: shown only when the screen share died mid-recording.
+             Amber + bold so it reads as "action needed" without being as alarming
+             as the red Finish. Pulses gently to draw the eye. */
+          #reshare{display:none;background:#ff9f0a;color:#000;font-weight:600;}
+          #reshare:hover{background:#ffb340;}
+          .bar.reshare #reshare{display:inline-block;animation:reshare-pulse 1.6s infinite;}
+          @keyframes reshare-pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,159,10,.5)}
+            50%{box-shadow:0 0 0 6px rgba(255,159,10,0)}}
+          /* When the share is dead, tint the rec dot amber so the user sees the
+             recording is still running but its video is paused. */
+          .bar.reshare .dot{background:#ff9f0a;animation:none;}
+          .bar.reshare .dot::after{content:"";position:absolute;}
           .dot{width:10px;height:10px;border-radius:50%;background:#ff3b30;
             box-shadow:0 0 0 0 rgba(255,59,48,.6);animation:pulse 1.4s infinite;}
           .dot.paused{background:#ff9f0a;animation:none;}
@@ -514,6 +529,7 @@
           <button id="pause">Pause</button>
           <button id="restart">Restart</button>
           <button id="cancel">Cancel</button>
+          <button id="reshare" title="The screen share stopped — pick a new screen to keep recording video">Re-share</button>
           <button id="finish" class="primary">Finish</button>
         </div>`;
       (document.documentElement || document.body).appendChild(host);
@@ -530,12 +546,14 @@
         pause: shadow.getElementById("pause"),
         restart: shadow.getElementById("restart"),
         cancel: shadow.getElementById("cancel"),
+        reshare: shadow.getElementById("reshare"),
         finish: shadow.getElementById("finish"),
       };
       els.pause.addEventListener("click", () => cmd(paused ? "resume" : "pause"));
       els.finish.addEventListener("click", () => cmd("finish"));
       wireDestructive(els.restart, "restart", "Restart");
       wireDestructive(els.cancel, "cancel", "Cancel");
+      els.reshare.addEventListener("click", () => cmd("reshare"));
       els.collapse.addEventListener("click", toggleCollapse);
       makeDraggable(els.bar);
 
@@ -556,6 +574,16 @@
     // so the user can see at a glance that narration isn't being recorded.
     function applyMic() {
       if (els.mic) els.mic.classList.toggle("off", !micActive);
+    }
+
+    // Toggle the Re-share button + amber dot state. When the screen share died
+    // mid-recording, the rec dot goes amber (recording still running, video
+    // paused) and the Re-share button appears + pulses to draw the eye. The
+    // tools (Select/Draw) stay available — annotations are still useful while
+    // the user decides whether to re-share.
+    function applyReshare() {
+      if (!els.bar) return;
+      els.bar.classList.toggle("reshare", reshare);
     }
 
     // Drive the equalizer bars from a 0..1 loudness value (worker → us, ~12/sec).
@@ -670,8 +698,11 @@
       pausedAccum = s.pausedAccum || 0;
       pauseStartedAt = s.pauseStartedAt || 0;
       micActive = !!s.micActive;
+      reshare = !!s.reshare;
       applyPaused();
       applyMic();
+      applyReshare();
+      applyReshare();
       if (paused) {
         stopTimer();
         tick();
