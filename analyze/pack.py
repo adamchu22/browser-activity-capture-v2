@@ -840,21 +840,30 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     segment_lines = []
     if isinstance(segments, list) and len(segments) > 1:
         segment_lines.append(
-            f"- ⚠ **video segments**: `video.webm` is stitched from {len(segments)} "
-            f"segments (the user re-shared after the screen share stopped). Events "
-            f"between segment offsets have no corresponding video:"
+            f"- ⚠ **video segments**: the video is split into {len(segments)} separate "
+            f"files (the user re-shared after the screen share stopped — each segment "
+            f"is a separate webm because MediaRecorder segments are internally self-"
+            f"clocking and can't be stitched). Events between segment offsets have no "
+            f"corresponding video:"
         )
         for i, seg in enumerate(segments):
             if not isinstance(seg, dict):
                 continue
             off = seg.get("offset_ms", 0)
+            # Tolerate a malformed offset_ms (e.g. a nested dict from a prior bug):
+            # treat a non-numeric offset as 0 so the block still renders.
+            if not isinstance(off, (int, float)):
+                off = 0
+            seg_file = seg.get("file", "video.webm" if i == 0 else f"video-{i + 1}.webm")
             if i == 0:
-                segment_lines.append(f"  - segment 1 starts at `{ms(off)}` (recording t0)")
+                segment_lines.append(f"  - `{seg_file}` starts at `{ms(off)}` (recording t0)")
             else:
                 prev = segments[i - 1].get("offset_ms", 0) if isinstance(segments[i - 1], dict) else 0
+                if not isinstance(prev, (int, float)):
+                    prev = 0
                 gap_ms = off - prev
                 segment_lines.append(
-                    f"  - segment {i + 1} starts at `{ms(off)}` "
+                    f"  - `{seg_file}` starts at `{ms(off)}` "
                     f"(~{gap_ms // 1000}s after the previous segment — video gap)"
                 )
     # Frame-index integrity (self-validating): surface the manifest-vs-disk reconciliation
@@ -1214,6 +1223,20 @@ def build_pack(bundle: Path, out: Path, blocklist: list[str] | None = None,
         if video_src.exists():
             shutil.copyfile(video_src, raw / video_src.name)
             video_carried = video_src.name
+        # Multi-segment: also carry any additional segment files declared in
+        # video_segments. Each is a separate webm with its own offset; the words
+        # across all segments need to be recovered together (concatenate the
+        # audio from each with ffmpeg, or transcribe each and offset-stitch).
+        for seg in (manifest.get("video_segments") or []):
+            if not isinstance(seg, dict):
+                continue
+            seg_file = seg.get("file")
+            if not seg_file or seg_file == manifest.get("video"):
+                continue  # the primary video already carried above
+            seg_src = bundle / Path(seg_file).name
+            if seg_src.exists():
+                shutil.copyfile(seg_src, raw / seg_src.name)
+                video_carried = video_carried or seg_src.name  # keep non-None so the note fires
 
     narration_note = (
         f"\nNarration: `transcript.vtt` is a stub (no local ASR engine ran), so the audio "

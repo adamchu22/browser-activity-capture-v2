@@ -64,6 +64,30 @@ def extract_audio(video: Path, wav: Path) -> None:
     )
 
 
+def extract_audio_multi(video_paths: list[Path], wav: Path) -> None:
+    """Concatenate audio from multiple video segments into one wav.
+
+    Multi-segment recordings (the user re-shared after 'Stop sharing') write each
+    video segment as a separate webm. The mic audio is continuous across segments
+    (the recorder kept capturing mic through the video gap), so concatenating the
+    audio back-to-back yields the full narration. ffmpeg's concat demuxer joins
+    same-codec streams cleanly. The resulting wav's timeline is segment1-audio →
+    segment2-audio → … with no gaps — which matches what the user actually spoke.
+    """
+    if len(video_paths) == 1:
+        extract_audio(video_paths[0], wav)
+        return
+    listfile = wav.parent / "concat.txt"
+    listfile.write_text("\n".join(f"file '{p.resolve()}'" for p in video_paths), encoding="utf-8")
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "concat", "-safe", "0", "-i", str(listfile),
+         "-ar", "16000", "-ac", "1", str(wav)],
+        check=True,
+        timeout=FFMPEG_TIMEOUT_S,
+    )
+
+
 def find_local_model(repo_id: str) -> str:
     """Return a local snapshot path for an HF repo if it's already on disk,
     else the repo id (the engine will fetch it)."""
@@ -219,10 +243,25 @@ def transcribe(bundle: Path, engine: str, model: str, chunk: float,
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     # .name strips any directory so a hostile manifest can't point `video` at a file
     # outside the bundle for ffmpeg to read (path traversal on an untrusted bundle).
-    video = bundle / Path(manifest.get("video") or "video.webm").name
-
-    if not video.exists():
-        print(f"no video in bundle ({video.name}) — nothing to transcribe", file=sys.stderr)
+    primary_video = bundle / Path(manifest.get("video") or "video.webm").name
+    # Multi-segment: gather all video segment files declared in the manifest, in
+    # order. Each is a separate webm; the mic audio is continuous across them.
+    segment_files = [primary_video]
+    for seg in (manifest.get("video_segments") or []):
+        if not isinstance(seg, dict):
+            continue
+        seg_file = seg.get("file")
+        if not seg_file:
+            continue
+        candidate = bundle / Path(seg_file).name
+        if candidate.exists() and candidate != primary_video:
+            segment_files.append(candidate)
+    # Dedup while preserving order (the primary video may also appear in video_segments[0]).
+    seen = set()
+    video_paths = [p for p in segment_files if not (p in seen or seen.add(p))]
+    video_paths = [p for p in video_paths if p.exists()]
+    if not video_paths:
+        print(f"no video in bundle ({primary_video.name}) — nothing to transcribe", file=sys.stderr)
         return 1
     if manifest.get("narration_in_video") is False:
         print("manifest says narration_in_video: false — the video has no mic audio.", file=sys.stderr)
@@ -230,7 +269,7 @@ def transcribe(bundle: Path, engine: str, model: str, chunk: float,
 
     with tempfile.TemporaryDirectory() as td:
         wav = Path(td) / "audio.wav"
-        extract_audio(video, wav)
+        extract_audio_multi(video_paths, wav)
         if engine == "whisper":
             vtt, cues = run_whisper(wav, model or "base")
         elif engine == "qwen3-asr":

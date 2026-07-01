@@ -57,24 +57,36 @@ class TestVideoSegmentsRendering(unittest.TestCase):
 
     def test_multiple_segments_render_gaps(self):
         # Two re-shares → three segments with two gaps. The block must list
-        # each segment with its offset and flag the gaps.
+        # each segment's file + offset and flag the gaps.
         m = base_manifest(video_segments=[
-            {"offset_ms": 0},
-            {"offset_ms": 12000},
-            {"offset_ms": 45000},
+            {"offset_ms": 0, "file": "video.webm"},
+            {"offset_ms": 12000, "file": "video-2.webm"},
+            {"offset_ms": 45000, "file": "video-3.webm"},
         ])
         ctx = pack.build_context(bundle(m))
         self.assertIn("## ⚠ Capture issues", ctx)
         self.assertIn("video segments", ctx)
-        self.assertIn("3 segments", ctx)
-        # Each segment's offset should be referenced.
-        self.assertIn("segment 1 starts at", ctx)
-        self.assertIn("segment 2 starts at", ctx)
-        self.assertIn("segment 3 starts at", ctx)
+        self.assertIn("3 separate", ctx)
+        # Each segment's file + offset should be referenced.
+        self.assertIn("`video.webm` starts at", ctx)
+        self.assertIn("`video-2.webm` starts at", ctx)
+        self.assertIn("`video-3.webm` starts at", ctx)
         # The gap between segment 1 (0ms) and 2 (12000ms) is ~12s.
         self.assertIn("12s after the previous segment", ctx)
         # The gap between segment 2 (12000ms) and 3 (45000ms) is ~33s.
         self.assertIn("33s after the previous segment", ctx)
+
+    def test_segments_render_without_file_field(self):
+        # Older/manifest without `file` on each segment — pack.py should default
+        # to video.webm / video-N.webm and still render the block.
+        m = base_manifest(video_segments=[
+            {"offset_ms": 0},
+            {"offset_ms": 20000},
+        ])
+        ctx = pack.build_context(bundle(m))
+        self.assertIn("video segments", ctx)
+        self.assertIn("`video.webm` starts at", ctx)
+        self.assertIn("`video-2.webm` starts at", ctx)
 
     def test_segments_tolerate_non_dict_entries(self):
         # A malformed segment (non-dict) must not crash the renderer.
@@ -93,6 +105,16 @@ class TestVideoSegmentsRendering(unittest.TestCase):
         m = base_manifest(video_segments="not a list")
         ctx = pack.build_context(bundle(m))
         self.assertNotIn("video segments", ctx)
+
+    def test_segments_tolerate_nested_dict_offset(self):
+        # A prior bug double-nested offset_ms ({offset_ms: {offset_ms: N}}).
+        # The renderer must not crash — treat the unparseable offset as 0.
+        m = base_manifest(video_segments=[
+            {"offset_ms": {"offset_ms": 37151}},
+            {"offset_ms": {"offset_ms": 37151}},
+        ])
+        ctx = pack.build_context(bundle(m))
+        self.assertIn("video segments", ctx)
 
 
 if __name__ == "__main__":
