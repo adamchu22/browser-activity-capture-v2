@@ -53,6 +53,16 @@ const state = {
   micActive: false, // is the mic actually being recorded? drives the overlay level meter
   micEndedEarly: false, // mic track ended mid-recording → narration is truncated
   storageFull: false, // an IndexedDB write hit the quota → capture is silently truncating
+  // Re-share state: when the screen share dies mid-recording (user clicked
+  // Chrome's "Stop sharing" or closed the shared window), the video track ends
+  // but the mic + event/network capture keep going. We set awaitingReshare and
+  // surface a Re-share button on the overlay; clicking it re-opens the picker
+  // and the new video becomes a second segment of the same video.webm. The
+  // segment offsets (ms since t0 at which each video segment's recorder
+  // started) are reported by the offscreen doc at finalize and recorded in the
+  // manifest so the analyze side can map events to segments and flag the gaps.
+  awaitingReshare: false, // screen share died — overlay shows Re-share
+  videoSegments: [], // [{ offsetMs }] — each video segment's start offset (ms since t0)
   // Frame METADATA only ({ t, file }) — the PNG bytes live in IndexedDB. This lets
   // the worker build manifest.frames without ever loading hundreds of screenshots
   // into memory (that bloat is exactly what the offscreen assembly now avoids).
@@ -401,6 +411,8 @@ async function start(triggerTabId, task, purposes) {
     urls: new Set(),
     errors: [],
     videoEndedEarly: false, // set if the screen share stops on its own mid-recording
+    awaitingReshare: false, // reset on a fresh take
+    videoSegments: [], // reset on a fresh take
     micActive: false, // confirmed once the offscreen doc reports the mic track is live
   });
 
@@ -551,6 +563,7 @@ async function exportViaOffscreen() {
     hasVideo: video.hasVideo,
     narrationInVideo: video.mic,
     micError: video.micError,
+    segmentOffsets: video.segmentOffsets,
     timeline,
     frameList: state.frames,
     harEntries,
@@ -582,6 +595,7 @@ async function salvageExport() {
       hasVideo: false,
       narrationInVideo: false,
       micError: "no video context (salvage)",
+      segmentOffsets: [],
       timeline,
       frameList: frameMeta(frames),
       harEntries,
@@ -785,6 +799,8 @@ async function restart() {
   state.frames = []; // and the frame metadata mirror
   state.errors = [];
   state.videoEndedEarly = false;
+  state.awaitingReshare = false; // Restart discards the dead take entirely
+  state.videoSegments = []; // new take → fresh segment list
   // Reseed the URL set from the still-instrumented tabs' current pages.
   state.urls = new Set();
   for (const info of state.tabs.values()) if (info.url) state.urls.add(info.url);
@@ -797,6 +813,39 @@ async function restart() {
   setBadge("REC");
   broadcastOverlay(); // new t0 resets every overlay's elapsed clock
   persistSession(); // fresh take → persist the new t0 / cleared accounting
+}
+
+// Re-share: the screen share died (Chrome's "Stop sharing" or a closed window)
+// and the user clicked Re-share on the overlay. Re-arm the screen picker in the
+// offscreen doc — the new video becomes a second segment of the same video.webm,
+// the mic stays continuous, and the recording clock does NOT reset (events keep
+// their timestamps; the manifest's video_segments declares the gap). Idempotent
+// guard: ignore if we're not actually awaiting (e.g. a stale overlay click).
+async function reshare() {
+  if (!state.recording || !state.awaitingReshare) return;
+  // Stamp the recording-clock offset at which this new segment begins. The
+  // offscreen doc uses this for the segment it's about to seal; the worker
+  // records it in videoSegments on reshare-armed.
+  state.reshareOffsetMs = now();
+  await ensureOffscreen();
+  chrome.runtime.sendMessage({ type: "offscreen-reshare", offsetMs: state.reshareOffsetMs }).catch(() => {});
+}
+
+// Re-anchor capture/overlay scope to the currently-active tab after a re-share.
+// A re-share may pick a different surface kind (tab vs window vs monitor); the
+// tab the user is on now is the proxy for the new share (same heuristic as
+// goLive). Pure async so the reshare-armed handler can await it before broadcasting.
+async function applyCaptureSurface() {
+  let tabId = state.activeTabId;
+  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+  if (active?.id != null) tabId = active.id;
+  if (tabId == null) return;
+  state.captureTabId = tabId;
+  const liveTab = await chrome.tabs.get(tabId).catch(() => null);
+  state.captureWindowId = liveTab?.windowId ?? null;
+  // If the new surface's tab isn't already instrumented, instrument it now so
+  // its DOM/click/network capture aligns with the new video segment.
+  if (!state.tabIds.has(tabId)) await instrumentTab(tabId);
 }
 
 // Cancel: stop recording and discard — no bundle, no download. Tears down the
@@ -867,6 +916,7 @@ function overlayClock() {
     pausedAccum: state.pausedAccum,
     pauseStartedAt: state.pauseStartedAt,
     micActive: state.micActive, // overlay shows the level meter only when the mic is live
+    reshare: !!state.awaitingReshare, // overlay shows Re-share when the screen share died
   };
 }
 
@@ -1204,10 +1254,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   // The captured screen/window share ended on its own (user closed the window or hit
   // Chrome's "Stop sharing"). Record it; the rest of the capture (events, mic) keeps
-  // going, but the manifest should reflect that video stopped early.
+  // going, but the manifest should reflect that video stopped early. Surface a
+  // Re-share button on the overlay so the user can recover by picking a new screen
+  // — the new video becomes a second segment of the same video.webm.
   if (msg.type === "video-track-ended") {
     state.videoEndedEarly = true;
-    logError("offscreen-video", { message: "screen share ended mid-recording" });
+    state.awaitingReshare = true;
+    logError("offscreen-video", { message: "screen share ended mid-recording — Re-share available" });
+    broadcastOverlay(); // overlay shows the Re-share button
+  }
+  // The offscreen doc's reshare picker failed or was cancelled. Stay in the
+  // awaiting state so the user can try Re-share again; don't fail the recording.
+  if (msg.type === "reshare-failed") {
+    logError("offscreen-video", { message: "re-share picker failed or cancelled — video remains stopped, Re-share still available" });
+    // awaitingReshare stays true; the overlay keeps the button armed.
+  }
+  // The offscreen doc's reshare succeeded: a fresh video track is live and a new
+  // recorder segment has started. Clear the awaiting state, record the segment's
+  // start offset (the worker passed it to offscreen-reshare so it's on the
+  // recording clock), and update the capture surface in case the user picked a
+  // different window/tab this time.
+  if (msg.type === "reshare-armed") {
+    state.awaitingReshare = false;
+    state.videoEndedEarly = false; // video is live again — the take no longer ends early
+    state.videoSegments.push({ offsetMs: state.reshareOffsetMs || 0 });
+    if (msg.surface) state.captureSurface = msg.surface;
+    // Re-scope capture/overlay to the new shared surface. A re-share may have
+    // picked a different surface kind (tab vs window vs monitor); update the
+    // scope anchors so capture/overlay match the new video.
+    await applyCaptureSurface();
+    broadcastOverlay();
   }
   // The microphone track ended mid-recording (revoked / unplugged). Narration is
   // truncated from here; drop the level meter and flag the bundle so the analyst
@@ -1274,6 +1350,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       else if (c === "resume") resume();
       else if (c === "restart") restart();
       else if (c === "cancel") cancel();
+      else if (c === "reshare") reshare();
     });
   }
 });
@@ -1322,21 +1399,29 @@ async function startVideo(withMic) {
 
 // Stop the recorder and finalize the video Blob INSIDE the offscreen document — the
 // bytes stay there (it'll zip + save them). Resolves with only the small status the
-// worker needs for the manifest: { mic, micError, hasVideo }. No video bytes cross
-// the message boundary (that handoff is exactly what the 64MiB cap broke).
+// worker needs for the manifest: { mic, micError, hasVideo, segmentOffsets }. No
+// video bytes cross the message boundary (that handoff is exactly what the 64MiB
+// cap broke). segmentOffsets is the list of recording-clock offsets (ms since t0)
+// at which each video segment's recorder started — empty for a normal single-take
+// recording, one entry per re-share. The manifest uses these to declare the gaps.
 function finalizeVideo() {
   return new Promise((resolve) => {
     const listener = (msg) => {
       if (msg.type === "offscreen-finalized") {
         chrome.runtime.onMessage.removeListener(listener);
         clearTimeout(timer);
-        resolve({ mic: !!msg.mic, micError: msg.micError || null, hasVideo: !!msg.hasVideo });
+        resolve({
+          mic: !!msg.mic,
+          micError: msg.micError || null,
+          hasVideo: !!msg.hasVideo,
+          segmentOffsets: Array.isArray(msg.segmentOffsets) ? msg.segmentOffsets : [],
+        });
       }
     };
     chrome.runtime.onMessage.addListener(listener);
     chrome.runtime.sendMessage({ type: "offscreen-finalize" }).catch(() => {});
     // Don't hang export if the offscreen doc never answers (proceed video-less).
-    const timer = setTimeout(() => resolve({ mic: false, micError: "offscreen timed out", hasVideo: false }), 8000);
+    const timer = setTimeout(() => resolve({ mic: false, micError: "offscreen timed out", hasVideo: false, segmentOffsets: [] }), 8000);
   });
 }
 
@@ -1350,7 +1435,7 @@ function finalizeVideo() {
 // Inputs are passed in explicitly so the normal path can source frame metadata + HAR
 // from worker state (no byte loads) while salvage/retry source them from IndexedDB.
 
-function buildManifest({ hasVideo, narrationInVideo, micError, timeline, frameList, harEntries }) {
+function buildManifest({ hasVideo, narrationInVideo, micError, segmentOffsets, timeline, frameList, harEntries }) {
   const last = timeline.length ? timeline[timeline.length - 1] : null;
   const duration = last ? last.t : now();
   return {
@@ -1372,9 +1457,19 @@ function buildManifest({ hasVideo, narrationInVideo, micError, timeline, frameLi
     tabs: [...state.tabs.values()],
     video: hasVideo ? "video.webm" : null,
     // True if the screen share stopped on its own before the user finished (closed
-    // the shared window / hit "Stop sharing") — video.webm ends early but the rest
-    // of the capture (events, network, mic) ran to the end. See errors.json.
+    // the shared window / hit "Stop sharing") AND was never re-shared — video.webm
+    // ends early but the rest of the capture (events, network, mic) ran to the
+    // end. If the user clicked Re-share and a later segment is live, this is
+    // false; the gaps are described by `video_segments` instead. See errors.json.
     video_ended_early: !!state.videoEndedEarly,
+    // The video segments that make up video.webm, with the recording-clock offset
+    // (ms since t0) at which each segment's recorder started. Empty for a normal
+    // single-take recording; one entry per re-share. Segment N+1's offset minus
+    // segment N's offset is NOT contiguous video — the gap between them is the
+    // period where the screen share was dead and the user hadn't yet re-shared
+    // (events/network/mic still captured during the gap, video is missing). The
+    // analyze side uses these offsets to flag the gaps and map events to segments.
+    video_segments: (segmentOffsets || []).map((offsetMs) => ({ offset_ms: offsetMs })),
     // True if IndexedDB hit its quota mid-recording — the structured streams
     // (timeline/events/frames/network) are TRUNCATED past that point. The video may
     // still be complete (it's held in the offscreen doc, not IDB). See errors.json.
