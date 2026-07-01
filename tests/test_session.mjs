@@ -123,3 +123,20 @@ test("a paused recording round-trips its pause accounting (clock stays aligned)"
   assert.equal(restored.pauseStartedAt, src.pauseStartedAt);
   assert.equal(restored.paused, src.paused);
 });
+
+test("re-share state round-trips so a worker restart keeps the button armed", () => {
+  const src = liveState();
+  src.awaitingReshare = true;
+  src.videoSegments = [{ offsetMs: 12000 }, { offsetMs: 45000 }];
+  const restored = applySession({}, JSON.parse(JSON.stringify(serializeSession(src))));
+  assert.equal(restored.awaitingReshare, true, "awaitingReshare survives");
+  assert.deepEqual(restored.videoSegments, [{ offsetMs: 12000 }, { offsetMs: 45000 }]);
+});
+
+test("a normal (no re-share) recording round-trips empty video segments", () => {
+  const src = liveState();
+  // awaitingReshare/videoSegments are absent on a clean take
+  const restored = applySession({}, JSON.parse(JSON.stringify(serializeSession(src))));
+  assert.equal(restored.awaitingReshare, false);
+  assert.deepEqual(restored.videoSegments, []);
+});

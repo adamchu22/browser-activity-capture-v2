@@ -44,6 +44,13 @@ export function serializeSession(state) {
     micActive: !!state.micActive,
     micEndedEarly: !!state.micEndedEarly,
     videoEndedEarly: !!state.videoEndedEarly,
+    // Re-share state: the screen share died mid-recording and the overlay is
+    // showing the Re-share button. Persist so a worker restart during the
+    // awaiting window still surfaces the button after rehydration. videoSegments
+    // is a small array of offset markers (one per re-share so far) and is bounded
+    // by the realistic number of re-shares in a single recording.
+    awaitingReshare: !!state.awaitingReshare,
+    videoSegments: Array.isArray(state.videoSegments) ? state.videoSegments : [],
     captureSurface: state.captureSurface ?? null,
     captureTabId: state.captureTabId ?? null,
     captureWindowId: state.captureWindowId ?? null,
@@ -76,6 +83,8 @@ export function applySession(state, record) {
   state.micEndedEarly = !!record.micEndedEarly;
   state.storageFull = !!record.storageFull;
   state.videoEndedEarly = !!record.videoEndedEarly;
+  state.awaitingReshare = !!record.awaitingReshare;
+  state.videoSegments = Array.isArray(record.videoSegments) ? record.videoSegments : [];
   state.captureSurface = record.captureSurface ?? null;
   state.captureTabId = record.captureTabId ?? null;
   state.captureWindowId = record.captureWindowId ?? null;
