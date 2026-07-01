@@ -1281,9 +1281,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.surface) state.captureSurface = msg.surface;
     // Re-scope capture/overlay to the new shared surface. A re-share may have
     // picked a different surface kind (tab vs window vs monitor); update the
-    // scope anchors so capture/overlay match the new video.
-    await applyCaptureSurface();
-    broadcastOverlay();
+    // scope anchors so capture/overlay match the new video. The onMessage
+    // listener is NOT async (it can't be — it returns true selectively for
+    // sendResponse paths), so fire-and-forget the async scope update and
+    // broadcast once it's done.
+    applyCaptureSurface().then(() => broadcastOverlay());
+    return;
   }
   // The microphone track ended mid-recording (revoked / unplugged). Narration is
   // truncated from here; drop the level meter and flag the bundle so the analyst
