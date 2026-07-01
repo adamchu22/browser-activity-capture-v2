@@ -31,11 +31,19 @@
 import { makeZip } from "./zip.js";
 import { streamFiles } from "./bundle-streams.js";
 import * as db from "./db.js";
-import { concatSegments, segmentOffsetsFor, sealSegment } from "./segments.js";
+import { segmentOffsetsFor, sealSegment } from "./segments.js";
 
 let recorder = null;
 let chunks = [];
-let finalizedVideo = null; // the finished video Blob, held HERE until the bundle is zipped + saved
+// The finalized video, held HERE until the bundle is zipped + saved. Multi-segment:
+// when the user re-shares after "Stop sharing", each segment is a separate,
+// internally-self-clocking webm (its PTS starts at 0), so segments can NOT be
+// byte-concatenated into one playable file — the second segment's timestamps
+// restart at 0 (non-monotonic DTS) and the duplicate EBML header breaks ffmpeg
+// seeks. Instead each segment is written as its own file (video.webm,
+// video-2.webm, …) and the manifest's video_segments declares each file's
+// recording-clock offset. Empty array = no video was captured (data-only take).
+let finalizedSegments = []; // [{ blob, offsetMs }]
 let streams = []; // every MediaStream we open, so stop() can release them all
 let activeTracks = []; // the live screen+mic tracks, reused by restart without re-prompting
 let micRecorded = false; // did the final recording actually include the mic?
@@ -44,13 +52,12 @@ let captureSurface = null; // displaySurface of the share: "browser" | "window" 
 // Multi-segment video: when the user re-shares after "Stop sharing", the dead
 // recorder's chunks are sealed into a segment Blob and a new recorder starts on
 // the fresh screen track. The mic track is continuous across segments. At
-// finalize all segments are concatenated into one video.webm (same-codec
-// MediaRecorder segments concatenate cleanly at the byte level) and the
-// segment offsets are reported to the worker so the manifest can declare the
-// gaps. segments[] holds { blob, offsetMs } where offsetMs is the recording
-// clock (ms since t0) at which this segment's recorder STARTED — set by the
-// worker via offscreen-reshare so segments map onto the shared event clock.
-let videoSegments = []; // [{ blob, offsetMs }]
+// finalize each segment is written as its own file (see finalizedSegments) and
+// the segment offsets are reported to the worker so the manifest can declare the
+// gaps + each segment's file. segments[] holds { blob, offsetMs } where offsetMs
+// is the recording clock (ms since t0) at which this segment's recorder STARTED
+// — set by the worker via offscreen-reshare so segments map onto the shared event clock.
+let videoSegments = []; // [{ blob, offsetMs }] — sealed segments from prior recorders
 let segmentOffsetMs = 0; // the offset the NEXT segment will receive when it seals
 let audioCtx = null; // Web Audio graph that taps the mic for the overlay level meter
 let levelTimer = null; // interval pushing mic loudness to the worker
@@ -131,8 +138,7 @@ chrome.runtime.onMessage.addListener(async (msg) => {
   // the wall time it began — the manifest uses these offsets to map events to
   // segments and flag the gap to the analyst.
   if (msg.type === "offscreen-reshare") {
-    segmentOffsetMs = msg.offsetMs || 0;
-    await reshareRecording();
+    await reshareRecording(msg.offsetMs || 0);
   }
   // Assemble the FULL bundle here and save it. This is the heart of the 64MiB fix:
   // the video Blob never leaves this document and the bulk streams are read straight
@@ -153,11 +159,15 @@ async function assembleAndSave(metaFiles, filename) {
     const rrweb = await db.readAll("rrweb");
     const frames = await db.readAll("frames");
     const files = [...metaFiles, ...streamFiles(timeline, rrweb, frames)];
-    if (finalizedVideo && finalizedVideo.size) {
-      // Pass the video Blob straight through (NOT new Uint8Array(arrayBuffer())): makeZip
-      // streams it in slices for the CRC, so the whole video is never pinned in the JS
-      // heap and the output Blob is disk-backed. This is what stops large captures OOMing.
-      files.push({ name: "video.webm", data: finalizedVideo });
+    // Multi-segment video: write each segment as its own file. The first
+    // segment is `video.webm` (what the manifest's `video` field points at);
+    // subsequent segments are `video-2.webm`, `video-3.webm`, … so the analyze
+    // side can find each one. Each MediaRecorder segment is internally self-
+    // clocking (PTS starts at 0), so they can't be byte-concatenated — keep
+    // them separate. The manifest's video_segments declares each file's
+    // recording-clock offset so events map onto the right segment.
+    for (const seg of finalizedSegments) {
+      if (seg.blob && seg.blob.size > 0) files.push({ name: seg.file, data: seg.blob });
     }
     zipBlob = await makeZip(files);
   } catch (e) {
@@ -171,7 +181,7 @@ async function assembleAndSave(metaFiles, filename) {
   // the fix for the lost 17-min recording — and needs no folder picker or Save dialog.
   try {
     triggerDownload(zipBlob, filename);
-    finalizedVideo = null;
+    finalizedSegments = [];
     return reply({ ok: true });
   } catch (e) {
     reportError("download failed: " + (e?.message || e), e?.stack);
@@ -340,29 +350,35 @@ function stopMicMeter() {
   }
 }
 
-// Stop the recorder and hold the finished video Blob HERE (finalizedVideo) for the
-// upcoming offscreen-save. Reports only status to the worker — no bytes — so the
-// worker can build the manifest. The video bytes go into the zip in this document.
+// Stop the recorder and hold the finished video segments HERE (finalizedSegments)
+// for the upcoming offscreen-save. Reports only status to the worker — no bytes —
+// so the worker can build the manifest. The video bytes go into the zip in this
+// document, each segment as its own file (see segmentOffsetsFor for the naming).
 //
 // Multi-segment: if the user re-shared after "Stop sharing", there are one or more
-// sealed segment Blobs in videoSegments[] plus the live recorder's chunks. All
-// segments are concatenated into a single video.webm (same-codec MediaRecorder
-// segments concatenate cleanly at the byte level — this is how long-form webm
-// screen recorders stitch). The segment offsets are reported to the worker so the
-// manifest can declare the gaps. If only one segment exists this collapses to the
-// original single-Blob path.
+// sealed segment Blobs in videoSegments[] plus the live recorder's chunks. Each
+// segment is a separate, internally-self-clocking webm (PTS starts at 0), so they
+// can NOT be byte-concatenated — the second segment's timestamps would restart at 0
+// and the duplicate EBML header breaks ffmpeg seeks. Keep them as separate files
+// (video.webm, video-2.webm, …) and let the manifest's video_segments declare each
+// file's recording-clock offset.
 function finalizeRecording() {
   if (!recorder) {
     // No live recorder — but we may still have sealed segments from a re-share
     // whose subsequent recorder also died. Assemble whatever we have.
-    finalizedVideo = concatSegments(videoSegments);
-    const offsets = segmentOffsetsFor(videoSegments);
+    const segments = videoSegments.map((s, i) => ({
+      blob: s.blob,
+      offsetMs: s.offsetMs,
+      file: i === 0 ? "video.webm" : `video-${i + 1}.webm`,
+    }));
+    finalizedSegments = segments;
+    const offsets = segmentOffsetsFor(segments);
     videoSegments = [];
     chrome.runtime.sendMessage({
       type: "offscreen-finalized",
       mic: micRecorded,
       micError,
-      hasVideo: finalizedVideo ? finalizedVideo.size > 0 : false,
+      hasVideo: segments.some((s) => s.blob && s.blob.size > 0),
       segmentOffsets: offsets,
     });
     return;
@@ -370,17 +386,22 @@ function finalizeRecording() {
   recorder.onstop = () => {
     const finalChunk = new Blob(chunks, { type: "video/webm" });
     chunks = [];
-    const segments = [...videoSegments, { blob: finalChunk, offsetMs: segmentOffsetMs }];
+    const all = [...videoSegments, { blob: finalChunk, offsetMs: segmentOffsetMs }];
     videoSegments = [];
-    finalizedVideo = concatSegments(segments);
+    // Stamp each segment with its file name (video.webm, video-2.webm, …).
+    finalizedSegments = all.map((s, i) => ({
+      blob: s.blob,
+      offsetMs: s.offsetMs,
+      file: i === 0 ? "video.webm" : `video-${i + 1}.webm`,
+    }));
     releaseStreams();
     recorder = null;
     chrome.runtime.sendMessage({
       type: "offscreen-finalized",
       mic: micRecorded,
       micError,
-      hasVideo: finalizedVideo ? finalizedVideo.size > 0 : false,
-      segmentOffsets: segmentOffsetsFor(segments),
+      hasVideo: finalizedSegments.some((s) => s.blob && s.blob.size > 0),
+      segmentOffsets: segmentOffsetsFor(finalizedSegments),
     });
   };
   recorder.stop();
@@ -417,10 +438,14 @@ function restartRecording() {
 // requirement, not a carried gesture, so this works from an overlay click
 // relayed through the worker), swap the new video track into activeTracks (mic
 // stays continuous), and start a new recorder against the same recording clock.
-// The worker passes the recording-clock offset (ms since t0) at which this
-// segment begins so the manifest can declare the gap.
-async function reshareRecording() {
-  // Seal the dead recorder's chunks as a segment.
+// `newOffsetMs` is the recording-clock offset (ms since t0) at which the NEW
+// segment begins — the dead segment is sealed with the offset that was in effect
+// when IT started recording (the previous segmentOffsetMs), and segmentOffsetMs
+// is then updated to newOffsetMs for the upcoming segment + the final chunk.
+async function reshareRecording(newOffsetMs) {
+  // Seal the dead recorder's chunks as a segment, stamped with the offset that
+  // was in effect when THIS segment started recording (NOT the new offset — the
+  // dead segment started at the previous offset).
   if (recorder) {
     recorder.onstop = null;
     try {
@@ -430,6 +455,8 @@ async function reshareRecording() {
     if (sealed) videoSegments.push(sealed);
     chunks = [];
   }
+  // Now switch the offset to the new segment's start for the upcoming recorder.
+  segmentOffsetMs = newOffsetMs || 0;
   // Drop the dead screen track from activeTracks but KEEP the mic track (it's
   // independent of the screen share and should stay continuous across the gap).
   const micTracks = activeTracks.filter((t) => t.kind === "audio");
@@ -500,7 +527,7 @@ function cancelRecording() {
   }
   chunks = [];
   videoSegments = [];
-  finalizedVideo = null; // discard any finished take too
+  finalizedSegments = []; // discard any finished take too
   releaseStreams();
   activeTracks = [];
   recorder = null;

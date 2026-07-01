@@ -1472,7 +1472,9 @@ function buildManifest({ hasVideo, narrationInVideo, micError, segmentOffsets, t
     // period where the screen share was dead and the user hadn't yet re-shared
     // (events/network/mic still captured during the gap, video is missing). The
     // analyze side uses these offsets to flag the gaps and map events to segments.
-    video_segments: (segmentOffsets || []).map((offsetMs) => ({ offset_ms: offsetMs })),
+    // NB: the offscreen doc already returns manifest-shaped [{offset_ms}] via
+    // segmentOffsetsFor() — pass through directly, do NOT re-wrap.
+    video_segments: Array.isArray(segmentOffsets) ? segmentOffsets : [],
     // True if IndexedDB hit its quota mid-recording — the structured streams
     // (timeline/events/frames/network) are TRUNCATED past that point. The video may
     // still be complete (it's held in the offscreen doc, not IDB). See errors.json.

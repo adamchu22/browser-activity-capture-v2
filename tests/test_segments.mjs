@@ -66,22 +66,30 @@ test("segmentOffsetsFor returns [] for no segments (normal single-take)", () => 
   assert.deepEqual(segmentOffsetsFor(null), []);
 });
 
-test("segmentOffsetsFor maps each segment's offsetMs to offset_ms", () => {
+test("segmentOffsetsFor maps each segment to {offset_ms, file}", () => {
   const segs = [
     { blob: chunk(), offsetMs: 0 },
     { blob: chunk(), offsetMs: 12000 },
     { blob: chunk(), offsetMs: 45000 },
   ];
   assert.deepEqual(segmentOffsetsFor(segs), [
-    { offset_ms: 0 },
-    { offset_ms: 12000 },
-    { offset_ms: 45000 },
+    { offset_ms: 0, file: "video.webm" },
+    { offset_ms: 12000, file: "video-2.webm" },
+    { offset_ms: 45000, file: "video-3.webm" },
   ]);
+});
+
+test("segmentOffsetsFor names the first segment video.webm always", () => {
+  const segs = [{ blob: chunk(), offsetMs: 0 }];
+  assert.deepEqual(segmentOffsetsFor(segs), [{ offset_ms: 0, file: "video.webm" }]);
 });
 
 test("segmentOffsetsFor defaults a missing offset to 0", () => {
   const segs = [{ blob: chunk() }, { blob: chunk(), offsetMs: null }];
-  assert.deepEqual(segmentOffsetsFor(segs), [{ offset_ms: 0 }, { offset_ms: 0 }]);
+  assert.deepEqual(segmentOffsetsFor(segs), [
+    { offset_ms: 0, file: "video.webm" },
+    { offset_ms: 0, file: "video-2.webm" },
+  ]);
 });
 
 test("sealSegment returns null for empty chunks (recorder produced nothing)", () => {

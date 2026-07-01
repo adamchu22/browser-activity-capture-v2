@@ -26,12 +26,21 @@ export function concatSegments(segments) {
 }
 
 // Given a list of finalized segments (each { blob, offsetMs }) produce the
-// manifest-shaped list of segment offsets (ms since t0 at which each segment's
-// recorder started). Empty for a normal single-take recording; one entry per
-// re-share. The worker records these in manifest.video_segments.
+// manifest-shaped list of segment descriptors (file + offset_ms). Empty for a
+// normal single-take recording; one entry per re-share. The first segment is
+// always `video.webm` (the manifest's `video` field points at it); subsequent
+// segments are `video-2.webm`, `video-3.webm`, … so the analyze side can find
+// each segment's file and know its recording-clock offset. Each MediaRecorder
+// segment is internally self-clocking (its PTS starts at 0), so segments
+// cannot be byte-concatenated into one playable file — the second segment's
+// timestamps restart at 0 and the EBML header duplicates break ffmpeg seeks.
+// Multi-file keeps each segment a clean, independently-playable webm.
 export function segmentOffsetsFor(segments) {
   if (!segments || !segments.length) return [];
-  return segments.map((s) => ({ offset_ms: s.offsetMs || 0 }));
+  return segments.map((s, i) => ({
+    offset_ms: s.offsetMs || 0,
+    file: i === 0 ? "video.webm" : `video-${i + 1}.webm`,
+  }));
 }
 
 // Seal the dead recorder's chunks into a segment: returns a new segment object
