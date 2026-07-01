@@ -31,6 +31,7 @@
 import { makeZip } from "./zip.js";
 import { streamFiles } from "./bundle-streams.js";
 import * as db from "./db.js";
+import { concatSegments, segmentOffsetsFor, sealSegment } from "./segments.js";
 
 let recorder = null;
 let chunks = [];
@@ -40,6 +41,17 @@ let activeTracks = []; // the live screen+mic tracks, reused by restart without 
 let micRecorded = false; // did the final recording actually include the mic?
 let micError = null; // why the mic was absent (surfaced into the bundle manifest)
 let captureSurface = null; // displaySurface of the share: "browser" | "window" | "monitor"
+// Multi-segment video: when the user re-shares after "Stop sharing", the dead
+// recorder's chunks are sealed into a segment Blob and a new recorder starts on
+// the fresh screen track. The mic track is continuous across segments. At
+// finalize all segments are concatenated into one video.webm (same-codec
+// MediaRecorder segments concatenate cleanly at the byte level) and the
+// segment offsets are reported to the worker so the manifest can declare the
+// gaps. segments[] holds { blob, offsetMs } where offsetMs is the recording
+// clock (ms since t0) at which this segment's recorder STARTED — set by the
+// worker via offscreen-reshare so segments map onto the shared event clock.
+let videoSegments = []; // [{ blob, offsetMs }]
+let segmentOffsetMs = 0; // the offset the NEXT segment will receive when it seals
 let audioCtx = null; // Web Audio graph that taps the mic for the overlay level meter
 let levelTimer = null; // interval pushing mic loudness to the worker
 let keepAliveTimer = null; // pings the worker so the MV3 service worker can't be torn down mid-recording
@@ -108,6 +120,19 @@ chrome.runtime.onMessage.addListener(async (msg) => {
   }
   if (msg.type === "offscreen-cancel") {
     cancelRecording();
+  }
+  // Re-share the screen after "Stop sharing" killed the video track. The worker
+  // sends this in response to the user clicking the overlay's Re-share button.
+  // We seal the dead recorder's chunks as a segment, open a fresh getDisplayMedia
+  // picker (the DISPLAY_MEDIA reason on this offscreen doc waives the user-gesture
+  // requirement, same as the initial arm), swap the new video track into
+  // activeTracks (the mic track stays continuous), and start a new recorder. The
+  // worker passes the recording-clock offset so each segment can be stamped with
+  // the wall time it began — the manifest uses these offsets to map events to
+  // segments and flag the gap to the analyst.
+  if (msg.type === "offscreen-reshare") {
+    segmentOffsetMs = msg.offsetMs || 0;
+    await reshareRecording();
   }
   // Assemble the FULL bundle here and save it. This is the heart of the 64MiB fix:
   // the video Blob never leaves this document and the bulk streams are read straight
@@ -318,22 +343,44 @@ function stopMicMeter() {
 // Stop the recorder and hold the finished video Blob HERE (finalizedVideo) for the
 // upcoming offscreen-save. Reports only status to the worker — no bytes — so the
 // worker can build the manifest. The video bytes go into the zip in this document.
+//
+// Multi-segment: if the user re-shared after "Stop sharing", there are one or more
+// sealed segment Blobs in videoSegments[] plus the live recorder's chunks. All
+// segments are concatenated into a single video.webm (same-codec MediaRecorder
+// segments concatenate cleanly at the byte level — this is how long-form webm
+// screen recorders stitch). The segment offsets are reported to the worker so the
+// manifest can declare the gaps. If only one segment exists this collapses to the
+// original single-Blob path.
 function finalizeRecording() {
   if (!recorder) {
-    finalizedVideo = null;
-    chrome.runtime.sendMessage({ type: "offscreen-finalized", mic: false, micError, hasVideo: false });
+    // No live recorder — but we may still have sealed segments from a re-share
+    // whose subsequent recorder also died. Assemble whatever we have.
+    finalizedVideo = concatSegments(videoSegments);
+    const offsets = segmentOffsetsFor(videoSegments);
+    videoSegments = [];
+    chrome.runtime.sendMessage({
+      type: "offscreen-finalized",
+      mic: micRecorded,
+      micError,
+      hasVideo: finalizedVideo ? finalizedVideo.size > 0 : false,
+      segmentOffsets: offsets,
+    });
     return;
   }
   recorder.onstop = () => {
-    finalizedVideo = new Blob(chunks, { type: "video/webm" });
+    const finalChunk = new Blob(chunks, { type: "video/webm" });
     chunks = [];
+    const segments = [...videoSegments, { blob: finalChunk, offsetMs: segmentOffsetMs }];
+    videoSegments = [];
+    finalizedVideo = concatSegments(segments);
     releaseStreams();
     recorder = null;
     chrome.runtime.sendMessage({
       type: "offscreen-finalized",
       mic: micRecorded,
       micError,
-      hasVideo: finalizedVideo.size > 0,
+      hasVideo: finalizedVideo ? finalizedVideo.size > 0 : false,
+      segmentOffsets: segmentOffsetsFor(segments),
     });
   };
   recorder.stop();
@@ -342,7 +389,8 @@ function finalizeRecording() {
 // Restart: drop the in-progress recording but keep the screen + mic streams
 // LIVE, so a fresh take starts immediately with no second "Choose what to share"
 // prompt. Clearing onstop first prevents the discarded recorder from shipping its
-// bytes back as a finished video.
+// bytes back as a finished video. Also discards any sealed re-share segments —
+// the new take starts from zero segments.
 function restartRecording() {
   if (recorder) {
     recorder.onstop = null;
@@ -351,6 +399,7 @@ function restartRecording() {
     } catch {}
   }
   chunks = [];
+  videoSegments = [];
   try {
     recorder = new MediaRecorder(new MediaStream(activeTracks), { mimeType: "video/webm" });
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
@@ -361,8 +410,87 @@ function restartRecording() {
   }
 }
 
+// Re-share: the screen share died (user clicked Chrome's "Stop sharing") and the
+// user clicked Re-share on the overlay. Seal the dead recorder's chunks as a
+// segment, open a FRESH getDisplayMedia picker (same DISPLAY_MEDIA waiver as the
+// initial arm — the offscreen doc's reason is what waives the user-gesture
+// requirement, not a carried gesture, so this works from an overlay click
+// relayed through the worker), swap the new video track into activeTracks (mic
+// stays continuous), and start a new recorder against the same recording clock.
+// The worker passes the recording-clock offset (ms since t0) at which this
+// segment begins so the manifest can declare the gap.
+async function reshareRecording() {
+  // Seal the dead recorder's chunks as a segment.
+  if (recorder) {
+    recorder.onstop = null;
+    try {
+      recorder.stop();
+    } catch {}
+    const sealed = sealSegment(chunks, segmentOffsetMs);
+    if (sealed) videoSegments.push(sealed);
+    chunks = [];
+  }
+  // Drop the dead screen track from activeTracks but KEEP the mic track (it's
+  // independent of the screen share and should stay continuous across the gap).
+  const micTracks = activeTracks.filter((t) => t.kind === "audio");
+  // Stop the dead video track(s) so the "sharing" indicator clears before we
+  // prompt again (getDisplayMedia rejects if a screen share is still live).
+  activeTracks.filter((t) => t.kind === "video").forEach((t) => { try { t.stop(); } catch {} });
+  // Remove the now-stopped screen MediaStream from `streams` so releaseStreams()
+  // later doesn't try to stop already-stopped tracks (harmless but noisy). Keep
+  // any stream that still has a LIVE track (the mic stream stays — it has an
+  // audio track, not a video one, so the video filter below must OR over both).
+  streams = streams.filter((s) => s.getTracks().some((t) => t.readyState === "live"));
+  // Open a fresh screen picker. Same path as startRecording: a user cancel is
+  // non-fatal — we keep the mic recording going and report reshare-failed so
+  // the worker keeps awaitingReshare true and the overlay stays armed.
+  let newVideoStream;
+  try {
+    newVideoStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    streams.push(newVideoStream);
+  } catch (e) {
+    reportError("re-share screen picker failed: " + (e?.message || e), e?.stack);
+    activeTracks = micTracks;
+    recorder = null; // no new recorder — finalize will seal the segments captured so far
+    chrome.runtime.sendMessage({ type: "reshare-failed" }).catch(() => {});
+    return;
+  }
+  const newVideoTracks = newVideoStream.getVideoTracks();
+  if (!newVideoTracks.length) {
+    reportError("re-share returned no video tracks");
+    activeTracks = micTracks;
+    recorder = null;
+    chrome.runtime.sendMessage({ type: "reshare-failed" }).catch(() => {});
+    return;
+  }
+  // Surface the new share's displaySurface (may differ from the original —
+  // the user could pick a different window/tab on re-share).
+  captureSurface = newVideoTracks[0]?.getSettings?.().displaySurface || captureSurface;
+  // If this new share also stops on its own, surface it the same way (the user
+  // can re-share again — multiple re-shares are supported, each becoming a segment).
+  newVideoTracks.forEach((t) => {
+    t.addEventListener("ended", () => {
+      reportError("screen share ended mid-recording (video track stopped)");
+      chrome.runtime.sendMessage({ type: "video-track-ended" }).catch(() => {});
+    });
+  });
+  activeTracks = [...newVideoTracks, ...micTracks];
+  try {
+    recorder = new MediaRecorder(new MediaStream(activeTracks), { mimeType: "video/webm" });
+    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    recorder.start(1000);
+  } catch (e) {
+    reportError("MediaRecorder re-share start failed: " + (e?.message || e), e?.stack);
+    recorder = null;
+    chrome.runtime.sendMessage({ type: "reshare-failed" }).catch(() => {});
+    return;
+  }
+  chrome.runtime.sendMessage({ type: "reshare-armed", surface: captureSurface }).catch(() => {});
+}
+
 // Cancel: stop and discard everything, release the camera/mic/screen so the
-// browser's "sharing" indicator clears. No video is sent back.
+// browser's "sharing" indicator clears. No video is sent back. Also discards
+// any sealed re-share segments.
 function cancelRecording() {
   if (recorder) {
     recorder.onstop = null;
@@ -371,6 +499,7 @@ function cancelRecording() {
     } catch {}
   }
   chunks = [];
+  videoSegments = [];
   finalizedVideo = null; // discard any finished take too
   releaseStreams();
   activeTracks = [];
