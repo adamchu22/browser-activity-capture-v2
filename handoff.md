@@ -1,5 +1,73 @@
 # Handoff (v2)
 
+## ✅ DONE 2026-07-01 — RE-SHARE after "Stop sharing" (multi-segment video) — built + unit-tested
+
+Adam clicked Chrome's "Stop sharing" mid-session and asked if he could recover.
+Previously no — the video track died, the rest of the capture (events, network,
+mic) kept going as a data-only take, and the only option was Finish & export
+(with `video_ended_early`) or Cancel. Now the overlay surfaces a **Re-share**
+button the instant the screen share dies; clicking it re-opens the picker and
+the new video becomes a second segment of the same `video.webm`, with the
+recording clock continuous and the manifest declaring the gaps.
+
+**What shipped** (all unit-tested; 265 python / 129 node green; live-verify owed):
+- **`extension/src/segments.js`** (new, pure) — `concatSegments` (same-codec
+  webm byte-concatenation), `segmentOffsetsFor` (manifest-shape), `sealSegment`.
+  Testable without chrome.*/DOM; `tests/test_segments.mjs` (11).
+- **`extension/src/offscreen.js`** — `offscreen-reshare` handler: seals the
+  dead recorder's chunks as a segment (`sealSegment`), drops the dead video
+  track but KEEPS the mic track (continuous across the gap), opens a fresh
+  `getDisplayMedia()` (same DISPLAY_MEDIA waiver as the initial arm — the
+  offscreen doc's reason waives the user-gesture requirement, not a carried
+  gesture, so this works from an overlay click relayed through the worker),
+  swaps the new video track into `activeTracks`, starts a new recorder. The
+  `track.onended` handler is re-attached so a second "Stop sharing" → second
+  Re-share works (multi-segment, unbounded). `finalizeRecording` now
+  concatenates all sealed segments + the live recorder's final chunk into one
+  `video.webm` via `concatSegments` and reports `segmentOffsets` to the worker.
+  Failed re-share (picker cancel) keeps `recorder=null` and `awaitingReshare`
+  stays true so the user can try again. `restart`/`cancel` now clear
+  `videoSegments`.
+- **`extension/src/background.js`** — `video-track-ended` now sets
+  `state.awaitingReshare` + broadcasts (overlay shows Re-share). New `reshare()`
+  command stamps `reshareOffsetMs = now()` (recording clock, NOT reset) and sends
+  `offscreen-reshare`. `reshare-armed` clears `awaitingReshare`, pushes the
+  segment offset, re-anchors `captureSurface`/`captureTabId`/`captureWindowId`
+  (a re-share may pick a different surface kind), re-instruments the active tab
+  if needed, and broadcasts. `reshare-failed` keeps awaiting true. `finalizeVideo`
+  threads `segmentOffsets` through; `buildManifest` emits `video_segments:
+  [{offset_ms}]` and refines `video_ended_early` to mean "ended UNRECOVERED" (false
+  once a re-share is live). `restart()` also clears `awaitingReshare`/`videoSegments`.
+  New `applyCaptureSurface()` helper (async) re-anchors scope after re-share.
+- **`extension/src/content.js`** — overlay gets a `#reshare` button (amber,
+  pulsing) + an amber rec dot, shown ONLY when `state.reshare === true` via a
+  `.bar.reshare` class. The tools (Select/Draw) stay available while awaiting
+  re-share. Clicking sends `cmd("reshare")` → worker `reshare()`. `reshare` flag
+  in the overlay closure; `applyReshare()` toggles the class; `mount`/`update`
+  carry it.
+- **`extension/src/session.js`** — `awaitingReshare` + `videoSegments`
+  round-trip so a worker restart during the awaiting window still surfaces the
+  button after rehydrate. `tests/test_session.mjs` (+2).
+- **`analyze/pack.py`** — `## ⚠ Capture issues` renders a `video segments` block
+  listing each segment's offset + the gap before it, so the analyzing AI knows
+  which event ranges have no corresponding video. `tests/test_video_segments.py` (6).
+- **`analyze/health.py`** — surfaces multi-segment as an INFORMATIONAL warning
+  (not a hard partial flag — the take was recovered); `ok` stays true.
+  `tests/test_health.py` (+2).
+
+**▶ NEXT — LIVE-VERIFY on Adam's Mac.** Top predicted breakage (F1): the
+`getDisplayMedia` re-prompt from the offscreen doc on an overlay-click trigger.
+The initial arm works because the offscreen doc's `DISPLAY_MEDIA` reason waives
+the user-gesture requirement — the re-share uses the exact same path, so it
+should work, but it's untested live. Verify: record → click Chrome's "Stop
+sharing" → overlay shows amber Re-share → click it → "Choose what to share"
+picker appears → pick → recording continues, `video.webm` has 2 segments,
+`manifest.video_segments` has 2 offsets, `validate_bundle.py` PASS, pack's
+`## ⚠ Capture issues` lists the gap. Also verify the mic stays continuous across
+the gap (narration_in_video true, no narration_truncated). Files touched:
+`extension/src/{segments.js,offscreen.js,background.js,content.js,session.js}`,
+`analyze/{pack.py,health.py}`, `tests/{test_segments.mjs,test_session.mjs,test_video_segments.py,test_health.py}`.
+
 ## ✅ DONE 2026-06-23 — MACHINE-LOCAL POINTER so a raw zip can find the pipeline (Step 0) — built + unit-tested
 
 Live test of the recent batch (`capture-2026-06-23T20-38-26-134Z.zip`) validated PASS, 0 warnings;

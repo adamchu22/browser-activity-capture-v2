@@ -3,8 +3,47 @@
 v2 reworks capture to **full-screen video + all-tabs instrumentation** and adds an
 **intent-capture layer** (stated task goal, semantic element context, narrated-step
 segmentation, frame annotation / "draw on screen"). Code is built and unit-tested
-(190 python / 113 node; DOM capture also harness-verified); the extension still needs a live-Chrome
+(265 python / 129 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
+
+## ✅ Done 2026-07-01 — Re-share after "Stop sharing" (multi-segment video) — built + unit-tested
+
+Adam clicked "Stop sharing" mid-session and asked if he could recover. Built a Re-share flow:
+the overlay surfaces an amber pulsing Re-share button the instant the screen share dies;
+clicking it re-opens the picker and the new video becomes a second segment of the same
+`video.webm`, with the recording clock continuous and the manifest declaring the gaps.
+265 python / 129 node green. Full details + lessons in `handoff.md` + `learnings.md` 2026-07-01.
+
+- [x] `extension/src/segments.js` (new, pure) — `concatSegments`/`sealSegment`/`segmentOffsetsFor`.
+      `tests/test_segments.mjs` (11).
+- [x] `extension/src/offscreen.js` — `offscreen-reshare` handler; seals dead recorder as segment,
+      drops dead video track but keeps mic, fresh `getDisplayMedia`, swaps track, new recorder,
+      re-attaches `track.onended` (multi-segment unbounded). `finalizeRecording` concatenates.
+- [x] `extension/src/background.js` — `awaitingReshare` state; `reshare()` command;
+      `reshare-armed`/`reshare-failed` handlers; `applyCaptureSurface()` re-anchor; `buildManifest`
+      emits `video_segments`; `video_ended_early` refined to "unrecovered".
+- [x] `extension/src/content.js` — `#reshare` button + `.bar.reshare` amber state, shown only when
+      `state.reshare === true`; `applyReshare()`.
+- [x] `extension/src/session.js` — `awaitingReshare` + `videoSegments` round-trip. `test_session.mjs` (+2).
+- [x] `analyze/pack.py` — `## ⚠ Capture issues` renders segment list + gaps. `test_video_segments.py` (6).
+- [x] `analyze/health.py` — multi-segment informational warning. `test_health.py` (+2).
+
+### Live-verify (NO unit test — chrome.* / getDisplayMedia / shadow-DOM overlay)
+- [ ] **Re-share flow** — record → click Chrome's "Stop sharing" → overlay shows amber Re-share
+      button + amber rec dot → click Re-share → "Choose what to share" picker appears → pick →
+      recording continues. Then export + `validate_bundle.py` PASS; `manifest.json` has
+      `video_segments` with 2+ offsets and `video_ended_early: false`; `video.webm` plays end-to-end
+      (one file, stitched); `python3 analyze/pack.py <bundle> --out <pack>` → `<pack>/context.md`
+      `## ⚠ Capture issues` lists the segment gap.
+- [ ] **Mic continuity across the gap** — narrate before + after the re-share; confirm
+      `narration_in_video: true` and `narration_truncated: false` (the mic track is independent of
+      the screen share and stays continuous).
+- [ ] **Multi-segment (2+ re-shares)** — click Stop sharing → Re-share → Stop sharing → Re-share
+      again → Finish. `video_segments` has 3 entries; each gap is listed in the pack.
+- [ ] **Re-share cancel** — click Re-share → cancel the picker → overlay STAYS armed (Re-share
+      button still shows, amber dot); click Re-share again → pick → recording continues.
+- [ ] **Restart during awaiting** — click Stop sharing → click Restart (not Re-share) → confirms
+      discards the dead take entirely and starts a fresh arming sequence (re-prompts the picker).
 
 ## ✅ Done 2026-06-23 — machine-local pointer so a raw zip finds the pipeline (Step 0) — built + unit-tested
 
@@ -146,6 +185,36 @@ declarative that trips a pattern). Build it like `analyze/adapters/run_claude.py
 (no API key required for the core), explicit opt-in, reads `todos.json` + `context.md` and returns
 a refined list with the same `{t, type, text, evidence}` shape. Must NOT become a hard dependency —
 the no-provider-lock-in default is the whole point of the stdlib core.
+
+## ▶ TODO 2026-06-25 — animated GIFs of key actions for docs (feature request, Adam) — NEEDS SCOPING
+
+Adam (2026-06-25): the docs output should be able to produce **short GIFs of key actions** (e.g. a
+click → menu opens, a form fill, a toggle flip), not just still screenshots — to make SOPs clearer.
+"Not sure how we do it" — so this needs a small plan before building. First-cut feasibility (the
+pieces already exist, nothing new to add):
+
+- **Source = `video.webm`, not `frames/`.** The bundle already carries the full screen recording
+  aligned to t0; `frames/` are sparse (3s timer + event triggers) so they can't make smooth motion.
+  A GIF of a key action = a short clip cut around that action's timestamp.
+- **ffmpeg is already a dependency** (transcribe.py uses it; setup.sh hard-gates it). GIF cut is
+  `ffmpeg -ss <t-pre> -t <dur> -i video.webm -vf "fps=12,scale=900:-1:flags=lanczos,palettegen→paletteuse"`
+  (two-pass palette for quality; cap fps/width/seconds because GIFs balloon fast). A modern alt is an
+  animated **WebP/APNG** (smaller, sharper) — decide GIF-for-universal-paste vs WebP-for-quality.
+- **"Key action" already has a definition in the pack.** Candidates, in priority order: the
+  `annotation:select`/`annotation:draw` marks (the user literally pointed at these), then each
+  **Step** boundary, then click/nav events. Reuse the Steps segmentation + annotation timestamps —
+  don't invent a new selector for "important."
+- **Window math:** start ≈ action_t − ~1.2s, length ≈ 2.5–4s, clamped to the recording; crop the
+  recorder overlay the same way the stills are cropped (`crop=iw-16:ih-88:8:8`, but verify per-capture
+  geometry). Overlay the click point/element box (we already compute these for `frames-annotated.html`).
+- **Where it lives:** an OPTIONAL analyze-side step (like the auto-transcribe / annotated-html), off by
+  default (extra CPU + disk), opt-in flag on `pack.py`, writing `clips/step-NN.gif` + referencing them
+  from `context.md`/the doc. The **documentation skill** then embeds them. Notion renders GIFs inline
+  (and the Import→Markdown zip carries them like images), so the delivery path is unchanged.
+- **Open questions to settle in the plan:** GIF vs animated WebP; which event class is the default
+  "key action" set (annotations only, or Steps too); size/length/fps caps + total-output budget; do we
+  also burn in the cursor/click highlight; and the PII reminder (clips are unredacted video, same as
+  frames). **SCOPE IT FIRST** — small "Building Full" task, not a one-off script.
 
 ## ✅ Done 2026-06-23 — overlay pill: draggable + collapse-to-readouts (NEEDS A LIVE CHROME VERIFY)
 
@@ -365,9 +434,14 @@ bundle, with no us in the loop**, can review it and produce the outcome the user
 the PROCESS and the OUTPUT QUALITY. Each test = record a real session with the purpose set → export the
 bundle → hand it to a fresh AI (e.g. Claude / Claude Code) → judge whether the deliverable matches intent.
 
-- [ ] **1. Documentation building** (purpose `docs` → `SOP.md`). Record a real process / feature
-      walkthrough, narrating the *why*. Check a fresh AI turns the bundle into clear, human-followable
-      documentation — preconditions, happy path, decision points — without us explaining anything.
+- [x] **1. Documentation building** (purpose `docs` → `SOP.md`) — ✅ PASSED 2026-06-25. Real
+      `docs`-purpose recording (`capture-2026-06-25T14-19-41-067Z`, ~7 min, JustCall new-number
+      provisioning) → `pack.py` (auto-transcribed clean parakeet narration) → produced an illustrated
+      Notion-import SOP (6 overlay-cropped screenshots + paste-ready `.md`). No manual stream-join; the
+      narrated Steps + frames carried the whole procedure. Validator PASS/0-warn; `health.json`
+      confirmed the frame-index fix live (manifest under-indexed 1/171 frames from a worker restart, disk
+      rebuild recovered it). Caveat learned: ambiguous spoken toggle narration ("do not turn that on")
+      mis-led the draft — the frame alone wasn't enough; Adam disambiguated. See `learnings.md` 2026-06-25.
 - [ ] **2. Skill building for process replacement** (purpose `skill` → `SKILL.md` +
       `automation.suggestions.md`). Record a manual process you'd normally do by hand (Adam's example: a
       spreadsheet workflow, keystrokes and all). Check the AI can produce EITHER (a) a skill it runs *in

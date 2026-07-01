@@ -4,6 +4,100 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-07-01 (Re-share after "Stop sharing" — multi-segment video.webm)
+
+Adam clicked Chrome's "Stop sharing" mid-session and asked if he could recover.
+The pre-existing `track.onended` handler flagged `video_ended_early` but the
+take was unrecoverable — Finish gave a data-only-after-the-gap bundle, Cancel
+lost everything. Built a Re-share flow: the overlay surfaces an amber pulsing
+Re-share button the instant the share dies; clicking it re-opens the picker and
+the new video becomes a second segment of the same `video.webm`.
+
+- **`getDisplayMedia` can be re-invoked from the offscreen doc on an overlay
+  click.** The initial arm works because the offscreen doc's `DISPLAY_MEDIA`
+  reason waives the user-gesture requirement — the waiver comes from the
+  document's reason, NOT a carried gesture. So a re-share triggered by an
+  overlay click (content-script context) relayed through the worker to the
+  offscreen doc uses the exact same path and works the same way. This was the
+  central design risk; it's the same pattern the initial picker already uses
+  successfully. (LIVE-VERIFY still owed.)
+- **The mic track is independent of the screen share and stays continuous
+  across a re-share.** `activeTracks` keeps the mic `MediaStream` separate from
+  the screen stream; on re-share, drop only the dead VIDEO tracks, keep the
+  audio tracks, add the new video tracks. Narration is unbroken across the gap.
+  The gap is VIDEO-ONLY — events/network/frames all keep capturing (they don't
+  depend on the video track).
+- **The recording clock does NOT reset on re-share.** `t0` is unchanged; events
+  keep their timestamps. The manifest's `video_segments: [{offset_ms}]` declares
+  each segment's start offset so the analyze side can map events to segments and
+  flag the gaps. `video_ended_early` is now refined to mean "ended UNRECOVERED"
+  — false once a re-share is live.
+- **Same-codec MediaRecorder segments concatenate cleanly at the byte level.**
+  Each MediaRecorder segment is a complete, playable webm (its own EBML header +
+  clusters); `new Blob([...segments], {type:"video/webm"})` produces a valid webm
+  that players and ffmpeg read end-to-end. The first segment's header wins and
+  subsequent headers are tolerated (ffmpeg skips them). This is how long-form webm
+  screen recorders stitch. Extracted to pure `extension/src/segments.js`
+  (`concatSegments`/`sealSegment`/`segmentOffsetsFor`) so it's unit-testable
+  without DOM/chrome.*.
+- **`streams` filter must OR over video AND audio tracks.** When dropping the
+  dead screen stream on re-share, the obvious filter `s.getVideoTracks().some(t
+  => t.readyState === "live")` would INCORRECTLY drop the mic stream (a mic
+  stream has NO video tracks → `.some()` is false on an empty array). Use
+  `s.getTracks().some(...)` to keep any stream with a live track of any kind.
+- **Multi-segment is INFORMATIONAL, not a hard partial flag.** A recovered
+  re-share isn't "ended early" — the take ran to the end with a video gap. So
+  `health.py`'s `ok` stays true for multi-segment; the gaps surface as a
+  warning, and `pack.py`'s `## ⚠ Capture issues` lists each segment's offset +
+  the gap before it. `video_ended_early` only flips true if the take ENDS with
+  an unrecovered dead track.
+- **Persist `awaitingReshare` so a worker restart during the gap window keeps
+  the button armed.** Same rationale as the other session fields: the MV3
+  worker can die during the awaiting window (the frame timer + event ingest
+  keep it warm, but a re-share that takes the user a while to click could
+  overlap a worker teardown). `session.js` round-trips it.
+- **Re-anchor `captureSurface`/`captureTabId`/`captureWindowId` after a
+  re-share.** A re-share may pick a DIFFERENT surface kind (tab → window, etc.);
+  the scope anchors must update so `inScope()` keeps gating capture/overlay to
+  the new video. New `applyCaptureSurface()` helper re-anchors to the
+  currently-active tab (same proxy heuristic as `goLive`).
+
+## 2026-06-25 (PROCESS test 1 PASSED — docs-purpose recording → illustrated Notion SOP — end-to-end on a real bundle)
+
+First real run of the "documentation building" outcome test (`to-do-current.md` PROCESS tests).
+Adam handed `~/Downloads/capture-2026-06-25T14-19-41-067Z` (a `docs`-purpose, ~7-min JustCall
+new-number provisioning walkthrough) and asked to verify the recent fixes worked, then produce a
+Notion-formatted doc. Ran the normal pipeline (`validate_bundle.py` → `.venv/bin/python pack.py`).
+Outcome: clean. Durable findings:
+
+- **The pipeline did its job with zero manual stream-join.** `pack.py` auto-transcribed the narration
+  (parakeet, clean) and the auto-segmented **Steps + bound narration + linked frames** carried the
+  entire procedure — buy → vet → configure → cleanup — without hand-stitching transcript/timeline/HAR.
+  This is the "hand the pack, not the raw zip" thesis paying off on a real recording.
+- **`health.json` frame-index fix confirmed live, not just in tests.** The manifest under-indexed
+  **1 of 171** frames (the service-worker-restart signature); the disk rebuild recovered it, so all 171
+  were usable and `health.warnings` said so. First in-the-wild confirmation of the 2026-06-23 health fix.
+- **A heuristic doc-builder will confidently mis-resolve an ambiguous spoken toggle — flag, don't
+  guess.** Narration: *"Call recordings must be on. Um, do not turn that on. Call transcription should
+  be on."* The Recording & Transcripts FRAME showed Call-recording ON, Call-recording-**compliance**
+  OFF, Voicemail-transcription OFF, Call-transcription ON — so I inferred "do not turn that on" =
+  recording-compliance and documented it OFF. **Wrong.** Adam: recording-compliance must be **ON**; the
+  "do not turn that on" was **Voicemail transcription** (already off, a paid add-on). Lesson: a deictic
+  ("that") over a panel of toggles is genuinely ambiguous, and the frame's *current* state ≠ the
+  *desired* end state (the user may flip it after the screenshot). For settings/toggles, surface the
+  ambiguity as an explicit open question rather than committing an interpretation into the doc body —
+  the AskUserQuestion confirm-pass is cheap and the doc is authoritative once wrong.
+- **Notion delivery mechanics (re-confirmed from the documentation skill):** paste won't carry local
+  images → ship a zip with `SOP.md` at the **root** + `images/` beside it for Notion **Import →
+  Markdown & CSV** (single page). Crop the recorder overlay with `ffmpeg -vf "crop=iw-16:ih-88:8:8"`
+  (frames are 1910×919; the floating pill sits in the bottom ~80px). Frames carry real PII (rep names,
+  live numbers) — internal-only callout on the doc.
+- **Authoring discipline that worked:** kept the doc to what Adam actually said — documented the
+  state-pick *method* (not "use Oklahoma," which he flagged as person-specific), and led with his
+  explicit "a new number isn't guaranteed clean / recycled VoIP" warning. Open questions all resolved
+  by Adam: all THREE compliance registrations (SMS/A2P 10DLC, CNAM, Voice Integrity) required; CNAM
+  name = "Datacrew"; no approved state/area-code list (pick any, just avoid high-spam — Texas bad now).
+
 ## 2026-06-23 (machine-local pointer so a bundle can find the pipeline — Step 0)
 
 The 2026-06-23 pack-finalize batch decided "hand the pack, not the raw zip," but Adam
