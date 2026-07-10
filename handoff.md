@@ -1,5 +1,40 @@
 # Handoff (v2)
 
+## ✅ DONE 2026-07-08 — ⌥-click instant Selector (hotkey to mark an element) — built; NEEDS A LIVE CHROME VERIFY
+
+Adam asked whether the Selector records the exact DOM element he clicks so an agent
+can align "this button" (narration) with the element he marked. **It does** — Select
+emits `annotation:select` with the unique `selector` + semantic `ctx` + rect, stamped
+on the same `t0` as the narration, and `pack.py` already fuses mark+narration+frame in
+`## ✦ Annotations`. He then asked for a hotkey so a single click marks the element
+under the cursor without arming Select first. He said "fn + click" — but **the fn key
+is never delivered to the browser** (OS/hardware layer; no `event.fnKey`), so it can't
+key a shortcut. He chose **Option (⌥) / Alt** instead (least native-collision modifier).
+
+**What shipped** (`extension/src/content.js` only; no unit test — shadow-DOM + chrome.*
++ real-click dependent; 130 node / 267 python still green):
+- **⌥-click anywhere while recording → instant `annotation:select`** on the exact
+  element under the cursor — the SAME event the Select tool emits, so transcript↔element
+  correlation is identical. Guard at the top of the document `onClick`: `e.altKey &&
+  recording && !capturePaused && !annotate.mode()` → `preventDefault` +
+  `stopImmediatePropagation` (capture phase — the real button/link never fires, so you
+  can mark a Delete button without deleting) → `annotate.quickSelect(e.target)` → return.
+- Extracted `markElement(el)` (emit + flash the red box into the video) out of `onPick`;
+  both the tool and the hotkey use it. `annotate.quickSelect(el)` builds the canvas
+  layer on demand (stays non-interactive since no mode is active) and marks.
+- New top-level `capturePaused` mirror (the overlay's `paused` is IIFE-local,
+  unreachable from the click handler) synced from `overlay-state`/`start`/`stop` — so
+  ⌥-click is inert while paused (off-record).
+- Select button tooltip now reads "… or ⌥-click any element to mark it instantly" for
+  discoverability.
+
+**▶ LIVE-VERIFY (interactive, no unit test):** record → **⌥-click a button/link** →
+a red box flashes on it, the underlying button/link does NOT activate, and
+`timeline.json` gets an `annotation:select` with the right `selector`/`ctx`; ⌥-click a
+plain element (no arming Select) works the same; ⌥-click while **Paused** does nothing;
+a normal (no-⌥) click still logs a `click` and still triggers the page. Then
+`pack.py` → `## ✦ Annotations` lists the ⌥-marked elements.
+
 ## ✅ DONE 2026-07-01 — RE-SHARE after "Stop sharing" (multi-segment video) — built + unit-tested
 
 Adam clicked Chrome's "Stop sharing" mid-session and asked if he could recover.

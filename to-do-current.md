@@ -6,6 +6,30 @@ segmentation, frame annotation / "draw on screen"). Code is built and unit-teste
 (265 python / 129 node; DOM capture also harness-verified); the extension still needs a live-Chrome
 run. Completed v2 work is in `to-do-completed.md`; inherited v1 work is in the v1 repo.
 
+## ✅ Done 2026-07-08 — ⌥-click instant Selector (mark an element with a hotkey) — built; NEEDS A LIVE CHROME VERIFY
+
+Adam confirmed the Selector records the exact DOM element (unique `selector` + semantic `ctx` +
+rect, on the narration `t0` clock — `pack.py` already fuses mark+narration+frame) and asked for a
+click hotkey so one gesture marks the element under the cursor without arming Select first. "fn +
+click" isn't possible (the fn key never reaches the browser), so **Option (⌥) / Alt** was chosen.
+Built in `extension/src/content.js` (no unit test — shadow-DOM/chrome.*/real-click; 130 node / 267
+python green). Details in `handoff.md` + `learnings.md` 2026-07-08.
+
+- [x] ⌥-click while recording → instant `annotation:select` on `e.target` (same event as the Select
+      tool). Guard in `onClick`: `e.altKey && recording && !capturePaused && !annotate.mode()` →
+      `preventDefault` + `stopImmediatePropagation` (real click suppressed) → `annotate.quickSelect`.
+- [x] Extracted `markElement(el)` from `onPick`; added `annotate.quickSelect(el)` (builds the canvas
+      layer on demand). Top-level `capturePaused` mirror synced from `overlay-state`/`start`/`stop`.
+- [x] Select button tooltip mentions ⌥-click.
+
+### Live-verify (NO unit test)
+- [ ] Record → **⌥-click a button/link** → red box flashes, the button/link does NOT fire (no
+      navigation/delete), `timeline.json` gets `annotation:select` with the right `selector`/`ctx`.
+- [ ] ⌥-click a plain element **without** opening Select first → marks the same way.
+- [ ] ⌥-click while **Paused** → nothing happens (off-record).
+- [ ] A normal (no-⌥) click still logs a `click` AND still activates the page element (not suppressed).
+- [ ] `python3 analyze/pack.py <bundle> --out <pack>` → `## ✦ Annotations` lists the ⌥-marked elements.
+
 ## ✅ Done 2026-07-01 — Re-share after "Stop sharing" (multi-segment video) — built + unit-tested
 
 Adam clicked "Stop sharing" mid-session and asked if he could recover. Built a Re-share flow:

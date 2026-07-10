@@ -4,6 +4,37 @@ Dated findings specific to v2. v1's learnings (MV3 gotchas, redaction, ASR, the
 unique-selector algorithm, etc.) live in the v1 repo and still apply — v2 inherits
 that code unchanged.
 
+## 2026-07-08 (⌥-click instant-select — and why it can't be the fn key)
+
+Adam asked for a hotkey that, on a mouse click, fires the Selector on the exact
+element under the cursor — so instead of arming Select → hover → click, one
+gesture marks the element. His words were "fn + click." Two findings:
+
+- **The `fn` key is invisible to the browser.** On macOS `fn` is handled at the
+  hardware/OS layer; it never reaches web content. There is no `event.fnKey`, and
+  `fn` doesn't even fire a keydown. So an extension literally cannot key a shortcut
+  off it. Every OTHER modifier IS exposed on mouse/keyboard events
+  (`altKey`/`metaKey`/`ctrlKey`/`shiftKey`), so the achievable version is a
+  modifier+click. Adam chose **Option (⌥) / Alt** — it has almost no native browser
+  meaning, so it won't fight the page (Cmd+click = open-in-new-tab, Ctrl+click =
+  macOS right-click). Layer-1 constraint worth remembering for any future in-page
+  hotkey ask: pick from the four exposed modifiers, never fn.
+- **⌥-click reuses the exact same `annotation:select` path as the Select tool**, so
+  the transcript↔element correlation (the whole point — the user says "this button"
+  while marking it, both on the same `t0` clock) is identical whether marked by the
+  tool or the hotkey. Implemented by extracting `markElement(el)` (emit + flash the
+  box into the video) out of `onPick`, adding `annotate.quickSelect(el)` (builds the
+  canvas layer if the user never opened Select/Draw, stays non-interactive), and a
+  guard at the top of the document `onClick`: `e.altKey && recording &&
+  !capturePaused && !annotate.mode()` → `preventDefault` + `stopImmediatePropagation`
+  (capture phase, so the real button/link never fires — you can mark a Delete button
+  without deleting) → `quickSelect(e.target)` → return (no plain `click` logged).
+- **The paused gate needed a top-level mirror.** The overlay tracks `paused` inside
+  its IIFE, unreachable from the document click handler; paused = off-record, so
+  ⌥-click must be inert then. Added `capturePaused`, synced from `overlay-state` /
+  `startCapture` / `stopCapture`. No unit test (shadow-DOM + chrome.* + real click),
+  so it needs a live-Chrome verify.
+
 ## 2026-07-01 (Re-share after "Stop sharing" — multi-segment video.webm)
 
 Adam clicked Chrome's "Stop sharing" mid-session and asked if he could recover.
