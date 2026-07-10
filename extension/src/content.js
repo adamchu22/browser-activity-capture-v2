@@ -29,6 +29,11 @@
   const DWELL_MS = 500; // cursor must rest this long on an element to log a hover
 
   let recording = false;
+  // Mirror of the recording's paused state at the top level. The overlay tracks
+  // its own `paused` inside its IIFE (out of reach here), but the document click
+  // handler needs it to gate ⌥-click instant-select — paused means off-record,
+  // so no annotation should be captured then. Kept in sync from `overlay-state`.
+  let capturePaused = false;
   let rrwebStop = null;
 
   // Send to the worker, but never throw. When the unpacked extension is reloaded,
@@ -311,6 +316,19 @@
   }
 
   function onClick(e) {
+    // ⌥-click (Alt+click) = instant Selector on the exact element under the cursor,
+    // with no need to arm the Select tool first. It emits the SAME annotation:select
+    // event a manual Select click would, so the user + agent align on that element.
+    // We suppress the real click (capture-phase stopImmediatePropagation + preventDefault)
+    // so marking a Delete button / link doesn't ALSO trigger it. Gated on an active,
+    // non-paused recording and no annotation mode already running. (The fn key can't
+    // be used — browsers never receive it; ⌥ is exposed as e.altKey.)
+    if (e.altKey && recording && !capturePaused && !annotate.mode()) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      annotate.quickSelect(e.target);
+      return;
+    }
     // While an annotation tool is active, the catcher intercepts the click — don't
     // also log it as a workflow click (the event still bubbles to this document
     // listener, retargeted to our annotation host).
@@ -523,7 +541,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <span class="sep"></span>
-          <button id="select" title="Pick an element you mean">Select</button>
+          <button id="select" title="Pick an element you mean — or ⌥-click any element to mark it instantly">Select</button>
           <button id="draw" title="Draw on the screen">Draw</button>
           <span class="sep"></span>
           <button id="pause">Pause</button>
@@ -899,14 +917,10 @@
     function hideOutline() {
       if (outline) outline.style.display = "none";
     }
-    function onPick(e) {
-      if (mode !== "select") return;
-      // Don't let the pick double as a real page click / navigation.
-      e.preventDefault();
-      e.stopPropagation();
-      // Resolve from the click point, not the cached hover — the wheel handler scrolls
-      // without firing onMove, so `hovered` can be stale after a scroll.
-      const el = pageElAt(e.clientX, e.clientY) || hovered;
+    // Emit annotation:select for `el` and flash its box onto the canvas so the
+    // confirmation lands in the video. Shared by the Select tool (onPick) and the
+    // ⌥-click fast path (quickSelect).
+    function markElement(el) {
       if (!el || el.nodeType !== 1) return;
       const r = el.getBoundingClientRect();
       emit("annotation:select", {
@@ -915,12 +929,31 @@
         ctx: describe(el),
         ...positionFor(r.x + r.width / 2, r.y + r.height / 2, el),
       });
-      // Flash the picked box onto the canvas so the confirmation lands in the video.
       holdFade();
       ctx.strokeStyle = STROKE;
       ctx.lineWidth = 3;
       ctx.strokeRect(r.x, r.y, r.width, r.height);
       scheduleFade();
+    }
+
+    function onPick(e) {
+      if (mode !== "select") return;
+      // Don't let the pick double as a real page click / navigation.
+      e.preventDefault();
+      e.stopPropagation();
+      // Resolve from the click point, not the cached hover — the wheel handler scrolls
+      // without firing onMove, so `hovered` can be stale after a scroll.
+      const el = pageElAt(e.clientX, e.clientY) || hovered;
+      markElement(el);
+    }
+
+    // ⌥-click fast path: mark an element without arming the Select tool. The layer
+    // may not exist yet (user never opened Select/Draw), so build it first; it stays
+    // non-interactive (catcher pointer-events:none) since no mode is active.
+    function quickSelect(el) {
+      if (!el || el.nodeType !== 1) return;
+      ensureLayer();
+      markElement(el);
     }
 
     function onMove(e) {
@@ -992,7 +1025,7 @@
       host = shadow = catcher = canvas = ctx = outline = hint = null;
     }
 
-    return { setMode, exit, teardown, mode: () => mode, onChange: null };
+    return { setMode, exit, teardown, quickSelect, mode: () => mode, onChange: null };
   })();
 
   // --- pre-recording countdown ----------------------------------------------
@@ -1117,6 +1150,7 @@
       return;
     }
     recording = true;
+    capturePaused = !!(meta && meta.paused);
     overlay.mount(meta);
     emit("nav", { url: location.href });
     startRrweb();
@@ -1130,6 +1164,7 @@
 
   function stopCapture() {
     recording = false;
+    capturePaused = false;
     rrwebStop?.();
     rrwebStop = null;
     document.removeEventListener("click", onClick, true);
@@ -1155,7 +1190,10 @@
     if (msg.type === "countdown") countdown.show(msg.n);
     // Worker pushes live state to every tab so all overlays stay in sync
     // (pause/resume, Restart's new t0) regardless of which tab is focused.
-    if (msg.type === "overlay-state") overlay.update(msg.state);
+    if (msg.type === "overlay-state") {
+      capturePaused = !!(msg.state && msg.state.paused);
+      overlay.update(msg.state);
+    }
     // Live mic loudness (~12/sec) → animate the overlay's level meter.
     if (msg.type === "mic-level") overlay.setMicLevel(msg.level);
     // The worker pings this (via tabs.sendMessage) to check we're already here
