@@ -3,7 +3,7 @@
 //      on a server-rendered app (network survives, clicks/rrweb/frames don't).
 //   2. Capture only tabs the user enters — a background tab loading must NOT be
 //      instrumented (that swept up password-manager / chat / calendar tabs).
-// See learnings.md 2026-06-17.
+//
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

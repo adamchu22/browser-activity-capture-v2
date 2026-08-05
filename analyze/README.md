@@ -41,8 +41,7 @@ python autopack.py --watch          # poll forever (or run from cron/launchd)
 
 Idempotent (skips zips already packed) and best-effort per zip. Per-user locations go
 in `analyze/autopack.config.json` (git-ignored): `{"watch_dirs": ["~/Downloads"],
-"packs_dir": "~/captures/packs"}`. Installing this as a background service on a new
-machine is the "install on new computers" task — see `to-do-current.md`.
+"packs_dir": "~/captures/packs"}`.
 
 ## 1. Build the pack (no API key, no network)
 

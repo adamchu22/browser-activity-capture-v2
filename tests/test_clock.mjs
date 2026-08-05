@@ -4,7 +4,7 @@
 // JUMP FORWARD by the pause length, and frames/events stamped after a pause
 // drifted past the (pause-excluding) video. The clock must subtract all paused
 // time so it tracks video.webm. This matters more now that the blocklist
-// auto-pauses on every sensitive-tab visit. See learnings.md.
+// auto-pauses on every sensitive-tab visit.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

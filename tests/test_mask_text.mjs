@@ -3,7 +3,7 @@
 // Slack, or Notion would land in events.jsonl verbatim. These lock the masking
 // contract we hand to rrweb. The selector→DOM matching + incremental-mutation
 // masking are rrweb internals, exercised live; here we pin the two pure pieces:
-// the marker function and the selector shape. See learnings.md (Track B).
+// the marker function and the selector shape.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

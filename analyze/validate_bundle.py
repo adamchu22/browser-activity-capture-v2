@@ -196,7 +196,7 @@ def check_coverage_gap(timeline, manifest, r: Report):
     (clicks/rrweb/frames) stopped while network kept recording. The bundle is
     still well-formed and usable — so this is a loud WARNING, not a hard failure —
     but it means part of the session was captured network-only. See
-    analyze/check_coverage.py and learnings.md 2026-06-17."""
+    analyze/check_coverage.py."""
     res = analyze_coverage(timeline, manifest.get("frames", []), manifest.get("duration_ms"))
     for f in res["failures"]:
         r.warn(f"CAPTURE GAP — {f}")

@@ -2,7 +2,7 @@
 
 Locks the detector for the "content script died mid-session, only network kept
 recording" bug — the failure mode that lost ~4.5 min of a 6 min server-rendered
-session. See learnings.md 2026-06-17.
+session.
 """
 
 import unittest

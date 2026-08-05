@@ -163,10 +163,5 @@ extension is a loadable MV3 scaffold: clock, event/timeline capture, CDP→HAR,
 frames, zip export are wired; rrweb and the offscreen video path are marked
 integration points still being live-verified. Next milestone is a first live
 capture that round-trips the whole pipeline — see
-[`extension/FIRST-CAPTURE.md`](extension/FIRST-CAPTURE.md) and
-[`LIVE-TEST.md`](LIVE-TEST.md).
-
-Long-form status notes live in `handoff.md`, `learnings.md`, and
-`to-do-current.md` — read those for context on what's been tried and what's
-owed, but treat `README.md`, this file, and the `docs/` design doc as the
-authoritative description of intent.
+[`extension/FIRST-CAPTURE.md`](extension/FIRST-CAPTURE.md). Treat `README.md`,
+this file, and the `docs/` design doc as the authoritative description of intent.

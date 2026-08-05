@@ -11,7 +11,7 @@ born ready to act on, not just a quote.
 This is the heuristic core: keyword/shape classification, stdlib-only, so it
 runs with no model and no network (preserving pack.py's no-provider-lock-in
 default). An optional LLM pass can refine/augment it later (catching implicit
-intent the keywords miss) — see `to-do-current.md`. Pure and defensive: takes
+intent the keywords miss). Pure and defensive: takes
 parsed `speech` cues (`[{"t", "text"}]`) and the merged `timeline`; never raises.
 """
 from __future__ import annotations

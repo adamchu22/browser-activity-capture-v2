@@ -4,7 +4,7 @@
 // (network auth flow + the vault visible in frames) even though 1Password was
 // meant to be excluded — the old exact-string match never fired unless the entry
 // equalled the host character-for-character. Suffix matching + input tolerance
-// fixes that. See learnings.md.
+// fixes that.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

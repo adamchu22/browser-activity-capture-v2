@@ -7,8 +7,8 @@
 // waives the user-gesture requirement). The recording follows the user across
 // every tab and window — not pinned to one tab like v1's tabCapture. This is
 // Chrome's recommended MV3 screen-capture path: a desktopCapture streamId minted
-// elsewhere is NOT consumable here (throws "Invalid state") — see learnings.md
-// 2026-06-17. getDisplayMedia shows its own picker; if the user cancels we report
+// elsewhere is NOT consumable here (throws "Invalid state"). getDisplayMedia
+// shows its own picker; if the user cancels we report
 // no video and the worker records data-only.
 //
 // Why the mic lives here: narration is one of the capture modalities, but the

@@ -4,7 +4,7 @@ Point it at a folder (where the extension downloads captures) and it builds a
 pack for every capture zip that doesn't have one yet — so "record → hand off the
 pack" needs no manual `pack.py` step per recording. It's idempotent (skips zips
 already packed) and best-effort per zip (one bad zip doesn't stop the rest), so a
-scheduler (launchd / Task Scheduler / a systemd timer — see PLAN-autopack-install.md)
+scheduler (launchd / Task Scheduler / a systemd timer)
 can just call it on a timer, or a person can run it by hand.
 
     python analyze/autopack.py                 # one pass over configured/default location(s)
@@ -23,8 +23,7 @@ With no config and no argument it defaults to ~/Downloads, packs written beside
 each zip as `<name>-pack/`.
 
 Built to run UNATTENDED as a background service, so it guards the failure modes a
-human-watched manual run survives but a silent service does not (see
-PLAN-autopack-install.md R1–R6 / D4b):
+human-watched manual run survives but a silent service does not:
   • atomic builds — build into a `.tmp` sibling, then os.replace into place, so an
     interrupted build (sleep/kill/timeout) never leaves a half-pack that the
     idempotency check would skip forever;

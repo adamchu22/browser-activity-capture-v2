@@ -16,7 +16,7 @@
 //     ACTIVE tab finishing a load while still untracked — which covers the
 //     recording tab navigating from a restricted page (chrome://) to a real one.
 //
-// See learnings.md 2026-06-17. Returns an array (actions are independent):
+// Returns an array (actions are independent):
 //   "reattach"   — tracked tab (re)loaded / changed URL: re-arm content capture.
 //   "emitnav"    — tracked tab changed URL in place (SPA pushState / hash): the
 //                  worker must log a nav event because content.js won't.

@@ -2,7 +2,7 @@
 
 A capture gap (content script died, only network survived) must surface as a
 loud WARNING in validation — but NOT fail an otherwise well-formed bundle
-(it's still usable, just incomplete). See learnings.md 2026-06-17.
+(it's still usable, just incomplete).
 """
 
 import io

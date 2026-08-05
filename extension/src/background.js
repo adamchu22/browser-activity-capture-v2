@@ -319,8 +319,7 @@ async function instrumentTab(tabId) {
 // freshly-loaded content script is supposed to self-attach, but that single
 // fire-and-forget check is unreliable; the worker stays alive throughout (the
 // debugger keeps it warm), so we re-push capture from here on every navigation.
-// We deliberately do NOT touch the debugger — it survives the navigation. See
-// learnings.md 2026-06-17.
+// We deliberately do NOT touch the debugger — it survives the navigation.
 async function reattachTab(tabId, tab) {
   if (!state.recording || !state.tabIds.has(tabId)) return;
   // Keep the tab legend + URL set current as the user navigates.
@@ -448,7 +447,7 @@ async function runCountdownThenGo() {
 // tab for real (mounts the pill, starts rrweb + listeners), and tell the offscreen
 // recorder to start — all against the fresh t0. Other tabs are instrumented lazily
 // when the user switches into them (tabs.onActivated), so we capture what they
-// actually do, not every open tab. See nav-policy.js / learnings.md 2026-06-17.
+// actually do, not every open tab. See nav-policy.js.
 async function goLive() {
   if (!state.arming) return;
   state.arming = false;
@@ -942,7 +941,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   // "reattach": a tracked tab finished (re)loading / changed URL — re-arm the
   // content-script capture a navigation tears down. The debugger is left
   // attached. Fix for capture dying after the first navigation on server-
-  // rendered apps (see nav-policy.js / learnings.md).
+  // rendered apps (see nav-policy.js).
   if (actions.includes("reattach")) reattachTab(tabId, tab);
   // "emitnav": an in-place URL change (SPA pushState/replaceState or a hash change).
   // content.js only emits a nav on popstate, so without this the timeline loses the
@@ -1239,7 +1238,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // <a href> that can carry a token in their query string (?jwt=…). That stream
     // (events.jsonl) bypasses the URL/body scrubbers, so scrub the whole serialized
     // node for token shapes here. Same net as redactBody; lockstep with the
-    // validator's TOKEN_RE. See learnings.md 2026-06-17.
+    // validator's TOKEN_RE.
     if (state.recording && !state.paused)
       db.append("rrweb", { t: now(), node: scrubNode(msg.node), tab: sender.tab?.id }).catch((e) => noteWriteFailure("rrweb-write", e));
   }
@@ -1384,8 +1383,8 @@ async function ensureOffscreen() {
 
 // Kicks off whole-screen video. The offscreen document does the actual work: it
 // calls getDisplayMedia() itself (Chrome's recommended MV3 path — a desktopCapture
-// streamId minted in the worker is NOT consumable in offscreen; see learnings.md
-// 2026-06-17). The screen picker therefore appears asynchronously inside offscreen,
+// streamId minted in the worker is NOT consumable in offscreen). The screen
+// picker therefore appears asynchronously inside offscreen,
 // so we can't know here whether the user picked or cancelled — the real outcome
 // (a video.webm, or none) is reported back at stop time and recorded in the
 // manifest. Returns true to mean "video was attempted".

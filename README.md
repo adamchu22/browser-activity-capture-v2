@@ -3,7 +3,7 @@
 > **v2** records your **whole screen across all tabs** (v1 recorded one pinned tab).
 > It's forked from the working v1 tool, which stays intact in its own repo. The v2
 > capture rework is **built and unit-tested but not yet verified in live Chrome** —
-> run [`LIVE-TEST.md`](LIVE-TEST.md) before trusting it.
+> run [`extension/FIRST-CAPTURE.md`](extension/FIRST-CAPTURE.md) before trusting it.
 
 Capture what you do in Chrome — narration/transcript, screen, timestamped
 clicks/keystrokes/navigation, and network requests — aligned on one timeline and
@@ -28,7 +28,8 @@ The full pipeline (record → narrate → transcribe → analysis pack) works en
 in v1. **v2** reworks capture to **full-screen video + all-tabs instrumentation**:
 the code is built, the analyze side has 37 passing tests, and a synthetic v2 bundle
 round-trips — but the extension itself is **not yet live-verified** (no browser
-runtime in the dev environment). See [`LIVE-TEST.md`](LIVE-TEST.md) and `handoff.md`.
+runtime in the dev environment). See [`extension/FIRST-CAPTURE.md`](extension/FIRST-CAPTURE.md)
+for the load-and-verify checklist.
 
 Decisions taken: full-screen self-record (follows you across tabs), full HAR with
 bodies, in-browser + downloadable zip, analysis-first, **LLM-agnostic** (no provider
