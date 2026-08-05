@@ -34,6 +34,78 @@ Decisions taken: full-screen self-record (follows you across tabs), full HAR wit
 bodies, in-browser + downloadable zip, analysis-first, **LLM-agnostic** (no provider
 lock-in).
 
+## Quick start
+
+Two halves, two steps. Do them in order.
+
+### 1. Load the Chrome extension
+
+> Full checklist (mic enable, screen-share picker, troubleshooting):
+> [`extension/FIRST-CAPTURE.md`](extension/FIRST-CAPTURE.md).
+
+1. (Optional, 30s) Vendor rrweb for raw-DOM capture. Without it you still get the
+   high-level timeline, just no `events.jsonl` stream:
+   ```bash
+   cd extension
+   curl -L https://cdn.jsdelivr.net/npm/rrweb@2.0.0/dist/rrweb.umd.min.cjs \
+        -o src/lib/rrweb.min.js
+   ```
+2. Open `chrome://extensions` → toggle **Developer mode** (top right) →
+   **Load unpacked** → select this repo's `extension/` folder.
+3. Pin it (puzzle-piece icon → pin). Open a normal website tab, click the
+   extension, **Start**, do a short task narrating aloud, **Stop & export** →
+   save `capture-<timestamp>.zip`.
+
+### 2. Set up local transcription (Parakeet / Whisper)
+
+The capture zip ships `transcript.vtt` as a stub. `analyze/pack.py` fills it by
+**auto-transcribing the narration locally** — audio never leaves your machine.
+One-time setup:
+
+```bash
+# macOS or Linux:
+bash analyze/setup.sh
+
+# Windows (PowerShell):
+powershell -ExecutionPolicy Bypass -File analyze\setup.ps1
+```
+
+What the setup does, and what it needs:
+
+- **`ffmpeg` on PATH** (hard requirement — the script exits with the install
+  command if it's missing):
+  - macOS: `brew install ffmpeg`
+  - Linux: `sudo apt-get install ffmpeg`
+  - Windows: `winget install Gyan.FFmpeg` (or `choco install ffmpeg`)
+- Creates a repo-root `.venv` and installs **`faster-whisper`** (cross-platform
+  baseline). On **Apple Silicon** it also installs **`mlx-audio`** for the faster
+  **Parakeet** engine (`mlx-community/parakeet-tdt-0.6b-v3`).
+- Runs `transcribe.py --selftest`, which **downloads the model once** and
+  pre-warms it so your first real capture transcribes fast and offline.
+- Registers the install so capture bundles can find `pack.py` + this `.venv`
+  from any directory (see `analyze/install_pointer.py`).
+
+`pack.py` auto-selects the engine: **Parakeet** on Apple Silicon,
+**faster-whisper** everywhere else. See [`analyze/README.md`](analyze/README.md)
+for picking a non-default engine (`qwen3-asr`) and running the transcriber by hand.
+
+### 3. Validate → pack → hand off
+
+```bash
+# validate the export
+python analyze/validate_bundle.py ~/Downloads/capture-<timestamp>.zip    # expect PASS
+
+# flatten into an agent-ready analysis pack (auto-transcribes)
+mkdir -p /tmp/cap && cd /tmp/cap && unzip ~/Downloads/capture-<timestamp>.zip
+python analyze/pack.py /tmp/cap --out /tmp/analysis-pack
+
+# then hand /tmp/analysis-pack/ to any agent — open context.md and say "follow BRIEF.md"
+```
+
+> **Note:** `pack.py` runs on the system `python` (stdlib, no venv needed for the
+> pack itself) but will only auto-transcribe if the `.venv` from step 2 exists.
+> No `.venv`? The pack still builds; `transcript.vtt` just stays a stub.
+
 ## Layout
 
 - [`docs/01-landscape.md`](docs/01-landscape.md) — what's already solved, build vs. reuse.
@@ -46,7 +118,8 @@ lock-in).
   analysis. Optional reference runners live in `analyze/adapters/` (e.g. Claude).
 - [`extension/`](extension/) — the MV3 Chrome extension that produces real bundles
   (loadable scaffold). See [`extension/FIRST-CAPTURE.md`](extension/FIRST-CAPTURE.md).
-- [`EXTRACT.md`](EXTRACT.md) — how to move this self-contained folder into another repo.
+- [`AGENTS.md`](AGENTS.md) — orientation for coding agents working in this repo.
+- [`EXTRACT.md`](EXTRACT.md) — how to move this self-contained project into another repo.
 
 ## Pipeline
 

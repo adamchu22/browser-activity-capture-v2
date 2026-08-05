@@ -1,18 +1,18 @@
-# EXTRACT — move this folder into another repo
+# EXTRACT — move this tool into another repo
 
-This folder (`browser-activity-capture/`) is self-contained. Use this guide to
-lift it out of the `adamchu22/personal` repo and drop it into another repo as its
-own top-level folder. You can hand this file's contents to a coding agent
-(Claude Code, etc.) as instructions, or follow it by hand.
+This project is self-contained: nothing here imports from outside its own
+folder, so it can be lifted wholesale into another repo (or a fresh repo of its
+own). Use this guide to do it, or hand the file to a coding agent as
+instructions.
 
 ## What you're moving
 
 A browser-activity capture tool in two halves:
 
-1. **`extension/`** — an MV3 Chrome extension that records one tab (clicks,
-   keystrokes, navigation, network, screenshots, video, narration), aligns
-   everything on one clock, and exports a portable **Capture Bundle** (a zip of
-   plain files).
+1. **`extension/`** — an MV3 Chrome extension that records one browser task
+   (clicks, keystrokes, navigation, network, screenshots, video, narration),
+   aligns everything on one clock, and exports a portable **Capture Bundle** (a
+   zip of plain files).
 2. **`analyze/`** — a stdlib-only Python step that validates a bundle and
    flattens it into an **analysis pack** any agent/LLM can read to produce an
    SOP, an agent skill, and automation suggestions. It is **LLM-agnostic** — the
@@ -23,30 +23,29 @@ Supporting: `docs/` (landscape + design), `sample-bundle/` (a hand-made example)
 
 ## Move it (agent or by hand)
 
-Source: repo `adamchu22/personal`, branch `claude/browser-activity-capture-ai-LjUl2`,
-folder `browser-activity-capture/`.
+Clone *this* repository to a temp dir, copy the whole project into the
+destination repo at its root, then commit.
 
 ```bash
-# 1. shallow-clone just that branch into a temp dir
-git clone --depth 1 --branch claude/browser-activity-capture-ai-LjUl2 \
-  https://github.com/adamchu22/personal.git /tmp/personal-src
-#    (or: gh repo clone adamchu22/personal /tmp/personal-src -- \
-#         --depth 1 --branch claude/browser-activity-capture-ai-LjUl2)
+# 1. clone this repo (shallow is fine) into a temp dir
+git clone --depth 1 https://github.com/adamchu22/browser-activity-capture-v2.git \
+  /tmp/bac-src
+#   (or: gh repo clone adamchu22/browser-activity-capture-v2 /tmp/bac-src -- --depth 1)
 
-# 2. copy the folder to the ROOT of the destination repo, WITHOUT git history
-cp -R /tmp/personal-src/browser-activity-capture <DEST_REPO>/browser-activity-capture
+# 2. copy the project to the ROOT of the destination repo, WITHOUT git history
+cp -R /tmp/bac-src <DEST_REPO>/.   # trailing "." copies contents, not a wrapper folder
+#   If you want it nested under a subfolder instead, target that subfolder.
 
 # 3. clean up
-rm -rf /tmp/personal-src
+rm -rf /tmp/bac-src
 
 # 4. verify the Python pieces run (should print PASS)
 cd <DEST_REPO>
-python browser-activity-capture/analyze/validate_bundle.py \
-  browser-activity-capture/sample-bundle
+python analyze/validate_bundle.py sample-bundle
 
 # 5. commit into the destination repo on a new branch (don't push/PR unless asked)
 git checkout -b add-browser-activity-capture
-git add browser-activity-capture
+git add .
 git commit -m "Add browser-activity-capture tool"
 ```
 
@@ -82,19 +81,20 @@ Nothing here imports from outside this folder, so no other paths need fixing.
 
 1. Vendor rrweb once:
    ```bash
-   curl -L https://cdn.jsdelivr.net/npm/rrweb@2.0.0/dist/rrweb.min.js \
-     -o browser-activity-capture/extension/src/lib/rrweb.min.js
+   curl -L https://cdn.jsdelivr.net/npm/rrweb@2.0.0/dist/rrweb.umd.min.cjs \
+     -o extension/src/lib/rrweb.min.js
    ```
 2. Load the extension unpacked: `chrome://extensions` → Developer mode → Load
-   unpacked → pick `browser-activity-capture/extension/`.
+   unpacked → pick `extension/`.
 3. Open a normal website tab → click the extension → **Start recording**. Do a
    task (narrate aloud for a transcript). **Stop & export** → save the zip.
-4. `python browser-activity-capture/analyze/validate_bundle.py ~/Downloads/capture-*.zip`
-   → expect **PASS**.
-5. Unzip, then `python browser-activity-capture/analyze/pack.py <bundle-dir>
-   --out ./analysis-pack`.
+4. `python analyze/validate_bundle.py ~/Downloads/capture-*.zip` → expect **PASS**.
+5. Unzip, then `python analyze/pack.py <bundle-dir> --out ./analysis-pack`.
 6. Hand `analysis-pack/` to any agent → it produces the SOP/skill/automation
    assets for you to review.
+
+See [`README.md`](README.md) § Quick start for the one-time transcription setup
+(Parakeet on Apple Silicon, faster-whisper elsewhere).
 
 ## Current state
 
