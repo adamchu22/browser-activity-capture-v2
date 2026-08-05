@@ -59,3 +59,9 @@ lock-in).
 
 The bundle and the pack are the stable contract. Swap models, run it in several
 harnesses, compare outputs — the recording underneath doesn't change.
+
+## License
+
+Copyright (C) 2026 Rugby Waldorf LLC. Licensed under the
+[GNU General Public License v3.0](LICENSE) or, at your option, any later
+version — a strong copyleft license. See [`LICENSE`](LICENSE) for the full terms.
