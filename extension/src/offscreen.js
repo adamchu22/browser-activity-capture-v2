@@ -300,7 +300,9 @@ async function startRecording(withMic) {
   // Picker done and recorder armed — tell the worker to run the countdown + go live.
   // `mic` lets the overlay know whether to show the live level meter; `surface` scopes
   // capture/overlay to what the user actually shared (tab/window/monitor).
-  chrome.runtime.sendMessage({ type: "offscreen-armed", video: true, mic: micRecorded, surface: captureSurface });
+  // micError rides along so the worker can flag a silent take AT ARM TIME
+  // (log + clear the stale grant) instead of only at export.
+  chrome.runtime.sendMessage({ type: "offscreen-armed", video: true, mic: micRecorded, micError, surface: captureSurface });
 }
 
 // Live mic loudness for the on-screen overlay meter. An AnalyserNode taps the mic

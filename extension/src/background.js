@@ -194,11 +194,8 @@ async function rehydrate() {
     if (await offscreenExists()) {
       for (const tabId of [...state.tabIds]) {
         // The debugger may have detached when the worker died; re-attach so network
-        // resumes. Already-attached throws → ignore. Re-arm the content script too.
-        try {
-          await chrome.debugger.attach({ tabId }, "1.3");
-          await chrome.debugger.sendCommand({ tabId }, "Network.enable");
-        } catch {}
+        // resumes. Re-arm the content script too.
+        await ensureDebuggerAttached(tabId);
         chrome.tabs.sendMessage(tabId, { type: "start", ...overlayClock() }).catch(() => {});
       }
       if (!state.paused) startFrameTimer();
@@ -278,6 +275,69 @@ async function ensureContentScript(tabId) {
   }
 }
 
+// chrome.debugger calls normally resolve in a few ms, but a session left in a
+// half-broken state (attach succeeded, then the target went away before the
+// following command landed — exactly what a mid-navigation renderer swap can
+// do) can leave attach/detach/sendCommand hanging far longer than that. Without
+// a hard ceiling, Finish -> stop() -> teardownTabs() -> await detach() can block
+// indefinitely, making the Finish button look unresponsive. Race every
+// chrome.debugger call against this so a stuck one can never hold up the flow.
+const DEBUGGER_CALL_TIMEOUT_MS = 1500;
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
+
+// Tabs we believe have a live, Network-enabled debugger session right now. Lets
+// reattachTab() (called on EVERY navigation, including SPA pushState/query-param
+// route changes) skip the chrome.debugger IPC round-trip in the common case
+// instead of paying it on every click — cleared on onDetach, set on success below.
+const debuggerAlive = new Set();
+
+// How long to back off before retrying an attach for a tab that just detached.
+// Without this, a tab whose debugger session won't stay up (seen on some
+// Brave builds, which handle the CDP debugger banner differently than Chrome)
+// causes onDetach -> attach -> onDetach -> attach... with no gap between
+// attempts, pegging the service worker and starving every other message it
+// needs to process (including the Finish-recording click).
+const DEBUGGER_RETRY_COOLDOWN_MS = 3000;
+const debuggerRetryAt = new Map(); // tabId -> timestamp of last attach attempt
+
+const debuggerAttaching = new Map(); // tabId -> in-flight attach Promise, dedupes racing callers
+
+// Make sure the CDP debugger is attached to a tab and its Network domain is live.
+// No-ops immediately if we already believe the session is alive (the normal case
+// on every navigation). If it's not, attach() + Network.enable re-establishes it,
+// throttled per tab so a session that won't stay up doesn't thrash, and deduped so
+// instrumentTab() and reattachTab() racing on the same tab don't both call attach().
+// Logs to errors.json on failure so a dead session is never silent.
+async function ensureDebuggerAttached(tabId) {
+  if (debuggerAlive.has(tabId)) return;
+  if (debuggerAttaching.has(tabId)) return debuggerAttaching.get(tabId);
+  const lastAttempt = debuggerRetryAt.get(tabId) || 0;
+  if (Date.now() - lastAttempt < DEBUGGER_RETRY_COOLDOWN_MS) return;
+  debuggerRetryAt.set(tabId, Date.now());
+  const attempt = (async () => {
+    try {
+      await withTimeout(chrome.debugger.attach({ tabId }, "1.3"), DEBUGGER_CALL_TIMEOUT_MS, `debugger.attach(${tabId})`);
+      await withTimeout(
+        chrome.debugger.sendCommand({ tabId }, "Network.enable"),
+        DEBUGGER_CALL_TIMEOUT_MS,
+        `Network.enable(${tabId})`,
+      );
+      debuggerAlive.add(tabId);
+    } catch (e) {
+      logError("debugger", { message: `attach failed on tab ${tabId}: ${e?.message || e}`, stack: e?.stack });
+    } finally {
+      debuggerAttaching.delete(tabId);
+    }
+  })();
+  debuggerAttaching.set(tabId, attempt);
+  return attempt;
+}
+
 // Attach the CDP debugger (for network) and the content script (for DOM/events)
 // to one tab. Idempotent — safe to call again for a tab we already track.
 async function instrumentTab(tabId) {
@@ -296,12 +356,7 @@ async function instrumentTab(tabId) {
   state.urls.add(tabUrl);
 
   // CDP network capture (shows the per-tab "is being debugged" banner — by design).
-  try {
-    await chrome.debugger.attach({ tabId }, "1.3");
-    await chrome.debugger.sendCommand({ tabId }, "Network.enable");
-  } catch (e) {
-    logError("debugger", { message: `attach failed on tab ${tabId}: ${e?.message || e}`, stack: e?.stack });
-  }
+  await ensureDebuggerAttached(tabId);
 
   const injected = await ensureContentScript(tabId);
   // Carry the full clock so a tab that joins mid-recording renders its overlay in
@@ -313,13 +368,17 @@ async function instrumentTab(tabId) {
 
 // Re-arm a tab AFTER A NAVIGATION. A full-page navigation (every click in a
 // server-rendered app) tears down the content script — but the CDP debugger
-// stays attached to the tab, so network keeps recording while clicks/rrweb/frames
-// silently die for the rest of the page's life. (This is the bug that lost
-// ~4.5 min of a 6 min server-rendered session: only network survived.) The
-// freshly-loaded content script is supposed to self-attach, but that single
-// fire-and-forget check is unreliable; the worker stays alive throughout (the
-// debugger keeps it warm), so we re-push capture from here on every navigation.
-// We deliberately do NOT touch the debugger — it survives the navigation.
+// USUALLY stays attached to the tab, so network keeps recording while
+// clicks/rrweb/frames silently die for the rest of the page's life. (This is
+// the bug that lost ~4.5 min of a 6 min server-rendered session: only network
+// survived.) The freshly-loaded content script is supposed to self-attach, but
+// that single fire-and-forget check is unreliable; the worker stays alive
+// throughout (the debugger keeps it warm), so we re-push capture from here on
+// every navigation.
+// The debugger session doesn't always survive, though (a cross-process/site-
+// isolation swap on a real top-level navigation can drop it, same as the
+// infobar-dismiss/onDetach case below) — so re-assert Network.enable here too,
+// re-attaching first if needed, instead of assuming it's still alive.
 async function reattachTab(tabId, tab) {
   if (!state.recording || !state.tabIds.has(tabId)) return;
   // Keep the tab legend + URL set current as the user navigates.
@@ -329,6 +388,7 @@ async function reattachTab(tabId, tab) {
     const info = state.tabs.get(tabId);
     if (info) info.url = u;
   }
+  await ensureDebuggerAttached(tabId);
   const present = await ensureContentScript(tabId);
   if (present)
     chrome.tabs.sendMessage(tabId, { type: "start", ...overlayClock() }).catch(() => {});
@@ -338,9 +398,11 @@ async function reattachTab(tabId, tab) {
 async function uninstrumentTab(tabId) {
   if (!state.tabIds.has(tabId)) return;
   state.tabIds.delete(tabId);
+  debuggerAlive.delete(tabId);
+  debuggerRetryAt.delete(tabId);
   chrome.tabs.sendMessage(tabId, { type: "stop" }).catch(() => {});
   try {
-    await chrome.debugger.detach({ tabId });
+    await withTimeout(chrome.debugger.detach({ tabId }), DEBUGGER_CALL_TIMEOUT_MS, `debugger.detach(${tabId})`);
   } catch {}
   persistSession(); // tabIds changed
 }
@@ -515,10 +577,14 @@ async function teardownTabs() {
   for (const tabId of state.tabIds) {
     chrome.tabs.sendMessage(tabId, { type: "stop" }).catch(() => {});
     try {
-      await chrome.debugger.detach({ tabId });
+      await withTimeout(chrome.debugger.detach({ tabId }), DEBUGGER_CALL_TIMEOUT_MS, `debugger.detach(${tabId})`);
     } catch {}
   }
   state.tabIds.clear();
+  // So a stale cooldown/alive flag from this session can't affect the next one.
+  debuggerAlive.clear();
+  debuggerRetryAt.clear();
+  debuggerAttaching.clear();
 }
 
 function exportFilename() {
@@ -867,10 +933,13 @@ async function cancel() {
   for (const tabId of state.tabIds) {
     chrome.tabs.sendMessage(tabId, { type: "stop" }).catch(() => {}); // removes overlay + listeners
     try {
-      await chrome.debugger.detach({ tabId });
+      await withTimeout(chrome.debugger.detach({ tabId }), DEBUGGER_CALL_TIMEOUT_MS, `debugger.detach(${tabId})`);
     } catch {}
   }
   state.tabIds.clear();
+  debuggerAlive.clear();
+  debuggerRetryAt.clear();
+  debuggerAttaching.clear();
   chrome.runtime.sendMessage({ type: "offscreen-cancel" }).catch(() => {}); // discard video, release streams
   await db.clearAll();
   state.frames = [];
@@ -1062,6 +1131,25 @@ async function captureFrame(reason = "") {
 // payload just to truncate it.
 const RESP_BODY_CAP = 32 * 1024;
 const RESP_BODY_HARD_MAX = 1024 * 1024;
+
+// If the CDP session drops mid-recording — the "being debugged" infobar dismissed,
+// another DevTools client taking the tab, a renderer crash/process swap — this is
+// the ONLY signal we get. Without it, onEvent just stops firing for that tab: no
+// exception, nothing in errors.json, HAR silently goes dead for the rest of the
+// recording while video/frames/rrweb keep going fine. Log it and re-attach so
+// capture self-heals instead of degrading invisibly.
+chrome.debugger.onDetach.addListener((source, reason) => {
+  const tabId = source.tabId;
+  if (tabId == null || !state.tabIds.has(tabId)) return;
+  debuggerAlive.delete(tabId);
+  logError("debugger", { message: `debugger detached from tab ${tabId}: ${reason || "unknown reason"}` });
+  if (!state.recording) return;
+  // Don't drop the tab from state.tabIds here — it stays "tracked" (video/frames/
+  // rrweb for it keep going); only the debugger session is down. Retry now
+  // (cooldown + dedup guarded above), and reattachTab() will retry again on the
+  // tab's next navigation if this attempt lands inside the cooldown window.
+  ensureDebuggerAttached(tabId);
+});
 
 chrome.debugger.onEvent.addListener(async (source, method, params) => {
   // Pause suspends ALL capture, network included. Without the `state.paused` guard the
@@ -1302,6 +1390,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // Whether the mic track is actually live — set before goLive() sends the first
     // overlay clock, so each overlay knows to show (or hide) the level meter.
     state.micActive = !!msg.mic;
+    // Mic was wanted but getUserMedia failed at arm time (stale grant, revoked,
+    // OS-blocked). Log NOW so errors.json shows it even if the take is never
+    // exported, and clear the grant flag so the next Start re-prompts instead of
+    // silently producing another video-only take. Non-fatal: recording proceeds.
+    if (!msg.mic && msg.micError && msg.micError !== "mic not requested") {
+      logError("offscreen-mic", { message: `microphone not captured — recording is video-only (${msg.micError})` });
+      chrome.storage.local.remove("micGrantedOnce").catch(() => {});
+    }
     // What surface the user shared (tab/window/monitor) — set before goLive() so the
     // first tab is scoped correctly.
     state.captureSurface = msg.surface || null;
