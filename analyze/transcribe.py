@@ -182,7 +182,7 @@ def _available_engine() -> str | None:
 def selftest(engine: str, model: str, chunk: float, *, engine_explicit: bool = False) -> int:
     """End-to-end check the install actually transcribes on THIS machine: synth a
     short silent clip with ffmpeg, run the speech engine over it, report pass/fail.
-    Exits non-zero with the exact missing piece so `setup.sh` can gate on it. Also
+    Exits non-zero with the exact missing piece so `install.sh` can gate on it. Also
     pre-warms the model (first engine run downloads/loads weights), so the user's
     first real capture transcribes fast and offline."""
     if not _ffmpeg_ok():
@@ -198,7 +198,7 @@ def selftest(engine: str, model: str, chunk: float, *, engine_explicit: bool = F
     if not engine_explicit:
         detected = _available_engine()
         if detected is None:
-            print("✗ no speech engine installed in this .venv — re-run analyze/setup.sh.",
+            print("✗ no speech engine installed in this .venv — re-run install.sh.",
                   file=sys.stderr)
             return 3
         engine = detected
@@ -226,7 +226,7 @@ def selftest(engine: str, model: str, chunk: float, *, engine_explicit: bool = F
         return 3
     except Exception as e:  # noqa: BLE001 — any failure means it won't work for them
         print(f"✗ transcription self-test failed ({type(e).__name__}: {e}).\n"
-              "  The .venv may be missing a speech engine — re-run analyze/setup.sh.",
+              "  The .venv may be missing a speech engine — re-run install.sh.",
               file=sys.stderr)
         return 3
     print(f"✓ transcription works (ffmpeg + {engine}). Future captures auto-transcribe via pack.py.",
@@ -297,7 +297,7 @@ def main() -> None:
                     help="path to a capture bundle directory (omit with --selftest)")
     ap.add_argument("--selftest", action="store_true",
                     help="verify ffmpeg + the speech engine work end-to-end (and pre-warm the "
-                         "model), then exit. Used by setup.sh/setup.ps1; needs no bundle.")
+                         "model), then exit. Used by install.sh/install.ps1; needs no bundle.")
     ap.add_argument("--engine", choices=["parakeet", "qwen3-asr", "whisper"], default=None,
                     help="speech engine (default: parakeet for a run; --selftest auto-detects "
                          "the installed engine unless this is set)")

@@ -1,7 +1,7 @@
 # Local speech-to-text for the recorded narration. Audio never leaves the machine.
 #
 # faster-whisper (CTranslate2) is the CROSS-PLATFORM baseline — it runs on Windows,
-# Linux, and macOS, on CPU or GPU. The setup scripts (setup.sh / setup.ps1) install
-# this everywhere; on Apple Silicon setup.sh ALSO adds mlx-audio for the faster
+# Linux, and macOS, on CPU or GPU. The installer (install.sh / install.ps1) installs
+# this everywhere; on Apple Silicon install.sh ALSO adds mlx-audio for the faster
 # `parakeet` engine (Mac-only). pack.py auto-selects whichever engine is present.
 faster-whisper>=1.0

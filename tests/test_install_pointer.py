@@ -32,6 +32,47 @@ class TestRecord(unittest.TestCase):
         self.assertTrue((Path(rec["analyze_dir"]) / "pack.py").exists())
 
 
+class TestEngineRecord(unittest.TestCase):
+    """The pointer also carries the installed ASR engine + downloaded model path, so
+    an agent recovering narration re-uses this machine's weights instead of pulling a
+    second copy. It's a nice-to-have: the pointer's core locators must still be written
+    when no engine is installed (e.g. pack.py run on a bare system python)."""
+
+    def test_engine_fields_are_consistent_with_engine_info(self):
+        rec = ip.build_record(adir=Path("/opt/cap/analyze"), python="/opt/cap/py")
+        if not rec.get("engine"):
+            # No speech engine in THIS interpreter — then no model fields either,
+            # and no transcribe_cmd promising a run that would fail.
+            self.assertNotIn("model", rec)
+            self.assertNotIn("model_path", rec)
+            self.assertNotIn("transcribe_cmd", rec)
+            return
+        self.assertIn(rec["engine"], ("parakeet", "whisper"))
+        self.assertTrue(rec["model"])
+        # transcribe_cmd is ready to run: names transcribe.py, the bundle slot, the engine.
+        self.assertIn("transcribe.py", rec["transcribe_cmd"])
+        self.assertIn("<bundle>", rec["transcribe_cmd"])
+        self.assertIn(rec["engine"], rec["transcribe_cmd"])
+        # model_path is only recorded when the weights are really on disk — a stale
+        # path would send an agent looking for a model that isn't there.
+        if "model_path" in rec:
+            self.assertTrue(Path(rec["model_path"]).exists())
+
+    def test_engine_info_never_raises(self):
+        # Called during install; a broken/absent engine must not fail the pointer write.
+        self.assertIsInstance(ip.engine_info(), dict)
+
+    def test_core_locators_survive_missing_engine(self):
+        real = ip.engine_info
+        ip.engine_info = lambda: {}
+        try:
+            rec = ip.build_record(adir=Path("/x/analyze"), python="/x/py")
+        finally:
+            ip.engine_info = real
+        self.assertEqual(rec["analyze_dir"], "/x/analyze")
+        self.assertIn("pack.py", rec["pack_cmd"])
+
+
 class TestWriteRead(unittest.TestCase):
     def test_write_then_read_roundtrip(self):
         with TemporaryDirectory() as d:

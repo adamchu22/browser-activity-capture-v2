@@ -39,11 +39,11 @@ analyze/          bundle → analysis pack (stdlib Python)
   pack.py           the core: flatten a bundle into BRIEF.md + context.md + JSON + frames
   validate_bundle.py  shape/clock/redaction gate; run right after export
   transcribe.py     local ASR (parakeet/qwen3-asr/whisper) → transcript.vtt
-  setup.sh / setup.ps1  one-time venv + engine install + model pre-warm
   autopack.py       watch a folder, pack every new capture zip
   glossary.py / glossary.json  domain-term fixup ASR can't get right
-  install_pointer.py  registers the install so bundles can find pack.py + .venv
+  install_pointer.py  records analyze_dir + venv python + ASR engine/model path for bundles
   adapters/         optional per-provider runners (run_claude.py); instructions never fork
+install.sh / install.ps1   the installer: rrweb + venv + speech engine + model + pointer
 docs/             design + landscape
 sample-bundle/    a hand-made example bundle (refund workflow) — develop analysis against it
 tests/            Python (.py) + Node (.mjs) tests; see below
@@ -104,8 +104,8 @@ python analyze/validate_bundle.py ~/Downloads/capture-<timestamp>.zip   # expect
 python analyze/pack.py <bundle-dir> --out ./analysis-pack
 
 # one-time local transcription setup (ffmpeg on PATH first)
-bash analyze/setup.sh          # macOS / Linux
-powershell -ExecutionPolicy Bypass -File analyze\setup.ps1   # Windows
+bash install.sh          # macOS / Linux
+powershell -ExecutionPolicy Bypass -File install.ps1   # Windows
 
 # transcribe a bundle by hand (default engine: parakeet on Apple Silicon)
 .venv/bin/python analyze/transcribe.py <bundle-dir>
@@ -153,7 +153,7 @@ and offline; follow that pattern.
 - **No secrets in the repo.** `.venv`, capture zips, and per-user config
   (`autopack.config.json`) are git-ignored. Keep it that way.
 - **`ffmpeg` is a hard gate.** Transcription silently skips without it, so
-  `setup.sh`/`setup.ps1` exit with the install command rather than warn-and-
+  `install.sh`/`install.ps1` exit with the install command rather than warn-and-
   succeed. Preserve that when editing setup.
 
 ## Current state / open work

@@ -74,9 +74,9 @@ future capture you pack gets transcribed with no extra step (`ffmpeg` must be on
 first — setup hard-stops with the install command if it's missing):
 
 ```bash
-bash analyze/setup.sh                                   # macOS / Linux
+bash install.sh                                   # macOS / Linux
 # Windows (PowerShell):
-powershell -ExecutionPolicy Bypass -File analyze\setup.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 Setup verifies the whole chain works end-to-end before it reports success (and

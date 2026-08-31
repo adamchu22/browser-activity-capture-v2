@@ -1553,7 +1553,7 @@ function buildTranscript(timeline) {
       "CLAUDE.md / AGENTS.md in this bundle — they give the self-contained steps " +
       "(ffmpeg extract + a local ASR model). If you DO have the repo, " +
       "`python analyze/pack.py <bundle>` (or analyze/transcribe.py <bundle>) in the .venv " +
-      "fills this automatically (one-time setup: analyze/setup.sh / setup.ps1).\n"
+      "fills this automatically (one-time setup: install.sh / install.ps1).\n"
     );
   const fmt = (t) => {
     const s = Math.floor(t / 1000);

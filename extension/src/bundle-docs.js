@@ -92,8 +92,9 @@ one clock, plus extracted to-dos and friction), so you don't join them by hand. 
    read its \`context.md\` + \`BRIEF.md\` and skip the manual reading order below — that's
    the finished spine.
 2. **Else build it from the installed pipeline.** Its location is recorded on this
-   machine at \`~/.config/browser-activity-capture/install.json\` (JSON with \`analyze_dir\`
-   and \`python\`). Read that file, then run its \`pack_cmd\` on THIS folder, e.g.
+   machine at \`~/.config/browser-activity-capture/install.json\` (JSON with \`analyze_dir\`,
+   \`python\`, and the installed speech \`engine\` + downloaded \`model_path\`). Read that
+   file, then run its \`pack_cmd\` on THIS folder, e.g.
    \`<python> <analyze_dir>/pack.py <this-bundle-folder> --out <bundle>-pack\`, and read
    \`<bundle>-pack/context.md\`.
 3. **Else register it once, then build.** If that pointer file is missing but you can
@@ -126,10 +127,18 @@ A stub looks like \`NOTE No narration captured\`. The words are **not lost** —
 narration was recorded they live as an **Opus audio track inside video.webm**, aligned to t0.
 Recover them yourself, no external help needed:
 1. Extract audio: \`ffmpeg -i video.webm -ac 1 -ar 16000 audio.wav\`
-2. Transcribe locally. **Default to Parakeet** (Parakeet-TDT via mlx-audio on Apple Silicon) —
-   it was the most accurate engine for this audio, so prefer it. If \`mlx-audio\` isn't
-   installed yet, set up a throwaway env first (the model weights download on first run, or
-   load from the local Hugging Face cache if already present — no path needed, just the repo id):
+2. Transcribe locally. **First check whether this machine already has an engine and a
+   downloaded model** — the installer records both at
+   \`~/.config/browser-activity-capture/install.json\`. If that file exists it carries
+   \`python\` (an interpreter with the engine installed), \`engine\`, \`model\`, and
+   \`model_path\` (the already-downloaded weights). Then the whole step is one command,
+   with nothing to install and nothing to download:
+   \`<python> <analyze_dir>/transcribe.py <this-bundle-folder> --engine <engine>\`
+   (that's the \`transcribe_cmd\` field, ready to run — it writes \`transcript.vtt\` here).
+   **Else set one up. Default to Parakeet** (Parakeet-TDT via mlx-audio on Apple Silicon) —
+   it was the most accurate engine for this audio, so prefer it. Make a throwaway env (the
+   model weights download on first run, or load from the local Hugging Face cache if already
+   present — no path needed, just the repo id):
    \`uv venv .venv-asr && uv pip install --python .venv-asr mlx-audio\`
    then transcribe (\`--output-path\` is REQUIRED — without it the command errors):
    \`.venv-asr/bin/python -m mlx_audio.stt.generate --model mlx-community/parakeet-tdt-0.6b-v3 --audio audio.wav --output-path transcript --format vtt\`

@@ -35,62 +35,63 @@ Decisions taken: full-screen self-record (follows you across tabs), full HAR wit
 bodies, in-browser + downloadable zip, analysis-first, **LLM-agnostic** (no provider
 lock-in).
 
-## Quick start
+## Install
 
-Two halves, two steps. Do them in order.
-
-### 1. Load the Chrome extension
-
-> Full checklist (mic enable, screen-share picker, troubleshooting):
-> [`extension/FIRST-CAPTURE.md`](extension/FIRST-CAPTURE.md).
-
-1. (Optional, 30s) Vendor rrweb for raw-DOM capture. Without it you still get the
-   high-level timeline, just no `events.jsonl` stream:
-   ```bash
-   cd extension
-   curl -L https://cdn.jsdelivr.net/npm/rrweb@2.0.0/dist/rrweb.umd.min.cjs \
-        -o src/lib/rrweb.min.js
-   ```
-2. Open `chrome://extensions` → toggle **Developer mode** (top right) →
-   **Load unpacked** → select this repo's `extension/` folder.
-3. Pin it (puzzle-piece icon → pin). Open a normal website tab, click the
-   extension, **Start**, do a short task narrating aloud, **Stop & export** →
-   save `capture-<timestamp>.zip`.
-
-### 2. Set up local transcription (Parakeet / Whisper)
-
-The capture zip ships `transcript.vtt` as a stub. `analyze/pack.py` fills it by
-**auto-transcribing the narration locally** — audio never leaves your machine.
-One-time setup:
+Clone the repo, then run the installer:
 
 ```bash
 # macOS or Linux:
-bash analyze/setup.sh
+bash install.sh
 
 # Windows (PowerShell):
-powershell -ExecutionPolicy Bypass -File analyze\setup.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-What the setup does, and what it needs:
+**Prerequisite:** `ffmpeg` on PATH. The installer exits with the install command if
+it's missing:
 
-- **`ffmpeg` on PATH** (hard requirement — the script exits with the install
-  command if it's missing):
-  - macOS: `brew install ffmpeg`
-  - Linux: `sudo apt-get install ffmpeg`
-  - Windows: `winget install Gyan.FFmpeg` (or `choco install ffmpeg`)
-- Creates a repo-root `.venv` and installs **`faster-whisper`** (cross-platform
-  baseline). On **Apple Silicon** it also installs **`mlx-audio`** for the faster
-  **Parakeet** engine (`mlx-community/parakeet-tdt-0.6b-v3`).
-- Runs `transcribe.py --selftest`, which **downloads the model once** and
-  pre-warms it so your first real capture transcribes fast and offline.
-- Registers the install so capture bundles can find `pack.py` + this `.venv`
-  from any directory (see `analyze/install_pointer.py`).
+- macOS: `brew install ffmpeg`
+- Linux: `sudo apt-get install ffmpeg`
+- Windows: `winget install Gyan.FFmpeg` (or `choco install ffmpeg`)
 
-`pack.py` auto-selects the engine: **Parakeet** on Apple Silicon,
-**faster-whisper** everywhere else. See [`analyze/README.md`](analyze/README.md)
-for picking a non-default engine (`qwen3-asr`) and running the transcriber by hand.
+What it does:
 
-### 3. Validate → pack → hand off
+1. **Vendors rrweb** into the extension for raw-DOM capture (`events.jsonl`).
+2. **Creates a repo-root `.venv`** with a local speech engine — **Parakeet**
+   (`mlx-community/parakeet-tdt-0.6b-v3` via `mlx-audio`) on Apple Silicon, and
+   **`faster-whisper`** as the cross-platform baseline everywhere else.
+3. **Downloads the speech model once and pre-warms it**, so your first real capture
+   transcribes fast and offline. Audio never leaves your machine.
+4. **Records where all of it lives** — the pipeline, the venv python, and the
+   downloaded model weights — at
+   `~/.config/browser-activity-capture/install.json`. Every bundle exported later
+   points agents at that file, so future sessions re-use this install and this
+   already-downloaded model instead of setting anything up again (see
+   `analyze/install_pointer.py`).
+
+It's safe to re-run: an existing rrweb copy and a cached model are left alone.
+
+### Load the Chrome extension
+
+Chrome has no CLI install for unpacked extensions, so this one step is manual —
+the installer prints the exact path to select.
+
+1. Open `chrome://extensions` → toggle **Developer mode** (top right).
+2. **Load unpacked** → select this repo's `extension/` folder.
+3. Pin it (puzzle-piece icon → pin).
+
+Then open a normal website tab, click the extension, **Start**, do a short task
+narrating aloud, **Stop & export** → save `capture-<timestamp>.zip`.
+
+> Full first-capture checklist (mic enable, screen-share picker, troubleshooting):
+> [`extension/FIRST-CAPTURE.md`](extension/FIRST-CAPTURE.md).
+
+`pack.py` auto-selects the engine the installer set up: **Parakeet** on Apple
+Silicon, **faster-whisper** everywhere else. See
+[`analyze/README.md`](analyze/README.md) for picking a non-default engine
+(`qwen3-asr`) and running the transcriber by hand.
+
+## Quick start — validate → pack → hand off
 
 ```bash
 # validate the export
@@ -104,7 +105,7 @@ python analyze/pack.py /tmp/cap --out /tmp/analysis-pack
 ```
 
 > **Note:** `pack.py` runs on the system `python` (stdlib, no venv needed for the
-> pack itself) but will only auto-transcribe if the `.venv` from step 2 exists.
+> pack itself) but will only auto-transcribe if the installer's `.venv` exists.
 > No `.venv`? The pack still builds; `transcript.vtt` just stays a stub.
 
 ## Layout
