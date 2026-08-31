@@ -22,7 +22,19 @@
   },
   "action": {
     "default_popup": "src/popup.html",
-    "default_title": "Browser Activity Capture"
+    "default_title": "Browser Activity Capture",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   },
   "content_scripts": [
     {
