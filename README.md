@@ -80,6 +80,24 @@ the installer prints the exact path to select.
 2. **Load unpacked** → select this repo's `extension/` folder.
 3. Pin it (puzzle-piece icon → pin).
 
+### ⚠️ Set your "Never record on" list first
+
+**Before your first Start, open the popup and fill in "Never record on" with every
+host you don't want captured** — password manager, email, bank, admin consoles,
+anything personal. v2 records your **whole screen across all tabs**, so anything
+you visit during a capture is in the video unless you've listed it.
+
+- One host per line (e.g. `my.1password.com`). A parent domain covers its
+  subdomains (`example.com` blocks `mail.example.com`), and pasting a full URL is
+  fine — it's reduced to the hostname.
+- While a listed host is the active tab, capture **auto-pauses** — video, events,
+  and network all stop, and the toolbar icon says why. It resumes when you leave.
+- The list is read when you press **Start**, so edit it before recording, not
+  during. It persists between sessions.
+
+Not a substitute for redaction (passwords and auth headers are always stripped),
+but it's the only thing that keeps a whole site out of the bundle.
+
 Then open a normal website tab, click the extension, **Start**, do a short task
 narrating aloud, **Stop & export** → save `capture-<timestamp>.zip`.
 
