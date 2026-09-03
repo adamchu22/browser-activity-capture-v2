@@ -47,12 +47,19 @@ bash install.sh
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-**Prerequisite:** `ffmpeg` on PATH. The installer exits with the install command if
-it's missing:
+**Prerequisites:** `ffmpeg` on PATH, and **Python 3.10 or newer** (the speech
+engines require it — macOS's built-in `python3` is 3.9 and won't work). The
+installer hard-gates on both and prints the install command if either is missing:
 
-- macOS: `brew install ffmpeg`
-- Linux: `sudo apt-get install ffmpeg`
-- Windows: `winget install Gyan.FFmpeg` (or `choco install ffmpeg`)
+- macOS: `brew install ffmpeg` · `brew install uv` (or `brew install python@3.12`)
+- Linux: `sudo apt-get install ffmpeg python3-venv`
+- Windows: `winget install Gyan.FFmpeg` (or `choco install ffmpeg`) · `winget install astral-sh.uv`
+
+If [`uv`](https://docs.astral.sh/uv/) is on PATH the installer uses it and needs
+no system Python at all — it downloads a suitable CPython itself. Otherwise the
+installer searches PATH for a 3.10+ interpreter (`python3.13`, `python3.12`, …)
+rather than trusting whatever `python3` happens to be, and rebuilds `.venv` if a
+previous run left one built on an older interpreter.
 
 What it does:
 

@@ -1,7 +1,13 @@
 # Local speech-to-text for the recorded narration. Audio never leaves the machine.
 #
-# faster-whisper (CTranslate2) is the CROSS-PLATFORM baseline — it runs on Windows,
-# Linux, and macOS, on CPU or GPU. The installer (install.sh / install.ps1) installs
-# this everywhere; on Apple Silicon install.sh ALSO adds mlx-audio for the faster
-# `parakeet` engine (Mac-only). pack.py auto-selects whichever engine is present.
-faster-whisper>=1.0
+# Needs Python 3.10+ — mlx, mlx-audio and faster-whisper's `av` all floor there.
+# The installers pick a qualifying interpreter; macOS's system python3 (3.9) won't
+# do, and a .venv built on it fails here with a "Requires-Python" error.
+#
+# faster-whisper (CTranslate2) is the CROSS-PLATFORM baseline — Windows, Linux and
+# macOS, CPU or GPU. mlx-audio adds the faster `parakeet` engine and is
+# Apple-Silicon-only, hence the marker: pip/uv skip it everywhere else, so both
+# installers just install this one file and neither has to sniff the platform.
+# transcribe.py auto-selects whichever engine is importable.
+faster-whisper>=1.0,<2
+mlx-audio>=0.4.4; sys_platform == "darwin" and platform_machine == "arm64"

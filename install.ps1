@@ -51,12 +51,46 @@ if (Test-Path $RrwebPath) {
 # ---- 2. speech engine ----------------------------------------------------
 Write-Host "-> Setting up the transcription venv (.venv)..."
 
+# faster-whisper's `av` wheels require Python 3.10+, so don't build the venv on
+# "whatever `python` is" — an older interpreter yields a venv that can't install
+# the deps, and pip fails with a Requires-Python error deep in the chain.
+$MinPy = "3.10"
+
+# A .venv left over from a too-old interpreter has the same effect - rebuild it.
+if (Test-Path .venv\Scripts\python.exe) {
+  & .venv\Scripts\python.exe -c "import sys; sys.exit(sys.version_info < (3, 10))"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "  .venv was built with an older Python (before $MinPy) - rebuilding it."
+    Remove-Item -Recurse -Force .venv
+  }
+}
+
+function Get-UsablePython {
+  foreach ($c in @("python3.14", "python3.13", "python3.12", "python3.11", "python3.10", "python3", "python")) {
+    $cmd = Get-Command $c -ErrorAction SilentlyContinue
+    if (-not $cmd) { continue }
+    & $cmd.Source -c "import sys; sys.exit(sys.version_info < (3, 10))" 2>$null
+    if ($LASTEXITCODE -eq 0) { return $cmd.Source }
+  }
+  return $null
+}
+
 if (Get-Command uv -ErrorAction SilentlyContinue) {
-  uv venv --allow-existing .venv
+  # uv downloads a qualifying CPython if the machine has none, so this path needs
+  # no system Python at all.
+  uv venv --allow-existing --python ">=$MinPy" .venv
   uv pip install --python .venv\Scripts\python.exe -r analyze\requirements.txt
 } else {
   Write-Host "  (uv not found - using python -m venv + pip; 'winget install astral-sh.uv' is faster)"
-  python -m venv .venv
+  $Py = Get-UsablePython
+  if (-not $Py) {
+    Write-Host "x No Python $MinPy+ on PATH - the local speech engine requires it." -ForegroundColor Red
+    Write-Host "  Install one, then re-run this installer:"
+    Write-Host "     winget install astral-sh.uv     (or: winget install Python.Python.3.12)"
+    exit 1
+  }
+  Write-Host "  using $Py"
+  & $Py -m venv .venv
   & .venv\Scripts\python.exe -m pip install --upgrade pip | Out-Null
   & .venv\Scripts\python.exe -m pip install -r analyze\requirements.txt
 }

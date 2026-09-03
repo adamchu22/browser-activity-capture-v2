@@ -50,24 +50,48 @@ fi
 # ---- 2. speech engine ----------------------------------------------------
 echo "→ Setting up the transcription venv (.venv)…"
 
-is_apple_silicon() { [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; }
+# The speech deps need Python 3.10+ (mlx-audio, mlx, av). macOS ships 3.9.6 as
+# `python3`, so building the venv on "whatever python3 is" produces a venv that
+# CAN'T install them — pip fails with a Requires-Python error deep in the
+# dependency chain, and the tool looks broken. Pick the interpreter explicitly.
+MIN_PY="3.10"
+
+# A .venv left over from a too-old interpreter has the same effect, so rebuild it
+# rather than reusing it.
+if [ -x .venv/bin/python ] && ! .venv/bin/python -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+  echo "  .venv was built with Python $(.venv/bin/python -c 'import platform; print(platform.python_version())') (older than $MIN_PY) — rebuilding it."
+  rm -rf .venv
+fi
+
+pick_python() {
+  for c in python3.14 python3.13 python3.12 python3.11 python3.10 python3 python; do
+    p="$(command -v "$c")" || continue
+    if "$p" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+      echo "$p"; return 0
+    fi
+  done
+  return 1
+}
 
 if command -v uv >/dev/null 2>&1; then
-  uv venv --allow-existing .venv
+  # uv downloads a qualifying CPython if the machine has none, so this path needs
+  # no system Python at all.
+  uv venv --allow-existing --python ">=$MIN_PY" .venv
   uv pip install --python .venv/bin/python -r analyze/requirements.txt
-  if is_apple_silicon; then
-    echo "→ Apple Silicon detected: adding mlx-audio (the faster 'parakeet' engine)…"
-    uv pip install --python .venv/bin/python mlx-audio
-  fi
 else
-  echo "  (uv not found — using python3 -m venv + pip; 'brew install uv' is faster)"
-  python3 -m venv .venv
+  echo "  (uv not found — using python -m venv + pip; 'brew install uv' is faster)"
+  if ! PY="$(pick_python)"; then
+    echo "✗ No Python $MIN_PY+ on PATH — the local speech engine requires it." >&2
+    echo "  (macOS's built-in python3 is 3.9 and can't install it.)" >&2
+    echo "  Install one, then re-run this installer:" >&2
+    echo "     macOS:  brew install uv          (or: brew install python@3.12)" >&2
+    echo "     Linux:  sudo apt-get install python3-venv   (3.10+; or your package manager)" >&2
+    exit 1
+  fi
+  echo "  using $PY ($("$PY" -c 'import platform; print(platform.python_version())'))"
+  "$PY" -m venv .venv
   .venv/bin/python -m pip install --upgrade pip >/dev/null
   .venv/bin/python -m pip install -r analyze/requirements.txt
-  if is_apple_silicon; then
-    echo "→ Apple Silicon detected: adding mlx-audio (the faster 'parakeet' engine)…"
-    .venv/bin/python -m pip install mlx-audio
-  fi
 fi
 
 # ---- 3. download + pre-warm the model ------------------------------------
