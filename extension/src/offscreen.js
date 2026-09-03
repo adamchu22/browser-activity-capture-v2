@@ -88,7 +88,7 @@ function stopKeepAlive() {
 
 // Report a failure to the worker so it lands in the bundle's errors.json.
 function reportError(message, stack) {
-  chrome.runtime.sendMessage({ type: "capture-error", where: "offscreen", message, stack: stack || null });
+  chrome.runtime.sendMessage({ type: "capture-error", where: "offscreen", message, stack: stack || null }).catch(() => {});
 }
 self.addEventListener("error", (e) => reportError(e.message, e.error?.stack));
 self.addEventListener("unhandledrejection", (e) => reportError(e.reason?.message || String(e.reason), e.reason?.stack));
@@ -144,21 +144,23 @@ chrome.runtime.onMessage.addListener(async (msg) => {
   // the video Blob never leaves this document and the bulk streams are read straight
   // from IndexedDB, so nothing large is ever sent through a chrome.runtime message.
   // The worker passes only the small text meta files; we add timeline.json,
-  // events.jsonl, the frame PNGs, and video.webm. Replies offscreen-save-done.
+  // events.jsonl, network.har, the frame PNGs, and video.webm. Replies
+  // offscreen-save-done.
   if (msg.type === "offscreen-save") {
-    assembleAndSave(msg.metaFiles, msg.filename);
+    assembleAndSave(msg.metaFiles, msg.filename, msg.t0Wall);
   }
 });
 
-async function assembleAndSave(metaFiles, filename) {
-  const reply = (r) => chrome.runtime.sendMessage({ type: "offscreen-save-done", ...r });
+async function assembleAndSave(metaFiles, filename, t0Wall) {
+  const reply = (r) => chrome.runtime.sendMessage({ type: "offscreen-save-done", ...r }).catch(() => {});
   let zipBlob;
   try {
     // The bulk streams live in IndexedDB (written by the worker as the recording ran).
     const timeline = await db.readAll("timeline");
     const rrweb = await db.readAll("rrweb");
     const frames = await db.readAll("frames");
-    const files = [...metaFiles, ...streamFiles(timeline, rrweb, frames)];
+    const har = await db.readAll("har");
+    const files = [...metaFiles, ...streamFiles(timeline, rrweb, frames, har, t0Wall)];
     // Multi-segment video: write each segment as its own file. The first
     // segment is `video.webm` (what the manifest's `video` field points at);
     // subsequent segments are `video-2.webm`, `video-3.webm`, … so the analyze
@@ -245,7 +247,7 @@ async function startRecording(withMic) {
     reportError("video capture failed: " + (e?.message || e), e?.stack);
     // Picker cancelled / failed — tell the worker to proceed data-only (it still
     // runs the countdown and goes live). The null video is reported at stop time.
-    chrome.runtime.sendMessage({ type: "offscreen-armed", video: false, mic: false });
+    chrome.runtime.sendMessage({ type: "offscreen-armed", video: false, mic: false }).catch(() => {});
     return;
   }
 
@@ -291,7 +293,7 @@ async function startRecording(withMic) {
     reportError("MediaRecorder failed: " + (e?.message || e), e?.stack);
     releaseStreams();
     recorder = null;
-    chrome.runtime.sendMessage({ type: "offscreen-armed", video: false, mic: false });
+    chrome.runtime.sendMessage({ type: "offscreen-armed", video: false, mic: false }).catch(() => {});
     return;
   }
   // Keep the worker alive from here on — the recording is live (or about to be),
@@ -302,7 +304,7 @@ async function startRecording(withMic) {
   // capture/overlay to what the user actually shared (tab/window/monitor).
   // micError rides along so the worker can flag a silent take AT ARM TIME
   // (log + clear the stale grant) instead of only at export.
-  chrome.runtime.sendMessage({ type: "offscreen-armed", video: true, mic: micRecorded, micError, surface: captureSurface });
+  chrome.runtime.sendMessage({ type: "offscreen-armed", video: true, mic: micRecorded, micError, surface: captureSurface }).catch(() => {});
 }
 
 // Live mic loudness for the on-screen overlay meter. An AnalyserNode taps the mic
@@ -382,7 +384,7 @@ function finalizeRecording() {
       micError,
       hasVideo: segments.some((s) => s.blob && s.blob.size > 0),
       segmentOffsets: offsets,
-    });
+    }).catch(() => {});
     return;
   }
   recorder.onstop = () => {
@@ -404,7 +406,7 @@ function finalizeRecording() {
       micError,
       hasVideo: finalizedSegments.some((s) => s.blob && s.blob.size > 0),
       segmentOffsets: segmentOffsetsFor(finalizedSegments),
-    });
+    }).catch(() => {});
   };
   recorder.stop();
 }

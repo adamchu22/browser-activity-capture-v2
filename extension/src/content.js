@@ -41,11 +41,24 @@
   // `chrome.runtime` — any sendMessage then throws "Extension context invalidated"
   // (the four errors seen in chrome://extensions). Guard on the runtime id and
   // swallow the rest so a stale script goes quietly inert instead of spamming.
+  let sendFailed = false; // surface the first dropped message, then stay quiet
   function safeSend(msg, cb) {
     try {
       if (!chrome.runtime?.id) return; // context torn down (reload/update) — give up
-      if (cb) chrome.runtime.sendMessage(msg, cb);
-      else chrome.runtime.sendMessage(msg);
+      const sent = cb ? chrome.runtime.sendMessage(msg, cb) : chrome.runtime.sendMessage(msg);
+      // The callback form returns undefined; the promise form rejects ASYNCHRONOUSLY,
+      // which the try/catch above cannot see — so it lands in the PAGE's console as an
+      // "Uncaught (in promise)". Two real causes: the context torn down mid-call, and
+      // an rrweb full-DOM snapshot of a heavy page exceeding sendMessage's hard 64MiB
+      // cap. Swallow it so we don't spam the page, but report the first one — a
+      // dropped snapshot leaves events.jsonl unreplayable and must not be invisible.
+      // ponytail: drop-and-report, not chunk-and-reassemble. Split oversized rrweb
+      // events across messages if this turns out to be common rather than rare.
+      sent?.catch?.((err) => {
+        if (sendFailed || msg.type === "capture-error") return; // never recurse
+        sendFailed = true;
+        reportError(`dropped a "${msg.type}" message: ${err?.message || err}`);
+      });
     } catch {
       /* context invalidated mid-call — ignore */
     }

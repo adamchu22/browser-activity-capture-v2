@@ -633,9 +633,9 @@ async function exportViaOffscreen() {
     frameList: state.frames,
     harEntries,
   });
-  const meta = metaFiles(manifest, timeline, harEntries, state.errors);
+  const meta = metaFiles(manifest, timeline, state.errors);
   const filename = exportFilename();
-  const res = await requestOffscreenSave(meta, filename);
+  const res = await requestOffscreenSave(meta, filename, manifest.t0_wall);
   if (res.ok) {
     await onExportSuccess();
   } else {
@@ -665,7 +665,7 @@ async function salvageExport() {
       frameList: frameMeta(frames),
       harEntries,
     });
-    const files = [...metaFiles(manifest, timeline, harEntries, state.errors), ...streamFiles(timeline, rrweb, frames)];
+    const files = [...metaFiles(manifest, timeline, state.errors), ...streamFiles(timeline, rrweb, frames, harEntries, manifest.t0_wall)];
     const bytes = new Uint8Array(await (await makeZip(files)).arrayBuffer());
     const url = `data:application/zip;base64,${base64FromBytes(bytes)}`;
     await chrome.downloads.download({ url, filename, saveAs: false });
@@ -702,9 +702,8 @@ async function onExportFailure(manifest, reason, filename) {
 }
 
 // Ask the offscreen doc to assemble (its video Blob + the bulk streams it reads from
-// IndexedDB + these small meta files) and download. Resolves { ok, reason }. Only the
-// small text meta files cross the message boundary — well under 64MiB.
-function requestOffscreenSave(metaFiles, filename) {
+// IndexedDB + these small meta files) and download. Resolves { ok, reason }.
+function requestOffscreenSave(metaFiles, filename, t0Wall) {
   return new Promise((resolve) => {
     const listener = (msg) => {
       if (msg.type === "offscreen-save-done") {
@@ -714,7 +713,18 @@ function requestOffscreenSave(metaFiles, filename) {
       }
     };
     chrome.runtime.onMessage.addListener(listener);
-    chrome.runtime.sendMessage({ type: "offscreen-save", metaFiles, filename }).catch(() => {});
+    // sendMessage validates its argument SYNCHRONOUSLY, so an oversized payload
+    // throws here rather than rejecting — inside this executor that became an
+    // unhandled rejection of the returned promise, and the take was lost with no
+    // onExportFailure and no retry state. Resolve a failure instead; the caller
+    // then keeps the recording for a retry.
+    try {
+      chrome.runtime.sendMessage({ type: "offscreen-save", metaFiles, filename, t0Wall }).catch(() => {});
+    } catch (e) {
+      chrome.runtime.onMessage.removeListener(listener);
+      logError("export", { message: "offscreen-save could not be sent: " + (e?.message || e) });
+      return resolve({ ok: false, reason: "save-send-failed" });
+    }
     // Zipping + writing a large bundle can take a while; allow generously before
     // giving up (a timeout is treated as a failure → the take is kept for retry).
     const timer = setTimeout(() => {
@@ -745,7 +755,7 @@ async function retryExport() {
     const frames = await db.readAll("frames");
     const timeline = await db.readAll("timeline");
     const harEntries = state.har.size ? [...state.har.values()] : await db.readAll("har");
-    const files = [...metaFiles(manifest, timeline, harEntries, state.errors), ...streamFiles(timeline, rrweb, frames)];
+    const files = [...metaFiles(manifest, timeline, state.errors), ...streamFiles(timeline, rrweb, frames, harEntries, manifest.t0_wall)];
     const bytes = new Uint8Array(await (await makeZip(files)).arrayBuffer());
     const url = `data:application/zip;base64,${base64FromBytes(bytes)}`;
     await chrome.downloads.download({ url, filename, saveAs: false });
@@ -1487,7 +1497,8 @@ async function ensureOffscreen() {
 async function startVideo(withMic) {
   try {
     await ensureOffscreen();
-    chrome.runtime.sendMessage({ type: "offscreen-start", withMic });
+    chrome.runtime.sendMessage({ type: "offscreen-start", withMic })
+      .catch((e) => logError("video", { message: "offscreen never got the start message: " + (e?.message || e) }));
     return true;
   } catch (e) {
     logError("video", { message: "video capture unavailable: " + (e?.message || e), stack: e?.stack });
@@ -1611,18 +1622,13 @@ function buildManifest({ hasVideo, narrationInVideo, micError, segmentOffsets, t
 }
 
 // The small, worker-built bundle files (everything except the bulk streams + video).
-function metaFiles(manifest, timeline, harEntries, errors) {
-  const har = {
-    log: {
-      version: "1.2",
-      creator: { name: "browser-activity-capture", version: "0.1.0" },
-      comment: `t0_wall=${manifest.t0_wall}. Auth headers and cookies redacted before write.`,
-      entries: harEntries.map(({ _t, _start, _tab, _sameSite, _wantBody, requestId, ...e }) => e),
-    },
-  };
+// Everything here is BOUNDED — it all crosses a chrome.runtime message to the
+// offscreen doc, which is hard-capped at 64MiB. network.har is not bounded (one
+// entry per request, for as long as the take runs), so it lives in streamFiles()
+// and is read from IndexedDB on the far side instead. Keep it that way.
+function metaFiles(manifest, timeline, errors) {
   return [
     { name: "manifest.json", data: JSON.stringify(manifest, null, 2) },
-    { name: "network.har", data: JSON.stringify(har, null, 2) },
     { name: "transcript.vtt", data: buildTranscript(timeline) },
     { name: "errors.json", data: JSON.stringify(errors || [], null, 2) },
     { name: "README.md", data: bundleReadme(manifest) },

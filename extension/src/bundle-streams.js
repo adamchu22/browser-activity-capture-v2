@@ -1,9 +1,10 @@
 // Turn the bulk IndexedDB capture streams into Capture-Bundle file entries.
 //
-// These streams (the rrweb DOM log, the merged timeline, and the frame PNGs) are
-// the BIG part of a bundle — a long recording's events.jsonl + frames can be tens
-// of MB. They must never be shipped through chrome.runtime.sendMessage (hard-capped
-// at 64MiB) or base64-inflated into a data: URL. So the assembly that touches them
+// These streams (the rrweb DOM log, the merged timeline, the HAR, and the frame
+// PNGs) are the BIG part of a bundle — a long recording's events.jsonl + frames
+// can be tens of MB, and network.har grows with every request made. They must never
+// be shipped through chrome.runtime.sendMessage (hard-capped at 64MiB) or
+// base64-inflated into a data: URL. So the assembly that touches them
 // reads straight from IndexedDB in whichever context owns the destination:
 //   - normal export: the OFFSCREEN document (it already holds the video Blob and can
 //     createWritable()/createObjectURL at any size);
@@ -28,15 +29,29 @@ export function frameMeta(frames) {
   return (frames || []).map((f) => ({ t: f.t, file: f.file }));
 }
 
-// The three bulk streams as bundle files. `timeline`/`rrweb`/`frames` are the raw
+// The bulk streams as bundle files. `timeline`/`rrweb`/`frames`/`har` are the raw
 // IndexedDB records (each may carry an autoincrement `seq` key, stripped here).
 // Frames become real PNG bytes under their stored `file` name (e.g. frames/…png).
-export function streamFiles(timeline, rrweb, frames) {
+//
+// network.har belongs HERE, not with the worker's small meta files: a per-body cap
+// bounds each entry but nothing bounds the entry COUNT, so a chatty app over a long
+// take pushed the meta payload past sendMessage's 64MiB cap and killed the export
+// outright. Assembled from IndexedDB in whichever context owns the destination, like
+// every other unbounded stream. `_`-prefixed fields are worker bookkeeping and the
+// requestId is the store's key — neither belongs in an exported HAR.
+export function streamFiles(timeline, rrweb, frames, har, t0Wall) {
   const tl = (timeline || []).map(({ seq, ...e }) => e);
   const rr = (rrweb || []).map(({ seq, ...e }) => e);
+  const log = {
+    version: "1.2",
+    creator: { name: "browser-activity-capture", version: "0.1.0" },
+    comment: `t0_wall=${t0Wall}. Auth headers and cookies redacted before write.`,
+    entries: (har || []).map(({ seq, _t, _start, _tab, _sameSite, _wantBody, requestId, ...e }) => e),
+  };
   const files = [
     { name: "timeline.json", data: JSON.stringify(tl, null, 2) },
     { name: "events.jsonl", data: rr.map((e) => JSON.stringify(e)).join("\n") },
+    { name: "network.har", data: JSON.stringify({ log }, null, 2) },
   ];
   for (const f of frames || []) {
     files.push({ name: f.file, data: dataUrlToBytes(f.dataUrl) });

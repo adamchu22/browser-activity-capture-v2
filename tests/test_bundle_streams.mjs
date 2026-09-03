@@ -63,9 +63,43 @@ test("streamFiles emits each frame as PNG bytes under its stored file name", () 
   assert.deepEqual([...png.data], [0x41, 0x42]);
 });
 
-test("streamFiles always includes timeline.json and events.jsonl, even when empty", () => {
+test("streamFiles always includes the three text streams, even when empty", () => {
   const files = streamFiles([], [], []);
   const names = files.map((f) => f.name);
-  assert.deepEqual(names, ["timeline.json", "events.jsonl"]);
+  assert.deepEqual(names, ["timeline.json", "events.jsonl", "network.har"]);
   assert.equal(files.find((f) => f.name === "events.jsonl").data, "");
+});
+
+// network.har moved OFF the sendMessage path and in here: per-entry body caps bound
+// each request, nothing bounds the request count, and a long take blew the 64MiB cap
+// and killed the whole export. Same shape the worker used to emit.
+test("streamFiles builds network.har, stripping worker bookkeeping fields", () => {
+  const har = [
+    {
+      seq: 3,
+      requestId: "1000.4",
+      _t: 12,
+      _start: 0.5,
+      _tab: 7,
+      _sameSite: true,
+      _wantBody: true,
+      startedDateTime: "2026-09-03T00:00:00.000Z",
+      request: { method: "GET", url: "https://app.example.com/api/x" },
+      response: { status: 200 },
+    },
+  ];
+  const files = streamFiles([], [], [], har, 1756857600000);
+  const { log } = JSON.parse(files.find((f) => f.name === "network.har").data);
+  assert.equal(log.version, "1.2");
+  assert.match(log.comment, /t0_wall=1756857600000/);
+  assert.equal(log.entries.length, 1);
+  const e = log.entries[0];
+  assert.deepEqual(Object.keys(e).sort(), ["request", "response", "startedDateTime"]);
+  assert.equal(e.request.url, "https://app.example.com/api/x");
+});
+
+test("streamFiles emits a valid empty HAR when nothing was captured", () => {
+  const { log } = JSON.parse(streamFiles([], [], []).find((f) => f.name === "network.har").data);
+  assert.deepEqual(log.entries, []);
+  assert.equal(log.version, "1.2");
 });

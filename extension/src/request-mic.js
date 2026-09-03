@@ -25,7 +25,7 @@
   // nothing — the gap that stranded Comet users where this prompt never surfaces. The
   // background worker ignores this message type; the popup listens for it.
   try {
-    chrome.runtime.sendMessage({ type: "mic-grant-result", ok, error });
+    chrome.runtime.sendMessage({ type: "mic-grant-result", ok, error }).catch(() => {});
   } catch {}
   // Ask the injector (content script in the page) to remove this iframe now we're done.
   try {
