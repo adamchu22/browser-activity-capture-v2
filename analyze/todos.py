@@ -23,6 +23,18 @@ import re
 # strongest signal. Each pattern is intentionally high-precision: a miss (left
 # unclassified) is cheaper than a false to-do.
 _CATEGORIES = [
+    ("feature-request", re.compile(
+        r"\b(this should (do|show|be)|would be (better|nice|helpful) if|"
+        r"i wish (this|it) would|can we change|what if this was|make it easier to)\b",
+        re.IGNORECASE)),
+    ("ui-improvement", re.compile(
+        r"\b(it keeps|every time i|annoying|frustrating|confusing)\b", re.IGNORECASE)),
+    ("how-to", re.compile(
+        r"\b(here'?s how|this is how|to do this|the way to|first you|then you)\b",
+        re.IGNORECASE)),
+    ("self-instruction", re.compile(
+        r"\b(i (need to|have to|must)|let me|next i|now i (click|open|select|type|press))\b",
+        re.IGNORECASE)),
     ("to-do", re.compile(
         r"\b(add (that|this)?\s*(as )?a? ?(to-?do|task)|to-?do|"
         r"make a (task|ticket|note)|we should|we need to|need to|"
@@ -85,13 +97,17 @@ def _evidence(t: float, timeline: list[dict], frames: list[dict] | None,
               api: list[dict] | None, window_ms: int = 6000) -> dict:
     """The element / frame / endpoint around an utterance at time t — what makes
     a to-do actionable instead of just a quote."""
-    ev: dict = {}
+    ev: dict = {"relationship": "temporal-proximity", "causality": "unconfirmed"}
     # Nearest user action within the window → the element the user was on.
     actions = [e for e in timeline
                if isinstance(e, dict) and e.get("kind") in _ACTION_KINDS
                and abs(_num(e.get("t")) - t) <= window_ms]
     act = _nearest(actions, t)
     if act:
+        ev["action_t"] = int(_num(act.get("t")))
+        ev["action_delta_ms"] = int(_num(act.get("t")) - t)
+        ev["action_kind"] = act.get("kind")
+        ev["tab"] = act.get("tab")
         ctx = act.get("ctx") if isinstance(act.get("ctx"), dict) else {}
         label = act.get("label") or ctx.get("name") or ctx.get("label")
         if label:
@@ -100,13 +116,18 @@ def _evidence(t: float, timeline: list[dict], frames: list[dict] | None,
             ev["selector"] = str(act["selector"])
     # Nearest frame (visual ground truth).
     fr = _nearest(frames or [], t)
-    if fr and fr.get("file"):
+    if fr and fr.get("file") and abs(_num(fr.get("t")) - t) <= window_ms:
         ev["frame"] = fr["file"]
+        ev["frame_delta_ms"] = int(_num(fr.get("t")) - t)
     # Nearest API call within the window → the endpoint the action hit.
     near_api = [e for e in (api or [])
-                if isinstance(e, dict) and abs(_num(e.get("_t")) - t) <= window_ms]
+                if isinstance(e, dict) and abs(_num(e.get("_t")) - t) <= window_ms
+                and (not act or act.get("tab") is None or e.get("_tab") is None
+                     or act.get("tab") == e.get("_tab"))]
     a = _nearest(near_api, t, key="_t")
     if a:
+        ev["endpoint_delta_ms"] = int(_num(a.get("_t")) - t)
+        ev["endpoint_tab"] = a.get("_tab")
         req = a.get("request") if isinstance(a.get("request"), dict) else {}
         if req.get("url"):
             ev["endpoint"] = f"{req.get('method', '')} {req['url']}".strip()

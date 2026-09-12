@@ -94,7 +94,9 @@ test("streamFiles builds network.har, stripping worker bookkeeping fields", () =
   assert.match(log.comment, /t0_wall=1756857600000/);
   assert.equal(log.entries.length, 1);
   const e = log.entries[0];
-  assert.deepEqual(Object.keys(e).sort(), ["request", "response", "startedDateTime"]);
+  assert.deepEqual(Object.keys(e).sort(), ["_t", "_tab", "request", "response", "startedDateTime"]);
+  assert.equal(e._t, 12);
+  assert.equal(e._tab, 7);
   assert.equal(e.request.url, "https://app.example.com/api/x");
 });
 

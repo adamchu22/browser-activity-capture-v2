@@ -84,6 +84,18 @@ Write these files into the pack directory:
    never copy proprietary assets. Follow the bundled `agent-skills/competitive-research`
    skill.
 
+## UI Improvement Hypotheses — required for every recording
+
+Regardless of purpose, add a short **`## UI Improvement Hypotheses`** section to
+`notes.md`. Aim for **3–5 grounded hypotheses** using Intent Quotes, moments,
+observed actions, frames and friction signals. For each, cite a timestamp and
+element/frame, distinguish the observation from the inferred improvement, and
+state what a human should verify. Temporal proximity is not proof that an action
+caused a request or that a quote refers to the nearest element.
+
+Do not invent issues to meet the count: if fewer than three are supported, say
+so and include only those supported. Keep all purpose-specific deliverables above.
+
 ## Ground rules
 
 - Ground every claim in the bundle. Prefer `(inferred)` over confident invention.

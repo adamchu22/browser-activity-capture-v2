@@ -36,6 +36,7 @@ from urllib.parse import urlparse
 from health import build_health, canonical_frames  # noqa: E402
 from friction import compute_friction  # noqa: E402
 from todos import extract_todos  # noqa: E402
+from insights import build_moments, automation_candidates, render_moments, render_automation
 
 _VTT_TIME = re.compile(r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->")
 
@@ -392,7 +393,8 @@ def render_timeline(events: list[dict], blocklist: list[str] | None = None,
         t = ms(e.get("t", 0))
         # Mark a tab switch so a multi-tab recording reads in order.
         tab = e.get("tab")
-        if multi_tab and tab is not None and tab in tab_labels and tab != current_tab:
+        if (multi_tab and _foreground_event(e) and tab is not None
+                and tab in tab_labels and tab != current_tab):
             current_tab = tab
             lines.append(f"- `{t}`  ━━━ tab {tab_labels[tab]} ━━━")
         kind = e.get("kind", "?")
@@ -426,16 +428,29 @@ def render_timeline(events: list[dict], blocklist: list[str] | None = None,
 
 # ---- step segmentation (the narrated procedure) --------------------------
 
+def _foreground_event(e: dict) -> bool:
+    # Network/background navigation is not evidence of user focus.
+    return (e.get("active") is not False and e.get("kind") in {
+        "tab-activated", "click", "input", "key", "annotation:select",
+        "annotation:draw", "scroll",
+    })
+
+
 def _effective_tabs(events: list[dict]) -> list:
     """A speech cue has no tab, but it narrates the action that FOLLOWS it — so for
     segmentation it should belong to the next action's tab. Forward-fill each speech
     event's tab from the next event that has one."""
-    eff = [e.get("tab") for e in events]
+    eff = []
+    active = None
+    for e in events:
+        if _foreground_event(e) and e.get("tab") is not None:
+            active = e["tab"]
+        eff.append(active)
     next_tab = None
     for i in range(len(events) - 1, -1, -1):
-        if events[i].get("tab") is not None:
+        if _foreground_event(events[i]) and events[i].get("tab") is not None:
             next_tab = events[i]["tab"]
-        elif events[i].get("kind") == "speech":
+        elif events[i].get("kind") == "speech" and next_tab is not None:
             eff[i] = next_tab
     return eff
 
@@ -451,10 +466,11 @@ def segment_steps(events: list[dict], gap_ms: int = 2500) -> list[dict]:
     last_t = None
     last_tab = None
     for i, e in enumerate(events):
-        kind, t, tab = e.get("kind"), e.get("t", 0), eff[i]
+        kind, t, tab = e.get("kind"), _num(e.get("t", 0)), eff[i]
         boundary = (
             cur is None
-            or kind == "nav"
+            or (kind == "nav" and e.get("active") is not False
+                and (e.get("tab") is None or last_tab is None or e.get("tab") == last_tab))
             or (tab is not None and last_tab is not None and tab != last_tab)
             or (last_t is not None and t - last_t >= gap_ms)
         )
@@ -462,7 +478,8 @@ def segment_steps(events: list[dict], gap_ms: int = 2500) -> list[dict]:
             cur = {"t": t, "tab": tab, "events": []}
             steps.append(cur)
         cur["events"].append(e)
-        last_t = t
+        if kind != "network":
+            last_t = _num(t)
         if tab is not None:
             last_tab = tab
     return steps
@@ -711,7 +728,10 @@ def render_api_table(har: dict, blocklist: list[str] | None = None,
         resp = resp if isinstance(resp, dict) else {}
         status = resp.get("status", "")
         started = _parse_iso_ms(entry.get("startedDateTime"))
-        t_cell = f"`{ms(started - t0)}`" if (t0 is not None and started is not None) else "—"
+        offset = entry.get("_t")
+        if not isinstance(offset, (int, float)) or isinstance(offset, bool):
+            offset = started - t0 if t0 is not None and started is not None else None
+        t_cell = f"`{ms(offset)}`" if offset is not None else "—"
         pd = req.get("postData")
         req_body = pd.get("text", "") if isinstance(pd, dict) else ""
         content = resp.get("content")
@@ -748,9 +768,12 @@ def api_entries(har: dict, t0_wall: str | None) -> list[dict]:
         if not isinstance(e, dict):
             continue
         started = _parse_iso_ms(e.get("startedDateTime"))
-        t = (started - t0) if (t0 is not None and started is not None) else 0
+        t = e.get("_t")
+        if not isinstance(t, (int, float)) or isinstance(t, bool):
+            t = (started - t0) if (t0 is not None and started is not None) else 0
         out.append({
             "_t": t,
+            "_tab": e.get("_tab"),
             "request": e.get("request") if isinstance(e.get("request"), dict) else {},
             "response": e.get("response") if isinstance(e.get("response"), dict) else {},
         })
@@ -808,9 +831,15 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
     # tool trusting the manifest loses visual ground truth without knowing. The filename is
     # the ms offset, so disk is complete. health.json reports the reconciliation.
     frames = canonical_frames(bundle, manifest)
+    moments = build_moments(segment_steps(timeline), frames, api)
+    selected = {m["frame"] for m in moments if m["frame"]}
     frame_index = "\n".join(
-        f"- `{ms(f.get('t', 0))}` → `frames/{Path(f.get('file') or '').name}`" for f in frames
+        f"- `{ms(f.get('t', 0))}` → `frames/{Path(f.get('file') or '').name}`"
+        for f in frames if f.get("file") in selected
     )
+    frame_index += f"\n_{len(frames)} total frames; {len(selected)} step representatives listed. All originals remain in frames/._"
+    moments_block = render_moments(moments, ms)
+    automation_block = render_automation(automation_candidates(timeline, api), ms)
 
     # Surface capture problems up top: anything in errors.json plus the specific
     # narration failure reason, so a bad run is obvious without digging.
@@ -864,7 +893,9 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
                 gap_ms = off - prev
                 segment_lines.append(
                     f"  - `{seg_file}` starts at `{ms(off)}` "
-                    f"(~{gap_ms // 1000}s after the previous segment — video gap)"
+                    f"(~{gap_ms // 1000}s after the previous segment start; "
+                    f"this is NOT the gap duration — the previous file may contain "
+                    f"continuous microphone audio until this offset)"
                 )
     # Frame-index integrity (self-validating): surface the manifest-vs-disk reconciliation
     # and any visual gaps so a reader knows the index was rebuilt and where the screen
@@ -944,14 +975,40 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
         ev = td.get("evidence", {})
         bits = []
         if ev.get("element"):
-            bits.append(f"on {ev['element']}")
+            bits.append(f"near {ev['element']}")
         if ev.get("endpoint"):
-            bits.append(f"→ {ev['endpoint']}")
+            bits.append(f"nearby request: {ev['endpoint']}")
         if ev.get("frame"):
             bits.append(f"`{ev['frame']}`")
         ev_str = ("  ·  " + " · ".join(bits)) if bits else ""
         todo_lines.append(f'- `{ms(td["t"])}` **[{td["type"]}]** "{td["text"]}"{ev_str}')
     more_todos = f"\n- _(+{len(todos) - 25} more — see `todos.json`)_" if len(todos) > 25 else ""
+    # Intent Quotes: the improvement-signal slice of the narration (feature requests,
+    # UI complaints, how-to/self-instruction). These are the raw material for UI/
+    # feature-improvement work — surfaced separately from generic to-dos so an agent
+    # scanning for "what should this product do differently" finds them in one place.
+    INTENT_KINDS = {"feature-request", "ui-improvement", "how-to", "self-instruction"}
+    intent_todos = [td for td in todos if td.get("type") in INTENT_KINDS]
+    intent_block = ""
+    if intent_todos:
+        i_lines = []
+        for td in intent_todos[:20]:
+            ev = td.get("evidence", {})
+            bits = []
+            if ev.get("element"):
+                bits.append(f"near {ev['element']}")
+            if ev.get("frame"):
+                bits.append(f"`{ev['frame']}`")
+            ev_str = ("  ·  " + " · ".join(bits)) if bits else ""
+            i_lines.append(f'- `{ms(td["t"])}` **[{td["type"]}]** "{td["text"]}"{ev_str}')
+        more_i = f"\n- _(+{len(intent_todos) - 20} more — see `todos.json`)_" if len(intent_todos) > 20 else ""
+        intent_block = (
+            "\n## ✦ Intent Quotes (improvement signals)\n"
+            "_Utterances where the user asked for something better, complained, or "
+            "explained how they work — the raw material for UI/feature improvements and "
+            "skills. Treat each as a hypothesis to confirm, not a requirement._\n"
+            + "\n".join(i_lines) + more_i + "\n"
+        )
     todos_block = (
         "\n## ✦ To-dos & intent (extracted from narration)\n"
         "_Each utterance the user spoke that carries intent, classified and tied to the "
@@ -971,6 +1028,8 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
             f"burst(s) · {fsum['retried_actions']} retried action(s) · {fsum['error_events']} "
             f"error signal(s)"
         ]
+        for key in ("dead_clicks", "bounce_backs", "input_churn", "scroll_hunting", "focus_returns"):
+            fr_lines.append(f"- {fsum[key]} {key.replace('_', ' ')} candidate(s)")
         for rc in friction["repeat_clicks"][:3]:
             fr_lines.append(f"  - `{ms(rc['t'])}` clicked **{rc['label']}** ×{rc['count']} (rage/repeat)")
         for r in friction["retried_actions"][:3]:
@@ -999,7 +1058,11 @@ def build_context(bundle: Path, blocklist: list[str] | None = None) -> str:
 {task_block}{purpose_block}
 Captured {manifest.get('t0_wall','?')} · duration {manifest.get('duration_ms','?')} ms ·
 sync mode `{manifest.get('sync_mode','?')}`. Secrets redacted as `‹redacted›`.
-{issues_block}{tabs_block}{annotations_block}{todos_block}{friction_block}
+{issues_block}{tabs_block}{annotations_block}{todos_block}{intent_block}{friction_block}
+
+{automation_block}
+
+{moments_block}
 ## URLs visited
 {urls_block}
 
@@ -1048,9 +1111,9 @@ def _transcript_is_stub(text: str) -> bool:
     an empty file, or a WEBVTT header with no cue lines."""
     if not text or not text.strip():
         return True
-    if STUB_TRANSCRIPT_MARK in text:
-        return True
-    return "-->" not in text  # header only, no cues
+    # A narrator may literally say "No narration captured". Only real cue
+    # structure, not a substring in speech, decides whether ASR should overwrite it.
+    return not parse_vtt_cues(text)
 
 
 def _venv_python() -> Path | None:
@@ -1193,6 +1256,8 @@ def build_pack(bundle: Path, out: Path, blocklist: list[str] | None = None,
         json.dumps(compute_friction(merged, api), indent=2), encoding="utf-8")
     (out / "todos.json").write_text(
         json.dumps(extract_todos(speech, merged, frames, api), indent=2), encoding="utf-8")
+    (out / "moments.json").write_text(
+        json.dumps(build_moments(segment_steps(merged), frames, api), indent=2), encoding="utf-8")
 
     # The post-transfer step: bundle the skills the receiving agent uses — the
     # analyze-capture procedure always, plus activity skills (e.g. ui-improvement)

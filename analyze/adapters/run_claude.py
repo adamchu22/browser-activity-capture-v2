@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -89,6 +90,20 @@ def run(bundle: Path) -> dict:
 
 
 def write(result: dict, out: Path) -> None:
+    name = result.get("skill", {}).get("name")
+    # Provider output is untrusted. A basename allowlist rejects POSIX/Windows
+    # absolute paths, separators, traversal, drive prefixes and device names.
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
+        raise ValueError("Skill name must be a short kebab-case basename")
+    if len(name) > 80 or name.lower() in {
+        "con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
+        *(f"lpt{i}" for i in range(1, 10)),
+    }:
+        raise ValueError("Unsafe skill name")
+    root = out.resolve()
+    target = (root / "skills" / name).resolve()
+    if not target.is_relative_to(root):
+        raise ValueError("Skill path escapes output directory")
     out.mkdir(parents=True, exist_ok=True)
     (out / "SOP.md").write_text(result["sop_markdown"].rstrip() + "\n", encoding="utf-8")
     (out / "automation.suggestions.md").write_text(

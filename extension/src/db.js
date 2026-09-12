@@ -12,8 +12,12 @@ const LOG_STORES = ["timeline", "rrweb", "frames"];
 const KEYED_STORES = { har: "requestId" };
 const ALL_STORES = [...LOG_STORES, ...Object.keys(KEYED_STORES)];
 
+let connection = null;
+let epoch = 0;
+
 function open() {
-  return new Promise((resolve, reject) => {
+  if (connection) return connection;
+  connection = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -28,14 +32,22 @@ function open() {
         }
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => { db.close(); connection = null; };
+      db.onclose = () => { connection = null; };
+      resolve(db);
+    };
+    req.onerror = () => { connection = null; reject(req.error); };
   });
+  return connection;
 }
 
 // Append to a log store (autoincrement key).
 export async function append(store, record) {
+  const started = epoch;
   const db = await open();
+  if (started !== epoch) throw new Error("Stale capture write");
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, "readwrite");
     tx.objectStore(store).add(record);
@@ -46,7 +58,9 @@ export async function append(store, record) {
 
 // Upsert into a keyed store (the record must carry that store's keyPath).
 export async function put(store, record) {
+  const started = epoch;
   const db = await open();
+  if (started !== epoch) throw new Error("Stale capture write");
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, "readwrite");
     tx.objectStore(store).put(record);
@@ -79,6 +93,7 @@ export async function count(store) {
 }
 
 export async function clearAll() {
+  ++epoch;
   const db = await open();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(ALL_STORES, "readwrite");

@@ -18,7 +18,7 @@ class TestRecord(unittest.TestCase):
     def test_build_record_has_locators_and_runnable_cmd(self):
         rec = ip.build_record(adir=Path("/opt/cap/analyze"), python="/opt/cap/.venv/bin/python")
         self.assertEqual(rec["tool"], "browser-activity-capture")
-        self.assertEqual(rec["analyze_dir"], "/opt/cap/analyze")
+        self.assertEqual(Path(rec["analyze_dir"]), Path("/opt/cap/analyze").resolve())
         self.assertEqual(rec["python"], "/opt/cap/.venv/bin/python")
         # pack_cmd is a ready-to-run template: names pack.py + the bundle placeholder.
         self.assertIn("pack.py", rec["pack_cmd"])
@@ -69,7 +69,7 @@ class TestEngineRecord(unittest.TestCase):
             rec = ip.build_record(adir=Path("/x/analyze"), python="/x/py")
         finally:
             ip.engine_info = real
-        self.assertEqual(rec["analyze_dir"], "/x/analyze")
+        self.assertEqual(Path(rec["analyze_dir"]), Path("/x/analyze").resolve())
         self.assertIn("pack.py", rec["pack_cmd"])
 
 
@@ -80,7 +80,7 @@ class TestWriteRead(unittest.TestCase):
             ip.write_pointer(adir=Path("/x/analyze"), python="/x/py", dest=dest)
             self.assertTrue(dest.exists())
             rec = ip.read_pointer(dest)
-            self.assertEqual(rec["analyze_dir"], "/x/analyze")
+            self.assertEqual(Path(rec["analyze_dir"]), Path("/x/analyze").resolve())
             self.assertEqual(rec["python"], "/x/py")
 
     def test_write_creates_parent_dirs(self):

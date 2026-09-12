@@ -21,7 +21,7 @@
 // Pure + dependency-free so it can be unit-tested without chrome.* (tests/test_capture_scope.mjs).
 export function inCaptureScope(tab, { surface, captureTabId, captureWindowId } = {}) {
   if (!tab) return false;
-  if (surface === "browser") return tab.id === captureTabId;
-  if (surface === "window") return tab.windowId === captureWindowId;
+  if (surface === "browser") return captureTabId != null && tab.id === captureTabId;
+  if (surface === "window") return captureWindowId != null && tab.windowId === captureWindowId;
   return true; // "monitor" / null / unknown — whole screen, not display-scoped in v1
 }

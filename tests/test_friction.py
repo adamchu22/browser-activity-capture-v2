@@ -91,8 +91,10 @@ class TestRobustness(unittest.TestCase):
 
     def test_empty(self):
         f = friction.compute_friction([])
-        self.assertEqual(f["summary"], {"long_pauses": 0, "repeat_clicks": 0,
-                                        "retried_actions": 0, "error_events": 0})
+        self.assertTrue(all(value == 0 for value in f["summary"].values()))
+        self.assertEqual(f["schema_version"], 2)
+        self.assertIn("dead_clicks", f)
+        self.assertIn("focus_returns", f)
 
 
 if __name__ == "__main__":

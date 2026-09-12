@@ -29,6 +29,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import math
+import re
 import subprocess
 import sys
 import tempfile
@@ -234,6 +236,30 @@ def selftest(engine: str, model: str, chunk: float, *, engine_explicit: bool = F
     return 0
 
 
+def offset_cues(vtt: str, offset_ms: float) -> list[tuple[float, float, str]]:
+    """Parse VTT cues and move both endpoints from segment PTS to master time."""
+    stamp = r"(?:(\d+):)?(\d{2}):(\d{2})\.(\d{3})"
+    pattern = re.compile(rf"^{stamp}\s+-->\s+{stamp}(?:\s+.*)?$")
+    lines, out, i = vtt.splitlines(), [], 0
+    while i < len(lines):
+        match = pattern.match(lines[i].strip())
+        i += 1
+        if not match:
+            continue
+        values = match.groups()
+        def seconds(parts):
+            h, m, s, ms = parts
+            return int(h or 0) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
+        start, end = seconds(values[:4]), seconds(values[4:])
+        body = []
+        while i < len(lines) and lines[i].strip():
+            body.append(lines[i])
+            i += 1
+        if body and end > start:
+            out.append((start + offset_ms / 1000, end + offset_ms / 1000, "\n".join(body)))
+    return out
+
+
 # ---- driver --------------------------------------------------------------
 
 def transcribe(bundle: Path, engine: str, model: str, chunk: float,
@@ -267,15 +293,36 @@ def transcribe(bundle: Path, engine: str, model: str, chunk: float,
         print("manifest says narration_in_video: false — the video has no mic audio.", file=sys.stderr)
         print("Transcribing anyway; expect an empty result if it's truly silent.")
 
+    offsets = {}
+    for i, seg in enumerate(manifest.get("video_segments") or []):
+        if not isinstance(seg, dict):
+            raise ValueError("Malformed video segment")
+        name = Path(seg.get("file") or ("video.webm" if i == 0 else f"video-{i + 1}.webm")).name
+        offset = seg.get("offset_ms", 0)
+        if isinstance(offset, bool) or not isinstance(offset, (int, float)) or not math.isfinite(offset) or offset < 0:
+            raise ValueError("Invalid video segment offset_ms")
+        offsets[name] = offset
+
+    # Each WebM starts at its own PTS zero. Transcribe independently and translate
+    # cue times onto the recording clock, preserving gaps rather than concatenating
+    # them away. No transcript redaction is introduced here.
+    combined = []
     with tempfile.TemporaryDirectory() as td:
-        wav = Path(td) / "audio.wav"
-        extract_audio_multi(video_paths, wav)
-        if engine == "whisper":
-            vtt, cues = run_whisper(wav, model or "base")
-        elif engine == "qwen3-asr":
-            vtt, cues = run_qwen(wav, model or "1.7b", chunk)
-        else:
-            vtt, cues = run_parakeet(wav, model)
+        for i, video in enumerate(video_paths):
+            wav = Path(td) / f"audio-{i}.wav"
+            extract_audio(video, wav)
+            if engine == "whisper":
+                part, _ = run_whisper(wav, model or "base")
+            elif engine == "qwen3-asr":
+                part, _ = run_qwen(wav, model or "1.7b", chunk)
+            else:
+                part, _ = run_parakeet(wav, model)
+            combined.extend(offset_cues(part, offsets.get(video.name, 0)))
+    combined.sort(key=lambda cue: cue[0])
+    lines = ["WEBVTT", "", f"NOTE engine={engine}; segment offsets applied", ""]
+    for start, end, text in combined:
+        lines.extend([f"{vtt_time(start)} --> {vtt_time(end)}", text, ""])
+    vtt, cues = "\n".join(lines) + "\n", len(combined)
 
     vtt_path = bundle / "transcript.vtt"
     vtt_path.write_text(vtt, encoding="utf-8")

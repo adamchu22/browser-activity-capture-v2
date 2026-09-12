@@ -94,7 +94,9 @@ class TestBuildPackNeverCrashes(unittest.TestCase):
         try:
             b.write("timeline.json", "{not json")
             b.write("manifest.json", "[]")
-            pack.build_pack(b.dir, out, transcribe=False)  # must not raise
+            # The "never crash" contract: a malformed bundle must still produce a
+            # readable pack (best-effort defaults), never raise.
+            pack.build_pack(b.dir, out, transcribe=False)
             self.assertTrue((out / "context.md").exists())
         finally:
             b.close()

@@ -35,8 +35,9 @@ happened and why, then produce the deliverables the recording was made for.
   system(s) involved, and where it starts/ends. Ground it in the capture.
 - **Analyze under the purpose's lens.** Read every step asking the question the purpose
   implies (reproducibility? friction? inefficiency? a UI change?).
-- **Produce exactly the outputs the Purpose block lists**, plus `notes.md`. Write them
-  into the pack directory. Their shapes are defined in `BRIEF.md`.
+- **Produce the outputs the Purpose block lists**, plus `notes.md`. Always include
+  the short `## UI Improvement Hypotheses` section required by `BRIEF.md` in
+  `notes.md`, regardless of purpose. Write outputs into the pack directory.
 
 ## Use the bundled activity skills
 

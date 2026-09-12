@@ -25,10 +25,30 @@
   const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
   // Mirrors redact.js TOKEN_VALUE_RE — redact a JWT/bearer by value shape even
   // when it sits in a field whose name looks innocent.
-  const TOKEN_VALUE_RE = /eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]+)?|Bearer\s+[A-Za-z0-9._-]{12,}/g;
+  const TOKEN_VALUE_RE = new RegExp(
+    [
+      "eyJ[A-Za-z0-9_-]{6,}\\.[A-Za-z0-9_-]{6,}(?:\\.[A-Za-z0-9_-]+)?",
+      "Bearer(?:\\s|%20|\\+)+[A-Za-z0-9._-]{12,}",
+      "(?:AKIA|ASIA)[A-Z0-9]{16}",
+      "[sr]k_(?:live|test)_[A-Za-z0-9]{16,}",
+      "gh[posu]_[A-Za-z0-9]{36,}",
+      "github_pat_[A-Za-z0-9_]{40,}",
+      "AIza[A-Za-z0-9_-]{35}",
+      "ya29\\.[A-Za-z0-9_-]{20,}",
+      "xox[baprs]-[A-Za-z0-9-]{10,}",
+      "sk-ant-[A-Za-z0-9_-]{20,}",
+      "sk-[A-Za-z0-9]{32,}",
+      "-----BEGIN(?:[A-Z ]+)?PRIVATE KEY-----",
+    ].join("|"),
+    "gi"
+  );
+  // Input-only: redact the entire pasted value, not just the PEM BEGIN marker.
+  // Do not change scrubTokens/redactBody: HAR redaction retains its existing scope.
+  const PEM_INPUT_RE = /-----BEGIN(?:[A-Z ]+)?PRIVATE KEY-----/i;
   const DWELL_MS = 500; // cursor must rest this long on an element to log a hover
 
   let recording = false;
+  let captureGeneration = null;
   // Mirror of the recording's paused state at the top level. The overlay tracks
   // its own `paused` inside its IIFE (out of reach here), but the document click
   // handler needs it to gate ⌥-click instant-select — paused means off-record,
@@ -42,10 +62,10 @@
   // (the four errors seen in chrome://extensions). Guard on the runtime id and
   // swallow the rest so a stale script goes quietly inert instead of spamming.
   let sendFailed = false; // surface the first dropped message, then stay quiet
-  function safeSend(msg, cb) {
+  function safeSend(msg) {
     try {
       if (!chrome.runtime?.id) return; // context torn down (reload/update) — give up
-      const sent = cb ? chrome.runtime.sendMessage(msg, cb) : chrome.runtime.sendMessage(msg);
+      const sent = chrome.runtime.sendMessage(msg);
       // The callback form returns undefined; the promise form rejects ASYNCHRONOUSLY,
       // which the try/catch above cannot see — so it lands in the PAGE's console as an
       // "Uncaught (in promise)". Two real causes: the context torn down mid-call, and
@@ -77,14 +97,15 @@
 
   function isSecretInput(el) {
     if (!el) return false;
-    if (el.type === "password") return true;
+    if (el.type === "password" || el.closest?.("[data-capture-secret]")) return true;
     const hay = `${el.name || ""} ${el.id || ""} ${el.autocomplete || ""}`;
     return SECRET_KEY_RE.test(hay);
   }
 
   function maskValue(fieldName, value) {
     if (value == null || value === "") return value;
-    if (SECRET_KEY_RE.test(String(fieldName))) return "‹redacted:secret›";
+    if (SECRET_KEY_RE.test(String(fieldName)) || PEM_INPUT_RE.test(String(value)))
+      return "‹redacted:secret›";
     if (/email/i.test(String(fieldName)) || EMAIL_RE.test(String(value)))
       return "‹redacted:email›";
     return String(value).replace(TOKEN_VALUE_RE, "‹redacted:secret›");
@@ -320,12 +341,12 @@
 
   // Hand an event to the worker, which stamps it against t0 and buffers it.
   function emit(kind, payload) {
-    if (!recording) return;
-    safeSend({ type: "timeline-event", event: { kind, ...payload } });
+    if (!recording || capturePaused) return;
+    safeSend({ type: "timeline-event", generation: captureGeneration, event: { kind, ...payload } });
   }
   function emitRaw(node) {
-    if (!recording) return;
-    safeSend({ type: "rrweb-event", node });
+    if (!recording || capturePaused) return;
+    safeSend({ type: "rrweb-event", generation: captureGeneration, node });
   }
 
   function onClick(e) {
@@ -390,6 +411,16 @@
       emit("input", { selector: selectorFor(el), value: maskValue(el.name || el.id, el.value), ctx });
     }
   }
+
+  let lastScrollAt = 0;
+  function onScroll() {
+    if (Date.now() - lastScrollAt < 150) return;
+    lastScrollAt = Date.now();
+    emit("scroll", { x: Math.round(window.scrollX), y: Math.round(window.scrollY) });
+  }
+  function onFocus() { emit("focus", { focused: true }); }
+  function onBlur() { emit("focus", { focused: false }); }
+  function onPopstate() { emit("nav", { url: location.href }); }
 
   function onKey(e) {
     // Only emit semantically meaningful keys, never raw keystrokes (those would
@@ -598,6 +629,7 @@
 
       applyPaused();
       applyMic();
+      applyReshare();
       if (!paused) startTimer();
     }
 
@@ -732,7 +764,6 @@
       reshare = !!s.reshare;
       applyPaused();
       applyMic();
-      applyReshare();
       applyReshare();
       if (paused) {
         stopTimer();
@@ -1140,7 +1171,7 @@
         // free-form text typed into Gmail/Slack/Notion would serialize verbatim.
         // Mask text inside any editable region — on the snapshot and on every
         // typing mutation (rrweb re-tests via closest() per characterData change).
-        maskTextSelector: EDITABLE_TEXT_SELECTOR,
+        maskTextSelector: EDITABLE_TEXT_SELECTOR + ",[data-capture-secret]",
         maskTextFn: maskEditableText,
       });
     }
@@ -1158,6 +1189,8 @@
   }
 
   function startCapture(meta) {
+    captureGeneration = meta?.generation ?? captureGeneration;
+    capturePaused = !!meta?.paused;
     if (recording) {
       overlay.update({ recording: true, ...(meta || {}) });
       return;
@@ -1169,10 +1202,14 @@
     startRrweb();
 
     document.addEventListener("click", onClick, true);
+    document.addEventListener("input", onChange, true);
     document.addEventListener("change", onChange, true);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
     document.addEventListener("keydown", onKey, true);
     document.addEventListener("mousemove", onMove, moveOpts);
-    window.addEventListener("popstate", () => emit("nav", { url: location.href }));
+    window.addEventListener("popstate", onPopstate);
   }
 
   function stopCapture() {
@@ -1181,7 +1218,12 @@
     rrwebStop?.();
     rrwebStop = null;
     document.removeEventListener("click", onClick, true);
+    document.removeEventListener("input", onChange, true);
     document.removeEventListener("change", onChange, true);
+    window.removeEventListener("scroll", onScroll);
+    window.removeEventListener("focus", onFocus);
+    window.removeEventListener("blur", onBlur);
+    window.removeEventListener("popstate", onPopstate);
     document.removeEventListener("keydown", onKey, true);
     document.removeEventListener("mousemove", onMove, moveOpts);
     if (dwellTimer) clearTimeout(dwellTimer);
@@ -1197,7 +1239,11 @@
     // the right elapsed time (t0, pausedAccum, pauseStartedAt, pauseReason).
     if (msg.type === "start") startCapture(msg);
     if (msg.type === "stop") stopCapture();
-    if (msg.type === "restart") restartCapture();
+    if (msg.type === "restart") {
+      captureGeneration = msg.generation ?? captureGeneration;
+      capturePaused = !!msg.paused;
+      restartCapture();
+    }
     // Pre-roll countdown pushed by the worker (n=3..1, then 0 to clear) — shown
     // before capture goes live, while recording is still false.
     if (msg.type === "countdown") countdown.show(msg.n);
@@ -1205,6 +1251,7 @@
     // (pause/resume, Restart's new t0) regardless of which tab is focused.
     if (msg.type === "overlay-state") {
       capturePaused = !!(msg.state && msg.state.paused);
+      captureGeneration = msg.state?.generation ?? captureGeneration;
       overlay.update(msg.state);
     }
     // Live mic loudness (~12/sec) → animate the overlay's level meter.

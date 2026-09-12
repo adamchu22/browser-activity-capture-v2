@@ -18,6 +18,7 @@
 
 import { redactHeaders, redactBody, redactUrl, scrubTokens, redactCtx } from "./redact.js";
 import { makeZip } from "./zip.js";
+import { downloadComplete } from "./download.js";
 import { streamFiles, frameMeta } from "./bundle-streams.js";
 import * as db from "./db.js";
 import { bundleReadme, bundleClaudeMd, bundleAgentsMd, documentationSkill } from "./bundle-docs.js";
@@ -28,6 +29,16 @@ import { serializeSession, applySession } from "./session.js";
 import { inCaptureScope } from "./capture-scope.js";
 import { isStorageQuotaError } from "./write-failure.js";
 import { isSameSite, isJsonMime, capResponseBody } from "./response-body.js";
+
+let generation = crypto.randomUUID();
+let commandTail = Promise.resolve();
+function command(fn) {
+  const result = commandTail.then(() => rehydrated).then(fn);
+  commandTail = result.catch(() => {});
+  return result;
+}
+const current = (g) => g === generation && state.recording && !state.arming;
+const accepting = (g) => current(g) && !state.paused;
 
 const state = {
   recording: false,
@@ -128,28 +139,35 @@ let persistTimer = null;
 // Debounced — transitions can cluster (instrument several tabs, a burst of navs);
 // one coalesced write per ~250ms is plenty (the keepalive keeps death rare, so this
 // is a backstop, not a hot path).
+let snapshotTail = Promise.resolve();
+
+function commitSession() {
+  clearTimeout(persistTimer);
+  persistTimer = null;
+  const rec = serializeSession(state);
+  if (!rec) return snapshotTail;
+  const snapshot = { ...rec, generation };
+  const write = snapshotTail.then(() => chrome.storage.local.set({ [SESSION_KEY]: snapshot }));
+  snapshotTail = write.catch(() => {});
+  return write;
+}
+
 function persistSession() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
-    persistTimer = null;
-    const rec = serializeSession(state);
-    if (rec)
-      chrome.storage.local.set({ [SESSION_KEY]: rec }).catch((e) => {
-        // The crash-recovery snapshot failed to persist (most likely the storage
-        // quota — unlimitedStorage + the capped snapshot make this rare). Don't route
-        // through logError: that calls persistSession again → a tight retry loop on a
-        // full disk. Just warn + flag so a later restart isn't silently unrecoverable.
-        state.persistFailed = true;
-        console.warn("[capture] session snapshot persist failed:", e?.message || e);
-      });
-    else chrome.storage.local.remove(SESSION_KEY).catch(() => {});
+    commitSession().catch((e) => {
+      state.persistFailed = true;
+      console.warn("[capture] session snapshot persist failed:", e?.message || e);
+    });
   }, 250);
 }
 
 function clearPersistedSession() {
   clearTimeout(persistTimer);
   persistTimer = null;
-  chrome.storage.local.remove(SESSION_KEY).catch(() => {});
+  const clear = snapshotTail.then(() => chrome.storage.local.remove(SESSION_KEY));
+  snapshotTail = clear.catch(() => {});
+  return clear;
 }
 
 async function offscreenExists() {
@@ -185,13 +203,22 @@ async function rehydrate() {
     }
     if (!rec || !rec.recording) return;
 
+    const { unsavedTake, pendingExport } = await chrome.storage.local.get(["unsavedTake", "pendingExport"]);
     applySession(state, rec);
+    generation = rec.generation || crypto.randomUUID();
+    if (unsavedTake && pendingExport) {
+      state.recording = false;
+      state.stoppedDuration = pendingExport.manifest?.duration_ms ?? now();
+      setBadge("!", "#c0392b");
+      return;
+    }
     // The in-memory HAR working copy is rebuilt from its IDB mirror.
     try {
       for (const e of await db.readAll("har")) state.har.set(e.requestId, e);
     } catch {}
 
-    if (await offscreenExists()) {
+    const media = await chrome.runtime.sendMessage({ type: "offscreen-status" }).catch(() => null);
+    if (media?.live && media.t0 === state.t0) {
       for (const tabId of [...state.tabIds]) {
         // The debugger may have detached when the worker died; re-attach so network
         // resumes. Re-arm the content script too.
@@ -206,10 +233,11 @@ async function rehydrate() {
     } else {
       // No video context to resume — finalise what we have so it isn't lost.
       logError("worker-restart", { message: "recording interrupted (no video context) — exporting recovered data" });
+      state.stoppedDuration = now();
       state.recording = false;
       stopFrameTimer();
+      await teardownTabs();
       await finalizeAndExport();
-      clearPersistedSession();
     }
   } finally {
     resolveRehydrated(); // unblock any queued commands regardless of outcome
@@ -314,6 +342,7 @@ const debuggerAttaching = new Map(); // tabId -> in-flight attach Promise, dedup
 // instrumentTab() and reattachTab() racing on the same tab don't both call attach().
 // Logs to errors.json on failure so a dead session is never silent.
 async function ensureDebuggerAttached(tabId) {
+  const g = generation;
   if (debuggerAlive.has(tabId)) return;
   if (debuggerAttaching.has(tabId)) return debuggerAttaching.get(tabId);
   const lastAttempt = debuggerRetryAt.get(tabId) || 0;
@@ -321,12 +350,23 @@ async function ensureDebuggerAttached(tabId) {
   debuggerRetryAt.set(tabId, Date.now());
   const attempt = (async () => {
     try {
-      await withTimeout(chrome.debugger.attach({ tabId }, "1.3"), DEBUGGER_CALL_TIMEOUT_MS, `debugger.attach(${tabId})`);
+      // Probe OUR existing CDP session first. Another extension's attachment
+      // cannot pass sendCommand, so this never steals somebody else's debugger.
+      const enabled = await withTimeout(
+        chrome.debugger.sendCommand({ tabId }, "Network.enable"),
+        DEBUGGER_CALL_TIMEOUT_MS, `Network probe(${tabId})`
+      ).then(() => true, () => false);
+      if (!enabled)
+        await withTimeout(chrome.debugger.attach({ tabId }, "1.3"), DEBUGGER_CALL_TIMEOUT_MS, `debugger.attach(${tabId})`);
       await withTimeout(
         chrome.debugger.sendCommand({ tabId }, "Network.enable"),
         DEBUGGER_CALL_TIMEOUT_MS,
         `Network.enable(${tabId})`,
       );
+      if (g !== generation || (!state.recording && !state.arming)) {
+        await chrome.debugger.detach({ tabId }).catch(() => {});
+        return;
+      }
       debuggerAlive.add(tabId);
     } catch (e) {
       logError("debugger", { message: `attach failed on tab ${tabId}: ${e?.message || e}`, stack: e?.stack });
@@ -341,9 +381,10 @@ async function ensureDebuggerAttached(tabId) {
 // Attach the CDP debugger (for network) and the content script (for DOM/events)
 // to one tab. Idempotent — safe to call again for a tab we already track.
 async function instrumentTab(tabId) {
-  if (!state.recording || state.tabIds.has(tabId)) return;
+  const g = generation;
+  if (!current(g) || state.tabIds.has(tabId)) return;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!isEligible(tab)) return;
+  if (!current(g) || !isEligible(tab)) return;
   // Don't instrument (or mount the overlay on) a tab outside the recorded surface — a
   // tab share captures only that tab; a window share only that window. Otherwise the
   // menu + capture would leak onto a window that isn't in video.webm.
@@ -358,7 +399,9 @@ async function instrumentTab(tabId) {
   // CDP network capture (shows the per-tab "is being debugged" banner — by design).
   await ensureDebuggerAttached(tabId);
 
+  if (!current(g)) return;
   const injected = await ensureContentScript(tabId);
+  if (!current(g) || !state.tabIds.has(tabId)) return;
   // Carry the full clock so a tab that joins mid-recording renders its overlay in
   // the correct state (paused-aware elapsed clock, paused or live).
   if (injected)
@@ -380,7 +423,8 @@ async function instrumentTab(tabId) {
 // infobar-dismiss/onDetach case below) — so re-assert Network.enable here too,
 // re-attaching first if needed, instead of assuming it's still alive.
 async function reattachTab(tabId, tab) {
-  if (!state.recording || !state.tabIds.has(tabId)) return;
+  const g = generation;
+  if (!current(g) || !state.tabIds.has(tabId) || !inScope(tab)) return;
   // Keep the tab legend + URL set current as the user navigates.
   if (tab?.url) {
     const u = redactUrl(tab.url);
@@ -389,7 +433,9 @@ async function reattachTab(tabId, tab) {
     if (info) info.url = u;
   }
   await ensureDebuggerAttached(tabId);
+  if (!current(g)) return;
   const present = await ensureContentScript(tabId);
+  if (!current(g) || !state.tabIds.has(tabId)) return;
   if (present)
     chrome.tabs.sendMessage(tabId, { type: "start", ...overlayClock() }).catch(() => {});
   if (tab?.url) persistSession(); // legend URL moved
@@ -429,6 +475,8 @@ async function start(triggerTabId, task, purposes) {
   } catch {}
 
   const { blocklist, micEnabled } = await getSettings();
+  generation = crypto.randomUUID();
+  state.stoppedDuration = null;
   await db.clearAll();
   state.frames = []; // fresh take → drop the previous take's frame metadata
   state.storageFull = false; // fresh take → reset the IDB-quota tripwire + frame cap
@@ -490,19 +538,20 @@ async function start(triggerTabId, task, purposes) {
 // by the content script (injected if needed; it stays inert for capture because
 // recording is still false). Bails at every step if stop()/cancel() raced us.
 async function runCountdownThenGo() {
+  const g = generation;
   if (!state.arming) return;
   const tabId = state.activeTabId;
   if (tabId != null) {
     await ensureContentScript(tabId);
     for (let n = COUNTDOWN_SECONDS; n >= 1; n--) {
-      if (!state.arming) return;
+      if (!state.arming || g !== generation) return;
       chrome.tabs.sendMessage(tabId, { type: "countdown", n }).catch(() => {});
       await sleep(1000);
     }
     chrome.tabs.sendMessage(tabId, { type: "countdown", n: 0 }).catch(() => {}); // clear it
   }
-  if (!state.arming) return;
-  await goLive();
+  if (!state.arming || g !== generation) return;
+  await command(() => g === generation && state.arming ? goLive() : undefined);
 }
 
 // Capture actually begins here: set t0, flip recording on, instrument the active
@@ -512,7 +561,17 @@ async function runCountdownThenGo() {
 // actually do, not every open tab. See nav-policy.js.
 async function goLive() {
   if (!state.arming) return;
-  state.arming = false;
+  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const tab = state.captureSurface === "browser"
+    ? await chrome.tabs.get(state.captureTabId).catch(() => null)
+    : active;
+  state.activeTabId = tab?.id ?? null;
+
+  // Prepare instrumentation BEFORE t0. No content recorder has been started yet.
+  if (isEligible(tab) && inScope(tab)) {
+    await ensureDebuggerAttached(tab.id);
+    await ensureContentScript(tab.id);
+  }
   state.recording = true;
   state.paused = false;
   state.manualPaused = false;
@@ -521,54 +580,45 @@ async function goLive() {
   state.pausedAccum = 0;
   state.pauseStartedAt = 0;
   state.t0 = Date.now();
-  // Re-resolve the active tab: the user may have closed or switched away from the
-  // Start tab during the picker/countdown. Instrument the tab they're actually on
-  // now — otherwise we'd go live with NO DOM/event capture (a dead/ineligible tab
-  // silently instruments nothing) until they happen to switch tabs.
-  let tabId = state.activeTabId;
-  const stillUsable = tabId != null && (await chrome.tabs.get(tabId).then(isEligible).catch(() => false));
-  if (!stillUsable) {
-    const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    tabId = active?.id ?? null;
-    state.activeTabId = tabId;
+  // arming keeps all intake closed while the indispensable snapshot commits.
+  try {
+    await commitSession();
+  } catch (e) {
+    state.recording = false;
+    state.arming = false;
+    await closeOffscreen();
+    await teardownTabs();
+    throw e;
   }
-  // Anchor the recorded surface to this tab/window so inScope() can gate everything
-  // else to it. We can't know which tab/window/monitor Chrome actually captured, so the
-  // tab we go live in is the proxy (see capture-scope.js): a tab share scopes to this
-  // tab, a window share to its window, a screen share to everywhere (v1).
-  state.captureTabId = tabId;
-  const liveTab = tabId != null ? await chrome.tabs.get(tabId).catch(() => null) : null;
-  state.captureWindowId = liveTab?.windowId ?? null;
-  if (tabId != null) await instrumentTab(tabId);
-  else
-    // No eligible tab to instrument at go-live (e.g. the user closed the Start tab
-    // during the picker/countdown and is now on a chrome:// page). Video still records,
-    // but DOM/click/network capture won't begin until they switch into a normal tab —
-    // surface it so the gap is diagnosable from errors.json instead of looking healthy.
-    logError("golive", {
-      message:
-        "went live with no instrumented tab — video is recording but clicks/DOM/network won't capture until you switch into a normal web tab",
-    });
-  chrome.runtime.sendMessage({ type: "offscreen-go" }).catch(() => {}); // recorder.start()
-  await captureFrame("recording started");
-  startFrameTimer();
-  setBadge("REC");
-  // Persist now that the recording is genuinely live: t0 is the one value a crash
-  // recovery can't reconstruct, so it must hit disk the moment capture starts.
+  state.arming = false;
+  await updateAutoPause();
+  await chrome.runtime.sendMessage({ type: "offscreen-go", clock: overlayClock() }).catch(() => {});
+  if (tab?.id != null) await instrumentTab(tab.id);
+  if (!state.tabIds.size)
+    logError("golive", { message: "No verified browser surface available for structured capture." });
+  if (!state.paused) {
+    await captureFrame("recording started");
+    startFrameTimer();
+  }
+  setBadge(state.paused ? "❚❚" : "REC");
   persistSession();
-  // If they happened to go live while looking at a blocklisted tab, suspend at once.
-  updateAutoPause();
 }
 
 async function stop() {
   if (!state.recording) return;
+  state.stoppedDuration = now();
+  // Freeze media promptly, rather than recording debugger teardown/export time.
+  await chrome.runtime.sendMessage({ type: "offscreen-pause", clock: overlayClock() }).catch(() => {});
+  await commitSession();
   state.recording = false;
   stopFrameTimer();
+  await chrome.storage.local.set({ unsavedTake: true });
   await teardownTabs();
-  // finalizeAndExport owns persistence from here: it KEEPS the recording (IndexedDB
-  // + the crash snapshot) until a save actually succeeds, so a failed export can be
-  // retried instead of silently losing the take. Success/failure clears or marks it.
-  await finalizeAndExport();
+  try {
+    await finalizeAndExport();
+  } catch (e) {
+    await onExportFailure(null, e?.message || String(e), exportFilename());
+  }
 }
 
 // Stop the overlay + detach the debugger on every tracked tab. (Stale tab ids — e.g.
@@ -668,7 +718,7 @@ async function salvageExport() {
     const files = [...metaFiles(manifest, timeline, state.errors), ...streamFiles(timeline, rrweb, frames, harEntries, manifest.t0_wall)];
     const bytes = new Uint8Array(await (await makeZip(files)).arrayBuffer());
     const url = `data:application/zip;base64,${base64FromBytes(bytes)}`;
-    await chrome.downloads.download({ url, filename, saveAs: false });
+    await downloadComplete({ url, filename, saveAs: false });
     await onExportSuccess();
   } catch (e) {
     await onExportFailure(manifest || { _filename: filename }, "salvage-download-failed: " + (e?.message || e), filename);
@@ -749,8 +799,24 @@ async function retryExport() {
     setBadge("");
     return { ok: false, error: "Nothing to retry." };
   }
-  const { manifest, filename } = pending;
+  let { manifest, filename } = pending;
   try {
+    // Idempotent finalize preserves already-finalized media in the offscreen doc.
+    if (await offscreenExists()) {
+      await exportViaOffscreen();
+      const { unsavedTake } = await chrome.storage.local.get("unsavedTake");
+      return unsavedTake ? { ok: false, error: "Save failed; recording retained." } : { ok: true };
+    }
+    if (!manifest) {
+      await salvageExport();
+      const { unsavedTake } = await chrome.storage.local.get("unsavedTake");
+      return { ok: !unsavedTake };
+    }
+    // The media context really is gone: do not promise files that cannot be saved.
+    manifest = {
+      ...manifest, video: null, video_segments: [], narration_in_video: false,
+      narration_error: "media context lost before retry", video_ended_early: true,
+    };
     const rrweb = await db.readAll("rrweb");
     const frames = await db.readAll("frames");
     const timeline = await db.readAll("timeline");
@@ -770,6 +836,9 @@ async function retryExport() {
 
 // Deliberately throw away an unsaved take (the user chose Discard over Retry).
 async function discardTake() {
+  if (state.recording || state.arming) return { ok: false, error: "Finish or cancel the live take first." };
+  generation = crypto.randomUUID();
+  await closeOffscreen();
   await db.clearAll();
   state.frames = [];
   clearPersistedSession();
@@ -807,7 +876,7 @@ function applyPause() {
     state.pauseStartedAt = Date.now(); // start metering paused time
     state.pauseReason = state.manualPaused ? "manual" : "blocklist";
     stopFrameTimer();
-    chrome.runtime.sendMessage({ type: "offscreen-pause" }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "offscreen-pause", clock: overlayClock() }).catch(() => {});
     setBadge("❚❚", "#f39c12"); // amber = paused
     // A blocklist auto-pause happens on a tab with NO overlay (it's uninstrumented),
     // so the on-page pill can't say why. The icon tooltip carries the reason.
@@ -819,7 +888,7 @@ function applyPause() {
     state.pauseStartedAt = 0;
     state.pauseReason = null;
     startFrameTimer();
-    chrome.runtime.sendMessage({ type: "offscreen-resume" }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "offscreen-resume", clock: overlayClock() }).catch(() => {});
     setBadge("REC");
     chrome.action.setTitle({ title: "Recording" });
   }
@@ -843,13 +912,31 @@ function resume() {
 // leave. Called on tab switch / window focus / navigation. The active tab of the
 // last-focused window is the one the screen video is showing, so that's what
 // gates capture.
+let pauseCheck = 0;
 async function updateAutoPause() {
+  const g = generation, check = ++pauseCheck;
   if (!state.recording) return;
-  let blocked = false;
+  // Unknown window/tab identity cannot safely be inferred from the Start tab.
+  let blocked = state.captureSurface === "window" && state.captureWindowId == null;
   try {
-    const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    blocked = !!(active && active.url && hostBlocked(active.url));
-  } catch {}
+    let tabs;
+    if (state.captureSurface === "browser") {
+      tabs = [await chrome.tabs.get(state.captureTabId)];
+    } else if (state.captureSurface === "window" && state.captureWindowId != null) {
+      tabs = await chrome.tabs.query({ active: true, windowId: state.captureWindowId });
+    } else {
+      // Monitor capture can show more than the focused Chrome window. Conservatively
+      // pause if any visible Chrome window has an active blocklisted tab.
+      tabs = await chrome.tabs.query({ active: true });
+      const windows = await chrome.windows.getAll();
+      const visible = new Set(windows.filter((w) => w.state !== "minimized").map((w) => w.id));
+      tabs = tabs.filter((t) => visible.has(t.windowId));
+    }
+    blocked ||= tabs.some((t) => t?.url && hostBlocked(t.url));
+  } catch {
+    blocked = true;
+  }
+  if (g !== generation || check !== pauseCheck || !state.recording) return;
   if (blocked !== state.autoPaused) {
     state.autoPaused = blocked;
     applyPause();
@@ -862,6 +949,10 @@ async function updateAutoPause() {
 // streams; we just reset t0 and clear the buffers, so the new take is clean.
 async function restart() {
   if (!state.recording) return;
+  state.arming = true;
+  generation = crypto.randomUUID();
+  stopFrameTimer();
+  await chrome.runtime.sendMessage({ type: "offscreen-pause", clock: overlayClock() }).catch(() => {});
   await db.clearAll();
   state.t0 = Date.now();
   state.paused = false;
@@ -879,11 +970,16 @@ async function restart() {
   // Reseed the URL set from the still-instrumented tabs' current pages.
   state.urls = new Set();
   for (const info of state.tabs.values()) if (info.url) state.urls.add(info.url);
-  startFrameTimer(); // reset the cadence onto the new t0
-  chrome.runtime.sendMessage({ type: "offscreen-restart" }).catch(() => {});
-  // Tell each still-attached tab to re-emit its rrweb full snapshot against the
-  // new t0 — the cleared events.jsonl has no base snapshot to replay from otherwise.
-  for (const tabId of state.tabIds) chrome.tabs.sendMessage(tabId, { type: "restart" }).catch(() => {});
+  state.stoppedDuration = null;
+  state.storageFull = false;
+  frameCapLogged = false;
+  await commitSession();
+  state.arming = false;
+  await updateAutoPause();
+  await chrome.runtime.sendMessage({ type: "offscreen-restart", clock: overlayClock() }).catch(() => {});
+  if (!state.paused) startFrameTimer();
+  for (const tabId of state.tabIds)
+    await chrome.tabs.sendMessage(tabId, { type: "restart", ...overlayClock() }).catch(() => {});
   await captureFrame("recording restarted");
   setBadge("REC");
   broadcastOverlay(); // new t0 resets every overlay's elapsed clock
@@ -901,9 +997,8 @@ async function reshare() {
   // Stamp the recording-clock offset at which this new segment begins. The
   // offscreen doc uses this for the segment it's about to seal; the worker
   // records it in videoSegments on reshare-armed.
-  state.reshareOffsetMs = now();
   await ensureOffscreen();
-  chrome.runtime.sendMessage({ type: "offscreen-reshare", offsetMs: state.reshareOffsetMs }).catch(() => {});
+  chrome.runtime.sendMessage({ type: "offscreen-reshare", clock: overlayClock() }).catch(() => {});
 }
 
 // Re-anchor capture/overlay scope to the currently-active tab after a re-share.
@@ -911,22 +1006,21 @@ async function reshare() {
 // tab the user is on now is the proxy for the new share (same heuristic as
 // goLive). Pure async so the reshare-armed handler can await it before broadcasting.
 async function applyCaptureSurface() {
-  let tabId = state.activeTabId;
-  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
-  if (active?.id != null) tabId = active.id;
-  if (tabId == null) return;
-  state.captureTabId = tabId;
-  const liveTab = await chrome.tabs.get(tabId).catch(() => null);
-  state.captureWindowId = liveTab?.windowId ?? null;
-  // If the new surface's tab isn't already instrumented, instrument it now so
-  // its DOM/click/network capture aligns with the new video segment.
-  if (!state.tabIds.has(tabId)) await instrumentTab(tabId);
+  const g = generation;
+  for (const id of [...state.tabIds]) {
+    const tab = await chrome.tabs.get(id).catch(() => null);
+    if (!current(g)) return;
+    if (!inScope(tab)) await uninstrumentTab(id);
+  }
+  await updateAutoPause();
+  if (state.captureTabId != null) await instrumentTab(state.captureTabId);
 }
 
 // Cancel: stop recording and discard — no bundle, no download. Tears down the
 // overlay in every tab, detaches debuggers, and drops the in-progress video.
 async function cancel() {
   if (!state.recording && !state.arming) return;
+  generation = crypto.randomUUID();
   // If we're still arming (picker/countdown), abort it: clearing the flag makes
   // runCountdownThenGo() bail, and we clear any countdown number from the tab.
   if (state.arming && state.activeTabId != null) {
@@ -950,7 +1044,7 @@ async function cancel() {
   debuggerAlive.clear();
   debuggerRetryAt.clear();
   debuggerAttaching.clear();
-  chrome.runtime.sendMessage({ type: "offscreen-cancel" }).catch(() => {}); // discard video, release streams
+  await closeOffscreen(); // also abort a pending picker before a subsequent Start
   await db.clearAll();
   state.frames = [];
   clearPersistedSession(); // nothing to recover — drop the crash-recovery snapshot
@@ -987,7 +1081,8 @@ function broadcastOverlay() {
 // here and the video's own timeline.
 function overlayClock() {
   return {
-    recording: state.recording,
+    recording: state.recording && !state.arming,
+    generation,
     paused: state.paused,
     pauseReason: state.pauseReason,
     t0: state.t0,
@@ -1001,10 +1096,10 @@ function overlayClock() {
 // Follow the user across tabs: instrument any tab that starts loading a real URL
 // while we're recording (covers brand-new tabs and navigations to eligible pages),
 // re-arm the content script after each navigation, and drop tabs as they close.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   // The active tab navigating to/from a blocklisted URL flips the auto-pause (the
   // user typed a sensitive URL into the tab they're already on, or navigated away).
-  if (state.recording && changeInfo.url && tab?.active) updateAutoPause();
+  if (state.recording && changeInfo.url && tab?.active) await updateAutoPause();
   // A tracked tab that navigates INTO a blocklisted host must be torn down — detach
   // the debugger and stop the content script so nothing more is captured there.
   if (state.recording && state.tabIds.has(tabId) && tab?.url && hostBlocked(tab.url)) {
@@ -1042,12 +1137,18 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // them across tabs while leaving untouched tabs alone. Also grab a frame:
 // captureVisibleTab shoots the active tab, so we get a shot of the tab they just
 // moved to (the periodic timer would otherwise miss the switch instant).
-chrome.tabs.onActivated.addListener(({ tabId }) => {
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   if (!state.recording) return;
   // Switching INTO a blocklisted tab auto-pauses everything (and out auto-resumes)
   // BEFORE we instrument or shoot a frame, so nothing from it is captured.
-  updateAutoPause();
-  instrumentTab(tabId); // idempotent — no-op if already tracked (and skips blocklisted)
+  const g = generation;
+  await updateAutoPause();
+  if (!current(g)) return;
+  await instrumentTab(tabId);
+  if (!accepting(g)) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!accepting(g) || !isEligible(tab) || !inScope(tab)) return;
+  appendTimeline({ kind: "tab-activated", tab: tabId });
   captureFrame("tab-activated");
 });
 // Switching browser windows (or to a window whose active tab is blocklisted) must
@@ -1084,7 +1185,8 @@ function stopFrameTimer() {
 }
 
 async function captureFrame(reason = "") {
-  if (!state.recording || state.paused) return;
+  const g = generation;
+  if (!accepting(g)) return;
   if (state.frames.length >= FRAME_CAP) {
     if (!frameCapLogged) {
       frameCapLogged = true;
@@ -1106,9 +1208,10 @@ async function captureFrame(reason = "") {
     // (e.g. a window share while another window is focused — its frame wouldn't match
     // video.webm), and skip a blocklisted host the user switched into.
     const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (active && !inScope(active)) return;
-    if (active && state.blocklist.length && hostBlocked(active.url)) return;
-    dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
+    if (!accepting(g) || !isEligible(active) || !inScope(active)) return;
+    dataUrl = await chrome.tabs.captureVisibleTab(active.windowId, { format: "png" });
+    const [after] = await chrome.tabs.query({ active: true, windowId: active.windowId });
+    if (!accepting(g) || after?.id !== active.id || !isEligible(after) || !inScope(after)) return;
   } catch (e) {
     // captureVisibleTab can fail on chrome:// pages etc., or hit Chrome's ~2/sec rate
     // limit when an event frame lands next to a timer frame — both non-fatal and
@@ -1124,7 +1227,7 @@ async function captureFrame(reason = "") {
     // 30-min capture is hundreds of PNGs, and — more importantly — if the worker is
     // ever torn down, in-memory frames would vanish. IDB survives a worker restart.
     await db.append("frames", { t, file, dataUrl });
-    state.frames.push({ t, file }); // metadata mirror for the manifest (no bytes)
+    if (current(g)) state.frames.push({ t, file }); // only committed, current-generation frames
   } catch (e) {
     // A STORAGE QuotaExceededError here means IndexedDB is full and the whole capture
     // is now silently truncating — surface that loudly (noteWriteFailure classifies it).
@@ -1167,7 +1270,9 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
   // off-record during a pause (a privacy leak), and that network-without-content
   // signature also tripped check_coverage's false CAPTURE GAP warning. Now network
   // stops in lockstep with events/frames/rrweb when paused.
-  if (!state.recording || state.paused || !state.tabIds.has(source.tabId)) return;
+  const g = generation;
+  if (!accepting(g) || !state.tabIds.has(source.tabId)) return;
+  const requestKey = JSON.stringify([source.tabId, source.sessionId || "", params.requestId]);
 
   if (method === "Network.requestWillBeSent") {
     const { request, requestId, timestamp } = params;
@@ -1175,7 +1280,7 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
     const reqUrl = redactUrl(request.url); // host/path intact; only secrets in the query masked
     state.urls.add(reqUrl);
     const entry = {
-      requestId, // keyPath for the IDB har store; stripped from the exported HAR
+      requestId: requestKey, // target/session-scoped IDB key; stripped on export
       _tab: source.tabId,
       _t: now(),
       startedDateTime: new Date().toISOString(),
@@ -1194,12 +1299,12 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
       // a third party = false). `_`-prefixed → stripped from the exported HAR.
       _sameSite: isSameSite(request.url, params.documentURL),
     };
-    state.har.set(requestId, entry);
+    state.har.set(requestKey, entry);
     db.put("har", entry).catch((e) => noteWriteFailure("har-write", e)); // mirror to IDB so network survives a worker restart
   }
 
   if (method === "Network.responseReceived") {
-    const entry = state.har.get(params.requestId);
+    const entry = state.har.get(requestKey);
     if (!entry) return;
     const r = params.response;
     entry.response = {
@@ -1236,11 +1341,11 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
     if (!entry || !entry._wantBody) return;
     try {
       const { body, base64Encoded } = await chrome.debugger.sendCommand(
-        { tabId: source.tabId },
+        source,
         "Network.getResponseBody",
         { requestId: params.requestId }
       );
-      if (base64Encoded) return; // binary slipped past the JSON filter — skip
+      if (!accepting(g) || state.har.get(requestKey) !== entry || base64Encoded) return;
       entry.response.content =
         entry.response.content && typeof entry.response.content === "object"
           ? entry.response.content
@@ -1276,7 +1381,7 @@ function scrubNode(node) {
 // ---- timeline + rrweb from content script --------------------------------
 
 async function appendTimeline(event) {
-  if (!state.recording || state.paused) return;
+  if (!accepting(generation)) return;
   // Single chokepoint: any event carrying a URL gets it scrubbed before disk, so a
   // token in a query string can't ride into the timeline (nav + network events).
   if (event.url) event = { ...event, url: redactUrl(event.url) };
@@ -1289,13 +1394,34 @@ async function appendTimeline(event) {
   // whatever message handler called us. Swallow it like the other write sites, but
   // surface a quota exhaustion (capture is truncating) instead of dropping silently.
   try {
-    await db.append("timeline", { t: now(), ...event });
+    await db.append("timeline", { ...event, t: now() });
   } catch (e) {
     noteWriteFailure("timeline-write", e);
   }
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Offscreen pages only have chrome.runtime. The worker owns downloads and
+  // acknowledges completion, while the Blob URL remains alive in its creator.
+  if (msg.type === "download-blob") {
+    if (sender.url !== chrome.runtime.getURL("src/offscreen.html")) return;
+    if (typeof msg.url !== "string" || !msg.url.startsWith(`blob:${chrome.runtime.getURL("")}`)) {
+      sendResponse({ ok: false, reason: "invalid Blob origin" });
+      return;
+    }
+    downloadComplete({ url: msg.url, filename: msg.filename, saveAs: false })
+      .then(() => sendResponse({ ok: true }),
+            (e) => sendResponse({ ok: false, reason: e?.message || String(e) }));
+    return true;
+  }
+  if (msg.type === "media-clock") {
+    sendResponse(overlayClock());
+    return;
+  }
+  if (msg.type === "timeline-event" || msg.type === "rrweb-event") {
+    if (!accepting(generation) || msg.generation !== generation ||
+        !state.tabIds.has(sender.tab?.id) || hostBlocked(sender.tab?.url || "")) return;
+  }
   if (msg.type === "is-recording") {
     // A content script asking on load whether it should be capturing. Answer
     // PER TAB: only tabs we've instrumented (the recording tab + ones the user
@@ -1304,7 +1430,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // it was open. paused + t0 ride along for the overlay clock.
     const tabId = sender.tab?.id;
     const tracked = tabId != null && state.tabIds.has(tabId);
-    sendResponse({ ...overlayClock(), recording: state.recording && tracked });
+    sendResponse({ ...overlayClock(), recording: current(generation) && tracked });
     return true;
   }
   if (msg.type === "timeline-event") {
@@ -1374,8 +1500,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "reshare-armed") {
     state.awaitingReshare = false;
     state.videoEndedEarly = false; // video is live again — the take no longer ends early
-    state.videoSegments.push({ offsetMs: state.reshareOffsetMs || 0 });
+    state.videoSegments.push({ offsetMs: msg.offsetMs || 0 });
     if (msg.surface) state.captureSurface = msg.surface;
+    state.captureTabId = Number.isInteger(msg.tabId) ? msg.tabId : null;
+    state.captureWindowId = null;
     // Re-scope capture/overlay to the new shared surface. A re-share may have
     // picked a different surface kind (tab vs window vs monitor); update the
     // scope anchors so capture/overlay match the new video. The onMessage
@@ -1410,7 +1538,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     // What surface the user shared (tab/window/monitor) — set before goLive() so the
     // first tab is scoped correctly.
+    if (!state.arming) return;
     state.captureSurface = msg.surface || null;
+    state.captureTabId = Number.isInteger(msg.tabId) ? msg.tabId : null;
+    state.captureWindowId = null;
+    if (state.captureSurface === "window")
+      logError("capture-scope", { message: "Chrome does not expose the picked OS-window identity; capture remains paused rather than recording the Start window by guess." });
     runCountdownThenGo();
   }
   // Live microphone loudness from the offscreen recorder (~12/sec). Fan it out to
@@ -1429,37 +1562,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // "already recording" guard and wipe the recovered take.
   if (msg.type === "popup-command" || msg.type === "overlay-command") {
     const c = msg.command;
-    if (c === "start") {
-      rehydrated.then(() => start(msg.tabId, msg.task, msg.purposes)).then(sendResponse);
-      return true; // async response
-    }
-    // "finish" is the overlay's word for stop+save+export; same as the popup's stop.
-    if (c === "stop" || c === "finish") {
-      rehydrated.then(() => stop()).then(() => sendResponse({ ok: true }));
-      return true;
-    }
     if (c === "status") {
-      rehydrated.then(() =>
-        sendResponse({ recording: state.recording, paused: state.paused, arming: state.arming })
-      );
+      rehydrated.then(() => sendResponse({
+        recording: state.recording, paused: state.paused, arming: state.arming,
+      }));
       return true;
     }
-    // Recover from a failed export (loss guard): re-save the kept take, or discard it.
-    if (c === "retry-export") {
-      rehydrated.then(() => retryExport()).then(sendResponse);
-      return true;
+    const verbs = {
+      start: () => start(msg.tabId, msg.task, msg.purposes),
+      stop, finish: stop, pause, resume, restart, cancel, reshare,
+      "retry-export": retryExport, "discard-take": discardTake,
+    };
+    if (!verbs[c]) {
+      sendResponse({ ok: false, error: "Unknown command" });
+      return;
     }
-    if (c === "discard-take") {
-      rehydrated.then(() => discardTake()).then(sendResponse);
-      return true;
-    }
-    rehydrated.then(() => {
-      if (c === "pause") pause();
-      else if (c === "resume") resume();
-      else if (c === "restart") restart();
-      else if (c === "cancel") cancel();
-      else if (c === "reshare") reshare();
-    });
+    command(verbs[c]).then(
+      (result) => sendResponse(result ?? { ok: true }),
+      (e) => sendResponse({ ok: false, error: e?.message || String(e) })
+    );
+    return true;
   }
 });
 
@@ -1496,6 +1618,22 @@ async function ensureOffscreen() {
 // manifest. Returns true to mean "video was attempted".
 async function startVideo(withMic) {
   try {
+    // Capture Handle is opt-in and only supported for browser-tab shares.
+    // Do not guess identity when unavailable. This isolated-world configuration
+    // is best-effort; unsupported pages remain out of structured-capture scope.
+    const origin = chrome.runtime.getURL("").replace(/\/$/, "");
+    for (const tab of await chrome.tabs.query({})) {
+      if (!isEligible(tab)) continue;
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: (handle, permittedOrigin) => {
+          navigator.mediaDevices?.setCaptureHandleConfig?.({
+            handle, exposeOrigin: true, permittedOrigins: [permittedOrigin],
+          });
+        },
+        args: [`bac-tab:${tab.id}`, origin],
+      }).catch(() => {});
+    }
     await ensureOffscreen();
     chrome.runtime.sendMessage({ type: "offscreen-start", withMic })
       .catch((e) => logError("video", { message: "offscreen never got the start message: " + (e?.message || e) }));
@@ -1545,8 +1683,7 @@ function finalizeVideo() {
 // from worker state (no byte loads) while salvage/retry source them from IndexedDB.
 
 function buildManifest({ hasVideo, narrationInVideo, micError, segmentOffsets, timeline, frameList, harEntries }) {
-  const last = timeline.length ? timeline[timeline.length - 1] : null;
-  const duration = last ? last.t : now();
+  const duration = state.stoppedDuration ?? now();
   return {
     bundle_version: "0.2",
     capture_id: `capture-${new Date(state.t0).toISOString()}`,
@@ -1629,7 +1766,7 @@ function buildManifest({ hasVideo, narrationInVideo, micError, segmentOffsets, t
 function metaFiles(manifest, timeline, errors) {
   return [
     { name: "manifest.json", data: JSON.stringify(manifest, null, 2) },
-    { name: "transcript.vtt", data: buildTranscript(timeline) },
+    { name: "transcript.vtt", data: buildTranscript(timeline, manifest.duration_ms) },
     { name: "errors.json", data: JSON.stringify(errors || [], null, 2) },
     { name: "README.md", data: bundleReadme(manifest) },
     // Self-driving instructions: the bundle alone is enough to analyze, with no
@@ -1646,7 +1783,7 @@ function metaFiles(manifest, timeline, errors) {
 // The extension captures narration timing as `speech` timeline events if a
 // transcriber feeds them in; absent that, emit a stub the user replaces with a
 // real transcript (Whisper, etc.). See README.
-function buildTranscript(timeline) {
+function buildTranscript(timeline, duration = state.stoppedDuration ?? now()) {
   const cues = timeline.filter((e) => e.kind === "speech");
   if (!cues.length)
     return (
@@ -1659,12 +1796,12 @@ function buildTranscript(timeline) {
     );
   const fmt = (t) => {
     const s = Math.floor(t / 1000);
-    return `00:${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}.${String(t % 1000).padStart(3, "0")}`;
+    return `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}.${String(Math.floor(t) % 1000).padStart(3, "0")}`;
   };
   let out = "WEBVTT\n\n";
   cues.forEach((c, i) => {
-    const next = cues[i + 1]?.t ?? c.t + 3000;
-    out += `${fmt(c.t)} --> ${fmt(next)}\n${c.text}\n\n`;
+    const next = Math.min(cues[i + 1]?.t ?? duration, duration);
+    if (next > c.t) out += `${fmt(c.t)} --> ${fmt(next)}\n${c.text}\n\n`;
   });
   return out;
 }
