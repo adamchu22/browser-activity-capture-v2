@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 import zipfile
@@ -31,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_coverage import analyze_coverage  # noqa: E402
 
 KNOWN_KINDS = {"nav", "speech", "click", "hover", "input", "key", "network",
-               "annotation:select", "annotation:draw"}
+               "annotation:select", "annotation:draw", "scroll", "focus", "tab-activated"}
 REQUIRED = ["manifest.json", "timeline.json"]
 EXPECTED = ["events.jsonl", "network.har", "transcript.vtt"]
 
@@ -75,7 +76,7 @@ class Bundle:
         if self.zip:
             self.names = set(self.zip.namelist())
         else:
-            self.names = {str(p.relative_to(path)) for p in path.rglob("*") if p.is_file()}
+            self.names = {p.relative_to(path).as_posix() for p in path.rglob("*") if p.is_file()}
 
     def has(self, name: str) -> bool:
         return name in self.names
@@ -124,7 +125,17 @@ def load_json(b: Bundle, name: str, r: Report):
         return None
 
 
+def valid_time(value):
+    return (not isinstance(value, bool) and isinstance(value, (int, float))
+            and math.isfinite(value) and value >= 0)
+
+
 def check_manifest(m: dict, b: Bundle, r: Report):
+    if not valid_time(m.get("duration_ms")):
+        r.err("manifest duration_ms must be finite and non-negative")
+    for segment in m.get("video_segments", []) if isinstance(m.get("video_segments", []), list) else []:
+        if not isinstance(segment, dict) or not valid_time(segment.get("offset_ms")):
+            r.err("video segment offset_ms must be finite and non-negative")
     for key in ("t0_wall", "duration_ms", "sync_mode"):
         if key not in m:
             r.err(f"manifest.json missing `{key}`")
@@ -156,10 +167,12 @@ def check_timeline(events, r: Report):
             r.err(f"timeline event #{i} missing `t` or `kind`")
             continue
         t = e["t"]
-        if isinstance(t, bool) or not isinstance(t, (int, float)):
-            r.err(f"timeline event #{i} has a non-numeric `t`")
+        if not valid_time(t):
+            r.err(f"timeline event #{i} has an invalid `t` (expected finite non-negative milliseconds)")
             continue
         kind = e["kind"]
+        if not isinstance(kind, str):
+            r.err(f"timeline event #{i} has a non-string kind")
         if isinstance(kind, str) and kind not in KNOWN_KINDS:
             bad_kinds.add(kind)
         if t < last_t:
@@ -180,6 +193,8 @@ def check_frames(manifest_frames, referenced, b: Bundle, r: Report):
     on_disk = b.frame_files()
     wanted = set()
     for f in manifest_frames:
+        if isinstance(f, dict) and not valid_time(f.get("t")):
+            r.err("manifest frame timestamp must be finite and non-negative")
         name = f.get("file") if isinstance(f, dict) else f
         if isinstance(name, str):
             wanted.add(name)
@@ -211,26 +226,63 @@ def check_coverage_gap(timeline, manifest, r: Report):
 
 
 def check_redaction(b: Bundle, r: Report):
-    """The non-negotiable: scan everything textual for leaked secrets."""
+    """Validate existing redaction scope; never rewrite captured content."""
+    secret_names = set(SECRET_NAMES.split("|"))
     leaks = 0
-    for name in ("timeline.json", "network.har", "events.jsonl"):
+
+    def inspect(value, headers, depth=0):
+        token, header = False, False
+        if depth > 100:
+            return False, False
+        if isinstance(value, str):
+            token = bool(TOKEN_RE.search(value))
+            # Decode JSON-in-JSON bodies and escaped strings, without depending on
+            # object key order or the spelling of Unicode escapes.
+            if value.lstrip().startswith(("{", "[")):
+                try:
+                    a, h = inspect(json.loads(value), headers, depth + 1)
+                    token |= a
+                    header |= h
+                except (ValueError, RecursionError):
+                    pass
+        elif isinstance(value, list):
+            for child in value:
+                a, h = inspect(child, headers, depth + 1)
+                token |= a
+                header |= h
+        elif isinstance(value, dict):
+            if headers:
+                for key, val in value.items():
+                    if key.lower() in secret_names and isinstance(val, str):
+                        header |= not val.startswith("‹redacted")
+                if str(value.get("name", "")).lower() in secret_names and "value" in value:
+                    header |= not str(value["value"]).startswith("‹redacted")
+            for key, child in value.items():
+                token |= bool(TOKEN_RE.search(key))
+                a, h = inspect(child, headers, depth + 1)
+                token |= a
+                header |= h
+        return token, header
+
+    for name in ("timeline.json", "network.har", "events.jsonl",
+                 "manifest.json", "errors.json", "transcript.vtt"):
         if not b.has(name):
             continue
-        body = b.text(name)
-        if any(rx.search(body) for rx in SECRET_HEADER_RES):
+        headers = name in ("timeline.json", "network.har", "events.jsonl")
+        bodies = b.text(name).splitlines() if name.endswith(".jsonl") else [b.text(name)]
+        token = header = False
+        for body in bodies:
+            try:
+                parsed = json.loads(body)
+            except (ValueError, RecursionError):
+                parsed = body
+            a, h = inspect(parsed, headers)
+            token |= a
+            header |= h
+        if header:
             r.err(f"{name} contains an auth/cookie header that is NOT redacted")
             leaks += 1
-        if TOKEN_RE.search(body):
-            r.err(f"{name} contains a token/bearer value in the clear")
-            leaks += 1
-    # manifest.json (urls_visited + tab titles), errors.json (messages may carry a
-    # URL with a token), and transcript.vtt (narration) were NOT scanned before — a
-    # secret in any of them passed the gate. Scan them for token shapes too (header
-    # structure only appears in the HAR/timeline above).
-    for name in ("manifest.json", "errors.json", "transcript.vtt"):
-        if not b.has(name):
-            continue
-        if TOKEN_RE.search(b.text(name)):
+        if token:
             r.err(f"{name} contains a token/bearer value in the clear")
             leaks += 1
     if not leaks:
@@ -258,14 +310,25 @@ def validate(path: Path) -> int:
         manifest = None
     timeline = load_json(b, "timeline.json", r)
     manifest_frames = check_manifest(manifest, b, r) if isinstance(manifest, dict) else []
-    _, referenced = check_timeline(timeline, r) if timeline else ([], [])
+    _, referenced = check_timeline(timeline, r)
     check_frames(manifest_frames, referenced, b, r)
-    if isinstance(manifest, dict) and isinstance(timeline, list):
+    if isinstance(manifest, dict) and isinstance(timeline, list) and not r.errors:
         check_coverage_gap(timeline, manifest, r)
     if b.has("network.har"):
-        load_json(b, "network.har", r) and r.ok("network.har parses")
+        har = load_json(b, "network.har", r)
+        log = har.get("log") if isinstance(har, dict) else None
+        entries = log.get("entries") if isinstance(log, dict) else None
+        if not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries):
+            r.err("network.har must contain log.entries as an array of objects")
+        else:
+            for e in entries:
+                if "_t" in e and not valid_time(e["_t"]):
+                    r.err("HAR _t must be finite and non-negative")
+            r.ok("network.har structure OK")
     check_redaction(b, r)
 
+    if b.zip:
+        b.zip.close()
     return r.render()
 
 

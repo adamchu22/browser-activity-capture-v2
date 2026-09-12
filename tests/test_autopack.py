@@ -19,7 +19,7 @@ def _write_capture_zip(path: Path, *, valid=True, manifest=None):
         if valid:
             zf.writestr("manifest.json", json.dumps(manifest if manifest is not None else
                 {"capture_id": "x", "t0_wall": "2026-06-23T00:00:00.000Z",
-                 "duration_ms": 1000, "purposes": [], "frames": []}))
+                 "duration_ms": 1000, "sync_mode": "self_record", "purposes": [], "frames": []}))
             zf.writestr("timeline.json", json.dumps(
                 [{"kind": "click", "t": 100, "selector": "#a", "ctx": {"name": "A"}}]))
             zf.writestr("transcript.vtt", "WEBVTT\n\nNOTE No narration captured\n")
@@ -77,10 +77,11 @@ class TestDiscovery(unittest.TestCase):
             self.assertEqual(len(autopack.find_unpacked(loc, None, min_age_s=10, now=later)), 1)
 
     def test_pack_path_for_uses_packs_dir(self):
-        z = Path("/x/capture-9.zip")
-        self.assertEqual(autopack.pack_path_for(z, None), Path("/x/capture-9-pack"))
-        self.assertEqual(autopack.pack_path_for(z, Path("/packs")),
-                         Path("/packs/capture-9-pack"))
+        root = Path(tempfile.gettempdir())
+        z = root / "capture-9.zip"
+        self.assertEqual(autopack.pack_path_for(z, None), root / "capture-9-pack")
+        self.assertEqual(autopack.pack_path_for(z, root / "packs"),
+                         root / "packs" / "capture-9-pack")
 
 
 class TestPacking(unittest.TestCase):
@@ -140,8 +141,9 @@ class TestPacking(unittest.TestCase):
             loc = Path(tmp)
             sf = loc / "state.json"
             _write_capture_zip(loc / "capture-good.zip")
-            # a real-looking capture (valid manifest) but a corrupt timeline → it's
-            # detected, and build_pack stays best-effort (never crashes → still packs).
+            # a real-looking capture (valid manifest) but a corrupt timeline →
+            # build_pack stays best-effort (never crashes → still packs, both zips
+            # succeed; the malformed timeline degrades to defaults inside the pack).
             bad = loc / "capture-bad.zip"
             with zipfile.ZipFile(bad, "w") as zf:
                 zf.writestr("manifest.json", json.dumps(
@@ -149,6 +151,7 @@ class TestPacking(unittest.TestCase):
                 zf.writestr("timeline.json", "not json{")
             s1 = autopack.run([loc], None, transcribe=False, state_file=sf)
             self.assertEqual(len(s1["packed"]), 2)
+            self.assertEqual(len(s1["failed"]), 0)
             s2 = autopack.run([loc], None, transcribe=False, state_file=sf)
             self.assertEqual(s2["packed"], [])  # nothing new
 

@@ -32,6 +32,40 @@ import { makeZip } from "./zip.js";
 import { streamFiles } from "./bundle-streams.js";
 import * as db from "./db.js";
 import { segmentOffsetsFor, sealSegment } from "./segments.js";
+import { recordingElapsed } from "./clock.js";
+
+let mediaClock = {};
+let reshareBusy = false;
+let mediaGeneration = 0;
+const stopped = new WeakMap();
+
+function prepareRecorder(tracks) {
+  const localChunks = [];
+  const r = new MediaRecorder(new MediaStream(tracks), { mimeType: "video/webm" });
+  chunks = localChunks;
+  r.ondataavailable = (e) => { if (e.data.size) localChunks.push(e.data); };
+  stopped.set(r, new Promise((resolve) => r.addEventListener("stop", resolve, { once: true })));
+  return r;
+}
+
+async function stopRecorder(r) {
+  if (!r) return;
+  if (r.state !== "inactive") {
+    r.stop();
+    await stopped.get(r);
+  } else {
+    // An automatic stop queues final dataavailable before stop; allow those
+    // queued tasks to finish before sealing an inactive recorder's chunks.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+async function freshClock() {
+  const clock = await chrome.runtime.sendMessage({ type: "media-clock" });
+  if (!clock?.recording) throw new Error("Recording is no longer live");
+  mediaClock = clock;
+  return recordingElapsed(Date.now(), mediaClock);
+}
 
 let recorder = null;
 let chunks = [];
@@ -93,7 +127,28 @@ function reportError(message, stack) {
 self.addEventListener("error", (e) => reportError(e.message, e.error?.stack));
 self.addEventListener("unhandledrejection", (e) => reportError(e.reason?.message || String(e.reason), e.reason?.stack));
 
-chrome.runtime.onMessage.addListener(async (msg) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === "offscreen-status") {
+    sendResponse({
+      live: !!recorder && recorder.state !== "inactive",
+      finalized: finalizedSegments.length > 0,
+      t0: mediaClock.t0,
+    });
+    return;
+  }
+  if (!msg.type?.startsWith("offscreen-")) return;
+  if (msg.clock) mediaClock = msg.clock;
+  handleMessage(msg).then(
+    () => sendResponse({ ok: true }),
+    (e) => {
+      reportError(e?.message || String(e), e?.stack);
+      sendResponse({ ok: false, reason: e?.message || String(e) });
+    }
+  );
+  return true;
+});
+
+async function handleMessage(msg) {
   if (msg.type === "offscreen-start") {
     await startRecording(msg.withMic !== false);
   }
@@ -102,13 +157,17 @@ chrome.runtime.onMessage.addListener(async (msg) => {
     // starts on the same t0 as the event/network streams (not when the picker
     // resolved, which could be seconds earlier while the user chose a window).
     try {
-      if (recorder && recorder.state === "inactive") recorder.start(1000);
+      if (recorder && recorder.state === "inactive") {
+        segmentOffsetMs = recordingElapsed(Date.now(), mediaClock);
+        recorder.start(1000);
+        if (mediaClock.paused) recorder.pause();
+      }
     } catch (e) {
       reportError("MediaRecorder start failed: " + (e?.message || e), e?.stack);
     }
   }
   if (msg.type === "offscreen-finalize") {
-    finalizeRecording();
+    await finalizeRecording();
   }
   // Overlay verbs, mirrored onto the MediaRecorder so the video pauses,
   // restarts, and discards in lockstep with the event/network streams.
@@ -123,7 +182,7 @@ chrome.runtime.onMessage.addListener(async (msg) => {
     } catch {}
   }
   if (msg.type === "offscreen-restart") {
-    restartRecording();
+    await restartRecording();
   }
   if (msg.type === "offscreen-cancel") {
     cancelRecording();
@@ -138,7 +197,7 @@ chrome.runtime.onMessage.addListener(async (msg) => {
   // the wall time it began — the manifest uses these offsets to map events to
   // segments and flag the gap to the analyst.
   if (msg.type === "offscreen-reshare") {
-    await reshareRecording(msg.offsetMs || 0);
+    await reshareRecording();
   }
   // Assemble the FULL bundle here and save it. This is the heart of the 64MiB fix:
   // the video Blob never leaves this document and the bulk streams are read straight
@@ -147,9 +206,9 @@ chrome.runtime.onMessage.addListener(async (msg) => {
   // events.jsonl, network.har, the frame PNGs, and video.webm. Replies
   // offscreen-save-done.
   if (msg.type === "offscreen-save") {
-    assembleAndSave(msg.metaFiles, msg.filename, msg.t0Wall);
+    await assembleAndSave(msg.metaFiles, msg.filename, msg.t0Wall);
   }
-});
+}
 
 async function assembleAndSave(metaFiles, filename, t0Wall) {
   const reply = (r) => chrome.runtime.sendMessage({ type: "offscreen-save-done", ...r }).catch(() => {});
@@ -182,7 +241,7 @@ async function assembleAndSave(metaFiles, filename, t0Wall) {
   // an offscreen doc). An object-URL <a download> streams the Blob with NO size limit —
   // the fix for the lost 17-min recording — and needs no folder picker or Save dialog.
   try {
-    triggerDownload(zipBlob, filename);
+    await triggerDownload(zipBlob, filename);
     finalizedSegments = [];
     return reply({ ok: true });
   } catch (e) {
@@ -194,18 +253,21 @@ async function assembleAndSave(metaFiles, filename, t0Wall) {
 // Download a Blob from the offscreen document via a same-origin object URL + a
 // programmatic <a download> click. Revoked after a long delay so a large file has
 // time to finish streaming to disk before the URL is released.
-function triggerDownload(blob, filename) {
+async function triggerDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.style.display = "none";
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    a.remove();
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "download-blob", url, filename });
+    if (!result?.ok) throw new Error(result?.reason || "No download completion acknowledgement");
+  } finally {
     URL.revokeObjectURL(url);
-  }, 300000);
+  }
+}
+
+function capturedTabId(track) {
+  const handle = track?.getCaptureHandle?.();
+  if (handle?.origin !== chrome.runtime.getURL("").replace(/\/$/, "")) return null;
+  const match = /^bac-tab:(\d+)$/.exec(handle.handle || "");
+  return match ? Number(match[1]) : null;
 }
 
 async function startRecording(withMic) {
@@ -284,8 +346,7 @@ async function startRecording(withMic) {
 
   activeTracks = tracks; // keep a handle so restart can reuse the live streams
   try {
-    recorder = new MediaRecorder(new MediaStream(tracks), { mimeType: "video/webm" });
-    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    recorder = prepareRecorder(tracks);
     // NB: do NOT start() here — the worker runs a 3-2-1 countdown first, then sends
     // `offscreen-go`. Starting now would record the countdown seconds.
   } catch (e) {
@@ -304,7 +365,10 @@ async function startRecording(withMic) {
   // capture/overlay to what the user actually shared (tab/window/monitor).
   // micError rides along so the worker can flag a silent take AT ARM TIME
   // (log + clear the stale grant) instead of only at export.
-  chrome.runtime.sendMessage({ type: "offscreen-armed", video: true, mic: micRecorded, micError, surface: captureSurface }).catch(() => {});
+  chrome.runtime.sendMessage({
+    type: "offscreen-armed", video: true, mic: micRecorded, micError,
+    surface: captureSurface, tabId: capturedTabId(tracks.find((t) => t.kind === "video")),
+  }).catch(() => {});
 }
 
 // Live mic loudness for the on-screen overlay meter. An AnalyserNode taps the mic
@@ -315,6 +379,7 @@ function startMicMeter(micStream) {
   try {
     const Ctx = self.AudioContext || self.webkitAudioContext;
     audioCtx = new Ctx();
+    audioCtx.resume().catch((e) => reportError("mic meter resume failed: " + e.message));
     const source = audioCtx.createMediaStreamSource(micStream);
     const analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
@@ -366,49 +431,30 @@ function stopMicMeter() {
 // and the duplicate EBML header breaks ffmpeg seeks. Keep them as separate files
 // (video.webm, video-2.webm, …) and let the manifest's video_segments declare each
 // file's recording-clock offset.
-function finalizeRecording() {
-  if (!recorder) {
-    // No live recorder — but we may still have sealed segments from a re-share
-    // whose subsequent recorder also died. Assemble whatever we have.
-    const segments = videoSegments.map((s, i) => ({
-      blob: s.blob,
-      offsetMs: s.offsetMs,
-      file: i === 0 ? "video.webm" : `video-${i + 1}.webm`,
-    }));
-    finalizedSegments = segments;
-    const offsets = segmentOffsetsFor(segments);
-    videoSegments = [];
-    chrome.runtime.sendMessage({
-      type: "offscreen-finalized",
-      mic: micRecorded,
-      micError,
-      hasVideo: segments.some((s) => s.blob && s.blob.size > 0),
-      segmentOffsets: offsets,
-    }).catch(() => {});
-    return;
-  }
-  recorder.onstop = () => {
-    const finalChunk = new Blob(chunks, { type: "video/webm" });
-    chunks = [];
-    const all = [...videoSegments, { blob: finalChunk, offsetMs: segmentOffsetMs }];
-    videoSegments = [];
-    // Stamp each segment with its file name (video.webm, video-2.webm, …).
-    finalizedSegments = all.map((s, i) => ({
-      blob: s.blob,
-      offsetMs: s.offsetMs,
-      file: i === 0 ? "video.webm" : `video-${i + 1}.webm`,
-    }));
-    releaseStreams();
+async function finalizeRecording() {
+  ++mediaGeneration; // invalidate any picker still awaiting a result
+  if (recorder) {
+    await stopRecorder(recorder);
+    const sealed = sealSegment(chunks, segmentOffsetMs);
+    if (sealed) videoSegments.push(sealed);
     recorder = null;
-    chrome.runtime.sendMessage({
-      type: "offscreen-finalized",
-      mic: micRecorded,
-      micError,
-      hasVideo: finalizedSegments.some((s) => s.blob && s.blob.size > 0),
-      segmentOffsets: segmentOffsetsFor(finalizedSegments),
-    }).catch(() => {});
-  };
-  recorder.stop();
+    chunks = [];
+  }
+  if (videoSegments.length) {
+    finalizedSegments = videoSegments.map((s, i) => ({
+      ...s, file: i === 0 ? "video.webm" : `video-${i + 1}.webm`,
+    }));
+    videoSegments = [];
+  }
+  // Repeated finalize (Retry) must not replace retained media with an empty list.
+  releaseStreams();
+  chrome.runtime.sendMessage({
+    type: "offscreen-finalized",
+    mic: micRecorded,
+    micError,
+    hasVideo: finalizedSegments.some((s) => s.blob?.size > 0),
+    segmentOffsets: segmentOffsetsFor(finalizedSegments),
+  }).catch(() => {});
 }
 
 // Restart: drop the in-progress recording but keep the screen + mic streams
@@ -416,19 +462,17 @@ function finalizeRecording() {
 // prompt. Clearing onstop first prevents the discarded recorder from shipping its
 // bytes back as a finished video. Also discards any sealed re-share segments —
 // the new take starts from zero segments.
-function restartRecording() {
-  if (recorder) {
-    recorder.onstop = null;
-    try {
-      recorder.stop();
-    } catch {}
-  }
+async function restartRecording() {
+  ++mediaGeneration;
+  await stopRecorder(recorder);
   chunks = [];
   videoSegments = [];
+  finalizedSegments = [];
   try {
-    recorder = new MediaRecorder(new MediaStream(activeTracks), { mimeType: "video/webm" });
-    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    recorder = prepareRecorder(activeTracks.filter((t) => t.readyState === "live"));
+    segmentOffsetMs = recordingElapsed(Date.now(), mediaClock);
     recorder.start(1000);
+    if (mediaClock.paused) recorder.pause();
   } catch (e) {
     reportError("MediaRecorder restart failed: " + (e?.message || e), e?.stack);
     recorder = null;
@@ -446,21 +490,13 @@ function restartRecording() {
 // segment begins — the dead segment is sealed with the offset that was in effect
 // when IT started recording (the previous segmentOffsetMs), and segmentOffsetMs
 // is then updated to newOffsetMs for the upcoming segment + the final chunk.
-async function reshareRecording(newOffsetMs) {
-  // Seal the dead recorder's chunks as a segment, stamped with the offset that
-  // was in effect when THIS segment started recording (NOT the new offset — the
-  // dead segment started at the previous offset).
-  if (recorder) {
-    recorder.onstop = null;
-    try {
-      recorder.stop();
-    } catch {}
-    const sealed = sealSegment(chunks, segmentOffsetMs);
-    if (sealed) videoSegments.push(sealed);
-    chunks = [];
-  }
-  // Now switch the offset to the new segment's start for the upcoming recorder.
-  segmentOffsetMs = newOffsetMs || 0;
+async function reshareRecording() {
+  if (reshareBusy) return;
+  reshareBusy = true;
+  const g = mediaGeneration;
+  try {
+  // Keep the old recorder running while the picker is open: its independent
+  // microphone track continues capturing narration. Seal only after selection.
   // Drop the dead screen track from activeTracks but KEEP the mic track (it's
   // independent of the screen share and should stay continuous across the gap).
   const micTracks = activeTracks.filter((t) => t.kind === "audio");
@@ -482,15 +518,18 @@ async function reshareRecording(newOffsetMs) {
   } catch (e) {
     reportError("re-share screen picker failed: " + (e?.message || e), e?.stack);
     activeTracks = micTracks;
-    recorder = null; // no new recorder — finalize will seal the segments captured so far
+    // Keep the existing recorder and its narration, including future speech.
     chrome.runtime.sendMessage({ type: "reshare-failed" }).catch(() => {});
+    return;
+  }
+  if (g !== mediaGeneration) {
+    newVideoStream.getTracks().forEach((t) => t.stop());
     return;
   }
   const newVideoTracks = newVideoStream.getVideoTracks();
   if (!newVideoTracks.length) {
     reportError("re-share returned no video tracks");
     activeTracks = micTracks;
-    recorder = null;
     chrome.runtime.sendMessage({ type: "reshare-failed" }).catch(() => {});
     return;
   }
@@ -505,24 +544,42 @@ async function reshareRecording(newOffsetMs) {
       chrome.runtime.sendMessage({ type: "video-track-ended" }).catch(() => {});
     });
   });
+  await stopRecorder(recorder);
+  if (g !== mediaGeneration) {
+    newVideoStream.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  const sealed = sealSegment(chunks, segmentOffsetMs);
+  if (sealed) videoSegments.push(sealed);
+  chunks = [];
   activeTracks = [...newVideoTracks, ...micTracks];
   try {
-    recorder = new MediaRecorder(new MediaStream(activeTracks), { mimeType: "video/webm" });
-    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    segmentOffsetMs = await freshClock();
+    if (g !== mediaGeneration) return;
+    recorder = prepareRecorder(activeTracks);
+    segmentOffsetMs = recordingElapsed(Date.now(), mediaClock);
     recorder.start(1000);
+    if (mediaClock.paused) recorder.pause();
   } catch (e) {
     reportError("MediaRecorder re-share start failed: " + (e?.message || e), e?.stack);
     recorder = null;
     chrome.runtime.sendMessage({ type: "reshare-failed" }).catch(() => {});
     return;
   }
-  chrome.runtime.sendMessage({ type: "reshare-armed", surface: captureSurface }).catch(() => {});
+  chrome.runtime.sendMessage({
+    type: "reshare-armed", surface: captureSurface, offsetMs: segmentOffsetMs,
+    tabId: capturedTabId(newVideoTracks[0]),
+  }).catch(() => {});
+  } finally {
+    reshareBusy = false;
+  }
 }
 
 // Cancel: stop and discard everything, release the camera/mic/screen so the
 // browser's "sharing" indicator clears. No video is sent back. Also discards
 // any sealed re-share segments.
 function cancelRecording() {
+  ++mediaGeneration;
   if (recorder) {
     recorder.onstop = null;
     try {

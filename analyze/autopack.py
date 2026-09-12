@@ -176,7 +176,7 @@ def find_unpacked(
             age = now - z.stat().st_mtime
         except OSError:
             continue
-        if age < min_age_s:
+        if 0 < min_age_s and age < min_age_s:
             continue  # still being written / settling — leave it for a later pass
         if is_capture_zip(z):
             out.append((z, dest))
@@ -203,7 +203,7 @@ def pack_zip(z: Path, dest: Path, blocklist: list[str] | None = None,
                         f"zip decompresses to > {MAX_UNCOMPRESSED_BYTES} bytes: {z.name}")
                 # Zip Slip: only extract members that stay inside the temp dir.
                 target = (bundle / member.filename).resolve()
-                if not str(target).startswith(bundle_root):
+                if not target.is_relative_to(bundle.resolve()):
                     raise ValueError(f"unsafe path in zip: {member.filename}")
             zf.extractall(bundle)
         dest.parent.mkdir(parents=True, exist_ok=True)

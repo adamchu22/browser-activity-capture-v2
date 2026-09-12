@@ -1,29 +1,12 @@
 // Pure video-segment logic for the re-share feature.
 //
-// When the user clicks Chrome's "Stop sharing" mid-recording and then re-shares,
-// the offscreen recorder's dead chunks are sealed as a segment Blob and a new
-// recorder starts on the fresh screen track. At finalize all segments are
-// concatenated into one video.webm (same-codec MediaRecorder segments
-// concatenate cleanly at the byte level) and the segment offsets are reported
-// so the manifest can declare the gaps.
+// Each MediaRecorder produces an independent WebM file. A re-share seals the
+// previous recorder only after its final dataavailable/stop events. Segments
+// are never byte-concatenated; each file carries its own recording-clock offset.
 //
 // This module holds the pure, testable pieces (no DOM, no chrome.*) so the
 // segment math can be unit-tested without spinning up an offscreen doc. The
 // offscreen doc imports these and supplies the real Blobs/offsets.
-
-// Concatenate same-codec webm segment Blobs into a single Blob. Each
-// MediaRecorder segment is a complete, playable webm (its own EBML header +
-// clusters); byte concatenation of same-codec same-config segments produces a
-// valid webm that players and ffmpeg read end-to-end. The first segment's header
-// wins and subsequent headers are tolerated (ffmpeg skips them).
-//
-// Returns null when there are no segments (no video was captured at all).
-export function concatSegments(segments) {
-  if (!segments || !segments.length) return null;
-  const blobs = segments.map((s) => s.blob).filter((b) => b && b.size > 0);
-  if (!blobs.length) return null;
-  return new Blob(blobs, { type: "video/webm" });
-}
 
 // Given a list of finalized segments (each { blob, offsetMs }) produce the
 // manifest-shaped list of segment descriptors (file + offset_ms). Empty for a

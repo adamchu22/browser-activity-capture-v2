@@ -21,14 +21,18 @@ export function normalizeHost(entry) {
   s = s.replace(/^\*\./, ""); // a leading wildcard is implied by suffix matching
   s = s.replace(/^www\./, ""); // www. is noise — match the registrable host
   s = s.replace(/^\.+|\.+$/g, ""); // trim stray dots
-  return s;
+  try {
+    return new URL(`https://${s}`).hostname.toLowerCase().replace(/\.+$/, "").replace(/^www\./, "");
+  } catch {
+    return "";
+  }
 }
 
 // True if `url`'s host is, or is a subdomain of, any blocklist entry.
 export function hostOnBlocklist(url, blocklist) {
   let host;
   try {
-    host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    host = normalizeHost(new URL(url).hostname);
   } catch {
     return false; // not a real URL (chrome://newtab, "", etc.) — nothing to block
   }

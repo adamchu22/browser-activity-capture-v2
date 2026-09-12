@@ -43,8 +43,16 @@ export function registrableDomain(url) {
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":")) return ""; // IP literal
   const labels = host.split(".");
   const lastTwo = labels.slice(-2).join(".");
-  const take = TWO_LEVEL_SUFFIXES.has(lastTwo) ? 3 : 2;
-  return labels.slice(-take).join(".");
+  // Pragmatic eTLD+1 folding over a small two-level public-suffix allowlist. A
+  // missed exotic suffix only ever makes the same-site test STRICTER
+  // (under-captures; exact-host match) — never looser — so it can't leak a
+  // cross-site body. Trailing dots are stripped first so "bank.example." can't
+  // dodge a suffix match.
+  const clean = host.toLowerCase().replace(/\.+$/, "");
+  const cleanLabels = clean.split(".");
+  const cleanLastTwo = cleanLabels.slice(-2).join(".");
+  const take = TWO_LEVEL_SUFFIXES.has(cleanLastTwo) ? 3 : 2;
+  return cleanLabels.slice(-take).join(".");
 }
 
 // True if two URLs share a registrable domain (so app.foo.com and api.foo.com match,

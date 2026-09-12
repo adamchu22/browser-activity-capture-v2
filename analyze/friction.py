@@ -168,6 +168,77 @@ def _error_events(timeline: list[dict], api: list[dict] | None) -> list[dict]:
     return out
 
 
+def _interaction_signals(timeline):
+    """Candidates, not diagnoses: absence of a response is not proof of failure."""
+    out = {k: [] for k in (
+        "dead_clicks", "bounce_backs", "input_churn", "scroll_hunting", "focus_returns"
+    )}
+    groups = {}
+    for e in sorted(timeline, key=lambda e: _num(e.get("t"))):
+        tab = e.get("tab")
+        if not isinstance(tab, (str, int, type(None))):
+            tab = None
+        groups.setdefault(tab, []).append(e)
+    for tab, events in groups.items():
+        end = max((_num(e.get("t")) for e in events), default=0)
+        responses = [e for e in events if e.get("kind") in ("nav", "network")]
+        navs, inputs, scrolls = [], {}, []
+        away = None
+        for e in events:
+            t, kind = _num(e.get("t")), e.get("kind")
+            base = {"t": int(t), "tab": tab, "confidence": "heuristic"}
+            if kind == "click" and end >= t + 3000:
+                if not any(t < _num(r.get("t")) <= t + 3000 for r in responses):
+                    out["dead_clicks"].append({
+                        **base, "target": _target(e), "label": _label(e),
+                        "window_ms": 3000,
+                        "meaning": "no observed same-tab navigation/network response; local UI may have changed",
+                    })
+            if kind == "nav" and isinstance(e.get("url"), str):
+                if not navs or navs[-1].get("url") != e["url"]:
+                    navs.append(e)
+                if len(navs) >= 3:
+                    a, b, c = navs[-3:]
+                    if a["url"] == c["url"] != b["url"] and t - _num(a.get("t")) <= 15000:
+                        out["bounce_backs"].append({
+                            **base, "from_t": int(_num(a.get("t"))),
+                            "route": [a["url"], b["url"], c["url"]],
+                        })
+            if kind == "input" and _target(e):
+                history = inputs.setdefault(_target(e), [])
+                if not history or history[-1].get("value") != e.get("value"):
+                    history.append(e)
+                if len(history) >= 3:
+                    a, b, c = history[-3:]
+                    values = [x.get("value") for x in (a, b, c)]
+                    if (all(isinstance(v, str) and "‹redacted" not in v for v in values)
+                            and values[0] and values[1] == "" and values[2]
+                            and t - _num(a.get("t")) <= 5000):
+                        out["input_churn"].append({
+                            **base, "from_t": int(_num(a.get("t"))), "target": _target(e),
+                        })
+            if kind == "scroll":
+                scrolls.append(e)
+                scrolls = [s for s in scrolls if t - _num(s.get("t")) <= 3000]
+                if len(scrolls) >= 4:
+                    deltas = [_num(b.get("y")) - _num(a.get("y"))
+                              for a, b in zip(scrolls, scrolls[1:])]
+                    signs = [1 if d > 0 else -1 for d in deltas if abs(d) >= 20]
+                    turns = sum(a != b for a, b in zip(signs, signs[1:]))
+                    if turns >= 2:
+                        out["scroll_hunting"].append({**base, "reversals": turns, "window_ms": 3000})
+                        scrolls = []
+            if kind == "focus":
+                if e.get("focused") is False:
+                    away = t
+                elif e.get("focused") is True and away is not None:
+                    out["focus_returns"].append({
+                        **base, "from_t": int(away), "away_ms": int(t - away),
+                    })
+                    away = None
+    return out
+
+
 def compute_friction(timeline: list[dict], api: list[dict] | None = None) -> dict:
     """All friction signals from a parsed timeline (+ optional HAR entries)."""
     timeline = [e for e in (timeline or []) if isinstance(e, dict)]
@@ -180,12 +251,16 @@ def compute_friction(timeline: list[dict], api: list[dict] | None = None) -> dic
     retried = _retried_actions(clicks)
     errors = _error_events(timeline, api)
 
+    extra = _interaction_signals(timeline)
     return {
+        "schema_version": 2,
+        **extra,
         "long_pauses": long_pauses,
         "repeat_clicks": repeat_clicks,
         "retried_actions": retried,
         "error_events": errors,
         "summary": {
+            **{key: len(value) for key, value in extra.items()},
             "long_pauses": len(long_pauses),
             "repeat_clicks": len(repeat_clicks),
             "retried_actions": len(retried),
