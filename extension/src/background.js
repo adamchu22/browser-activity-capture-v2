@@ -1337,7 +1337,7 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
   // fails for 304s / redirects / cached / streamed responses — swallow it and leave the
   // body unset (the pack renders "—").
   if (method === "Network.loadingFinished") {
-    const entry = state.har.get(params.requestId);
+    const entry = state.har.get(requestKey);
     if (!entry || !entry._wantBody) return;
     try {
       const { body, base64Encoded } = await chrome.debugger.sendCommand(
